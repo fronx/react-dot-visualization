@@ -18,14 +18,27 @@ const generateSampleData = (count = 100) => {
 const BasicExample = () => {
   const [hoveredItem, setHoveredItem] = useState(null);
   const [clickedItem, setClickedItem] = useState(null);
+  const [dotStyles, setDotStyles] = useState(new Map());
   const data = generateSampleData(150);
 
   const handleHover = (item, event) => {
     setHoveredItem(item);
+    // Highlight hovered dot
+    setDotStyles(prev => new Map(prev).set(item.id, {
+      fill: 'red',
+      stroke: '#333',
+      'stroke-width': '2'
+    }));
   };
 
   const handleLeave = (item, event) => {
     setHoveredItem(null);
+    // Remove highlight
+    setDotStyles(prev => {
+      const newStyles = new Map(prev);
+      newStyles.delete(item.id);
+      return newStyles;
+    });
   };
 
   const handleClick = (item, event) => {
@@ -55,6 +68,7 @@ const BasicExample = () => {
         margin={0.3}
         dotStroke="#333"
         dotStrokeWidth={0.5}
+        dotStyles={dotStyles}
         style={{ border: '1px solid #ccc' }}
       />
       

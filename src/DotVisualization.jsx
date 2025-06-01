@@ -26,6 +26,7 @@ const DotVisualization = (props) => {
     dotStrokeWidth = 0.2,
     defaultColor = null,
     defaultSize = 2,
+    dotStyles = new Map(),
     className = "",
     style = {},
     ...otherProps
@@ -210,6 +211,7 @@ const DotVisualization = (props) => {
           strokeWidth={dotStrokeWidth}
           defaultColor={defaultColor}
           defaultSize={defaultSize}
+          dotStyles={dotStyles}
         />
         <ClusterLabels
           data={processedData}
@@ -228,6 +230,7 @@ const DotVisualization = (props) => {
           onClick={onClick}
           isZooming={isZooming}
           defaultSize={defaultSize}
+          dotStyles={dotStyles}
         />
       </g>
     </svg>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import * as d3 from 'd3';
 
 const ColoredDots = React.memo((props) => {
@@ -8,7 +8,8 @@ const ColoredDots = React.memo((props) => {
     stroke = "#111",
     strokeWidth = 0.2,
     defaultColor = null,
-    defaultSize = 2
+    defaultSize = 2,
+    dotStyles = new Map()
   } = props;
 
   const getColor = (item, index) => {
@@ -23,6 +24,23 @@ const ColoredDots = React.memo((props) => {
   const getSize = (item) => {
     return item.size || defaultSize;
   };
+
+  // Apply custom styles using d3 for direct DOM updates
+  useEffect(() => {
+    dotStyles.forEach((styles, itemId) => {
+      const elementId = dotId(0, { id: itemId });
+      const element = d3.select(`#${elementId}`);
+      if (!element.empty()) {
+        Object.entries(styles).forEach(([prop, value]) => {
+          if (prop === 'r' || prop === 'cx' || prop === 'cy') {
+            element.attr(prop, value);
+          } else {
+            element.style(prop, value);
+          }
+        });
+      }
+    });
+  }, [dotStyles, dotId]);
 
   return (
     <g id="colored-dots">

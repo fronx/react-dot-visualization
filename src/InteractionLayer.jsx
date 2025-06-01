@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import * as d3 from 'd3';
 
 const InteractionLayer = React.memo((props) => {
   const {
@@ -8,7 +9,8 @@ const InteractionLayer = React.memo((props) => {
     onLeave,
     onClick,
     isZooming = false,
-    defaultSize = 2
+    defaultSize = 2,
+    dotStyles = new Map()
   } = props;
 
   const getSize = (item) => {
@@ -32,6 +34,21 @@ const InteractionLayer = React.memo((props) => {
       onClick(item, e);
     }
   };
+
+  // Apply custom styles to interaction layer dots
+  useEffect(() => {
+    dotStyles.forEach((styles, itemId) => {
+      const elementId = dotId(1, { id: itemId });
+      const element = d3.select(`#${elementId}`);
+      if (!element.empty()) {
+        Object.entries(styles).forEach(([prop, value]) => {
+          if (prop === 'r' || prop === 'cx' || prop === 'cy') {
+            element.attr(prop, value);
+          }
+        });
+      }
+    });
+  }, [dotStyles, dotId]);
 
   return (
     <g id="interaction-layer">
