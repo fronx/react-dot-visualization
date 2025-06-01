@@ -8,6 +8,7 @@ const InteractionLayer = React.memo((props) => {
     onHover,
     onLeave,
     onClick,
+    onBackgroundClick,
     isZooming = false,
     defaultSize = 2,
     dotStyles = new Map()
@@ -35,6 +36,12 @@ const InteractionLayer = React.memo((props) => {
     }
   };
 
+  const handleBackgroundClick = (e) => {
+    if (onBackgroundClick) {
+      onBackgroundClick(e);
+    }
+  };
+
   // Apply custom styles to interaction layer dots
   useEffect(() => {
     dotStyles.forEach((styles, itemId) => {
@@ -52,6 +59,13 @@ const InteractionLayer = React.memo((props) => {
 
   return (
     <g id="interaction-layer">
+      <rect
+        width="100%"
+        height="100%"
+        fill="transparent"
+        style={{ cursor: onBackgroundClick ? 'pointer' : 'default' }}
+        onClick={handleBackgroundClick}
+      />
       {data.map((item) => (
         <circle
           id={dotId(1, item)}

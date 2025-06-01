@@ -17,6 +17,7 @@ const DotVisualization = (props) => {
     onHover,
     onLeave,
     onClick,
+    onBackgroundClick,
     onZoomStart,
     onZoomEnd,
     enableCollisionDetection = true,
@@ -228,6 +229,7 @@ const DotVisualization = (props) => {
           onHover={onHover}
           onLeave={onLeave}
           onClick={onClick}
+          onBackgroundClick={onBackgroundClick}
           isZooming={isZooming}
           defaultSize={defaultSize}
           dotStyles={dotStyles}

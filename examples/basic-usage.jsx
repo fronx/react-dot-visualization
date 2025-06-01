@@ -46,6 +46,11 @@ const BasicExample = () => {
     console.log('Clicked item:', item);
   };
 
+  const handleBackgroundClick = (event) => {
+    setClickedItem(null);
+    console.log('Clicked background');
+  };
+
   const handleZoomStart = () => {
     console.log('Zoom started');
   };
@@ -61,6 +66,7 @@ const BasicExample = () => {
         onHover={handleHover}
         onLeave={handleLeave}
         onClick={handleClick}
+        onBackgroundClick={handleBackgroundClick}
         onZoomStart={handleZoomStart}
         onZoomEnd={handleZoomEnd}
         enableCollisionDetection={true}
