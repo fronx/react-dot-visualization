@@ -12,7 +12,7 @@ export default defineConfig({
       fileName: (format) => `index.${format === 'es' ? 'es.js' : 'js'}`
     },
     rollupOptions: {
-      external: ['react', 'react-dom'],
+      external: ['react', 'react-dom', 'react/jsx-runtime'],
       output: {
         globals: {
           react: 'React',
@@ -21,6 +21,6 @@ export default defineConfig({
       }
     },
     sourcemap: true,
-    minify: 'esbuild'
+    minify: false
   }
 })
