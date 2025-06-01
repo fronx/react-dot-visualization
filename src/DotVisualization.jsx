@@ -2,11 +2,18 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import * as d3 from 'd3';
 import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
+import ClusterLabels from './ClusterLabels.jsx';
 import { calculateViewBox } from './utils.js';
 
 const DotVisualization = (props) => {
   const {
     data = [],
+    clusters = [],
+    clusterKey = (item) => item.cluster_level_0,
+    renderCluster,
+    hoveredCluster,
+    onClusterHover,
+    onClusterLeave,
     onHover,
     onLeave,
     onClick,
@@ -203,6 +210,15 @@ const DotVisualization = (props) => {
           strokeWidth={dotStrokeWidth}
           defaultColor={defaultColor}
           defaultSize={defaultSize}
+        />
+        <ClusterLabels
+          data={processedData}
+          clusters={clusters}
+          clusterKey={clusterKey}
+          renderCluster={renderCluster}
+          hoveredCluster={hoveredCluster}
+          onClusterHover={onClusterHover}
+          onClusterLeave={onClusterLeave}
         />
         <InteractionLayer
           data={processedData}
