@@ -66,8 +66,8 @@ const DotVisualization = (props) => {
 
     // Auto-generate IDs and validate required fields
     const dataWithIds = ensureIds(data);
-    const validData = dataWithIds.filter(item => 
-      typeof item.x === 'number' && 
+    const validData = dataWithIds.filter(item =>
+      typeof item.x === 'number' &&
       typeof item.y === 'number'
     );
 
@@ -95,7 +95,7 @@ const DotVisualization = (props) => {
     const zoomStarted = (event) => {
       setIsZooming(true);
       if (onZoomStart) onZoomStart(event);
-      
+
       if (zoomTimerRef.current !== null) {
         clearTimeout(zoomTimerRef.current);
       }
@@ -108,7 +108,7 @@ const DotVisualization = (props) => {
 
     const onZoom = (event) => {
       event.preventDefault();
-      
+
       const selection = d3.select(zoomRef.current);
       const currentZoom = selection.property("__zoom")?.k || 1;
 
@@ -118,10 +118,20 @@ const DotVisualization = (props) => {
         zoomHandler.current.scaleTo(selection, nextZoom, d3.pointer(event));
       } else {
         // Pan with mouse wheel or trackpad
+        // Calculate pan speed relative to viewport size, not coordinate scale
+        const svgRect = zoomRef.current.getBoundingClientRect();
+        const viewBoxWidth = viewBox[2];
+        const viewBoxHeight = viewBox[3];
+
+        // Scale pan speed based on viewBox to viewport ratio
+        const panSensitivity = 1.0; // Adjust this to fine-tune pan speed
+        const panSpeedX = (viewBoxWidth / svgRect.width) * panSensitivity;
+        const panSpeedY = (viewBoxHeight / svgRect.height) * panSensitivity;
+
         zoomHandler.current.translateBy(
           selection,
-          -(event.deltaX / 2 / currentZoom),
-          -(event.deltaY / 2 / currentZoom)
+          -(event.deltaX * panSpeedX / currentZoom),
+          -(event.deltaY * panSpeedY / currentZoom)
         );
       }
 
@@ -164,7 +174,7 @@ const DotVisualization = (props) => {
       .on('tick', () => {
         tick += 1;
         const updateFrequency = Math.min(10, Math.ceil(tick / 10));
-        
+
         if (tick % updateFrequency === 0) {
           dots0
             .attr('cx', d => d.x)
