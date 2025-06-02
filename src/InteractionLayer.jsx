@@ -63,7 +63,6 @@ const InteractionLayer = React.memo((props) => {
         width="100%"
         height="100%"
         fill="transparent"
-        style={{ cursor: onBackgroundClick ? 'pointer' : 'default' }}
         onClick={handleBackgroundClick}
       />
       {data.map((item) => (
