@@ -44,11 +44,27 @@ const BasicExample = () => {
   const handleClick = (item, event) => {
     setClickedItem(item);
     console.log('Clicked item:', item);
+    
+    // Desaturate all other dots
+    const newStyles = new Map();
+    data.forEach(dot => {
+      if (dot.id !== item.id) {
+        newStyles.set(dot.id, {
+          fill: '#ccc',
+          stroke: '#999',
+          'stroke-width': '0.5'
+        });
+      }
+    });
+    setDotStyles(newStyles);
   };
 
   const handleBackgroundClick = (event) => {
     setClickedItem(null);
     console.log('Clicked background');
+    
+    // Reset all styles by clearing the map
+    setDotStyles(new Map());
   };
 
   const handleZoomStart = () => {

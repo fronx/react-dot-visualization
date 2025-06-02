@@ -27,16 +27,19 @@ const ColoredDots = React.memo((props) => {
 
   // Apply custom styles using d3 for direct DOM updates
   useEffect(() => {
+    // Clear custom CSS styles
+    d3.selectAll('#colored-dots circle').each(function() {
+      const element = d3.select(this);
+      element.node().style.cssText = '';
+    });
+
+    // Apply new CSS styles
     dotStyles.forEach((styles, itemId) => {
       const elementId = dotId(0, { id: itemId });
       const element = d3.select(`#${elementId}`);
       if (!element.empty()) {
         Object.entries(styles).forEach(([prop, value]) => {
-          if (prop === 'r' || prop === 'cx' || prop === 'cy') {
-            element.attr(prop, value);
-          } else {
-            element.style(prop, value);
-          }
+          element.style(prop, value);
         });
       }
     });
