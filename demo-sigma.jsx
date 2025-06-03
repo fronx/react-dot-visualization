@@ -13,7 +13,7 @@ const App = () => {
       id: i,
       x: (Math.random() - 0.5) * 100, // Range from -50 to 50
       y: (Math.random() - 0.5) * 100, // Range from -50 to 50
-      color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+      color: `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0')}`,
       name: `Point ${i}`,
       value: Math.round(Math.random() * 100),
       size: 3 + Math.random() * 7 // Random size between 3-10
