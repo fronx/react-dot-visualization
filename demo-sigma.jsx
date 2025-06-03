@@ -23,14 +23,13 @@ const App = () => {
   const handleClick = (item) => {
     setClickedDot(item);
     console.log('Clicked item:', item);
-    
+
     // Desaturate all other dots
     const newStyles = new Map();
     data.forEach(dot => {
       if (dot.id !== item.id) {
         newStyles.set(dot.id, {
           color: '#ccc',
-          size: 2
         });
       } else {
         newStyles.set(dot.id, {
@@ -45,7 +44,7 @@ const App = () => {
   const handleBackgroundClick = () => {
     setClickedDot(null);
     console.log('Clicked background - resetting styles');
-    
+
     // Reset all styles by clearing the map
     setDotStyles(new Map());
   };
