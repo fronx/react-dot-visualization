@@ -1,8 +1,26 @@
-import React, { useEffect, useRef, useCallback } from 'react';
-import Sigma from 'sigma';
-import Graph from 'graphology';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 
+// Check if we're in a browser environment
+const isBrowser = typeof window !== 'undefined';
+
+// SSR-safe component
 const DotVisualizationSigma = (props) => {
+  const [isClient, setIsClient] = useState(false);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  // Don't render on server
+  if (!isBrowser || !isClient) {
+    return <div className={props.className} style={props.style} />;
+  }
+
+  return <DotVisualizationSigmaClient {...props} />;
+};
+
+// Separate client-only component with dynamic imports
+const DotVisualizationSigmaClient = (props) => {
   const {
     data = [],
     clusters = [],
@@ -22,6 +40,21 @@ const DotVisualizationSigma = (props) => {
   const containerRef = useRef(null);
   const sigmaRef = useRef(null);
   const graphRef = useRef(null);
+  const [Sigma, setSigma] = useState(null);
+  const [Graph, setGraph] = useState(null);
+
+  // Dynamic import of sigma and graphology
+  useEffect(() => {
+    const loadLibraries = async () => {
+      const [sigmaModule, graphModule] = await Promise.all([
+        import('sigma'),
+        import('graphology')
+      ]);
+      setSigma(() => sigmaModule.default);
+      setGraph(() => graphModule.default);
+    };
+    loadLibraries();
+  }, []);
 
   // Auto-generate IDs if missing
   const ensureIds = useCallback((data) => {
@@ -33,6 +66,7 @@ const DotVisualizationSigma = (props) => {
 
   // Create graph from data
   const createGraph = useCallback((processedData) => {
+    if (!Graph) return null;
     const graph = new Graph();
 
     processedData.forEach((item) => {
@@ -56,11 +90,11 @@ const DotVisualizationSigma = (props) => {
     });
 
     return graph;
-  }, [defaultColor, defaultSize, dotStyles]);
+  }, [Graph, defaultColor, defaultSize, dotStyles]);
 
   // Initialize Sigma (only when data changes significantly)
   useEffect(() => {
-    if (!data || data.length === 0 || !containerRef.current) {
+    if (!data || data.length === 0 || !containerRef.current || !Sigma || !Graph) {
       return;
     }
 
@@ -79,6 +113,7 @@ const DotVisualizationSigma = (props) => {
     const graph = createGraph(validData);
     graphRef.current = graph;
 
+    console.log('sigmaRef.current', sigmaRef.current);
     // Only recreate Sigma if it doesn't exist
     if (!sigmaRef.current) {
       // Create new Sigma renderer
@@ -91,7 +126,7 @@ const DotVisualizationSigma = (props) => {
         enableNodeEvents: true,
         zIndex: true,
         hoverRenderer: null, // Disable the hover renderer completely
-        
+
         // Node renderer settings
         nodeReducer: (node, data) => ({
           ...data,
@@ -123,12 +158,13 @@ const DotVisualizationSigma = (props) => {
         sigmaRef.current = null;
       }
     };
-  }, [data]);
+  }, [data, Sigma, Graph]);
 
   // Set up event handlers separately to avoid recreating Sigma
   useEffect(() => {
     if (!sigmaRef.current) return;
 
+    console.log('setting up event handlers for sigmaRef.current', sigmaRef);
     const sigma = sigmaRef.current;
 
     // Clear existing listeners
@@ -182,7 +218,7 @@ const DotVisualizationSigma = (props) => {
     }
 
     const graph = graphRef.current;
-    
+
     // Update node attributes based on dotStyles
     graph.forEachNode((nodeId, attributes) => {
       const originalData = attributes.originalData;
@@ -196,6 +232,26 @@ const DotVisualizationSigma = (props) => {
 
     sigmaRef.current.refresh();
   }, [dotStyles, defaultColor, defaultSize]);
+
+  // Show loading state while libraries are loading
+  if (!Sigma || !Graph) {
+    return (
+      <div
+        className={`dot-visualization-sigma ${className}`}
+        style={{
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          ...style
+        }}
+        {...otherProps}
+      >
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div
