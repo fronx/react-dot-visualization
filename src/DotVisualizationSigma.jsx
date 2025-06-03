@@ -58,7 +58,7 @@ const DotVisualizationSigma = (props) => {
     return graph;
   }, [defaultColor, defaultSize, dotStyles]);
 
-  // Initialize and update Sigma
+  // Initialize Sigma (only when data changes significantly)
   useEffect(() => {
     if (!data || data.length === 0 || !containerRef.current) {
       return;
@@ -79,50 +79,88 @@ const DotVisualizationSigma = (props) => {
     const graph = createGraph(validData);
     graphRef.current = graph;
 
-    // Clean up existing Sigma instance
-    if (sigmaRef.current) {
-      sigmaRef.current.kill();
+    // Only recreate Sigma if it doesn't exist
+    if (!sigmaRef.current) {
+      // Create new Sigma renderer
+      const sigma = new Sigma(graph, containerRef.current, {
+        renderLabels: false,
+        renderEdgeLabels: false,
+        hideEdgesOnMove: false,
+        hideLabelsOnMove: false,
+        enableEdgeEvents: false,
+        enableNodeEvents: true,
+        zIndex: true,
+        hoverRenderer: null, // Disable the hover renderer completely
+        
+        // Node renderer settings
+        nodeReducer: (node, data) => ({
+          ...data,
+          size: data.size,
+          color: data.color,
+          label: ''
+        })
+      });
+
+      sigmaRef.current = sigma;
+
+      // Disable hover highlighting by clearing hover state
+      sigma.on("enterNode", () => {
+        if (sigma.hoveredNode) sigma.hoveredNode = null;
+      });
+
+      sigma.on("enterEdge", () => {
+        if (sigma.hoveredEdge) sigma.hoveredEdge = null;
+      });
+    } else {
+      // Update existing Sigma with new graph
+      sigmaRef.current.setGraph(graph);
     }
 
-    // Create new Sigma renderer
-    const sigma = new Sigma(graph, containerRef.current, {
-      renderLabels: false,
-      renderEdgeLabels: false,
-      hideEdgesOnMove: false,
-      hideLabelsOnMove: false,
-      enableEdgeEvents: false,
-      enableNodeEvents: true,
-      zIndex: true,
-      
-      // Node renderer settings
-      nodeReducer: (node, data) => ({
-        ...data,
-        size: data.size,
-        color: data.color,
-        label: ''
-      })
+    // Cleanup function
+    return () => {
+      if (sigmaRef.current) {
+        sigmaRef.current.kill();
+        sigmaRef.current = null;
+      }
+    };
+  }, [data]);
+
+  // Set up event handlers separately to avoid recreating Sigma
+  useEffect(() => {
+    if (!sigmaRef.current) return;
+
+    const sigma = sigmaRef.current;
+
+    // Clear existing listeners
+    sigma.removeAllListeners();
+
+    // Disable hover highlighting by clearing hover state
+    sigma.on("enterNode", () => {
+      if (sigma.hoveredNode) sigma.hoveredNode = null;
     });
 
-    sigmaRef.current = sigma;
+    sigma.on("enterEdge", () => {
+      if (sigma.hoveredEdge) sigma.hoveredEdge = null;
+    });
 
     // Set up event handlers
     if (onHover) {
       sigma.on('enterNode', ({ node }) => {
-        const nodeData = graph.getNodeAttributes(node);
+        const nodeData = graphRef.current.getNodeAttributes(node);
         onHover(nodeData.originalData);
       });
     }
 
     if (onLeave) {
       sigma.on('leaveNode', ({ node }) => {
-        const nodeData = graph.getNodeAttributes(node);
+        const nodeData = graphRef.current.getNodeAttributes(node);
         onLeave(nodeData.originalData);
       });
     }
 
     if (onClick) {
       sigma.on('clickNode', ({ node }) => {
-        const nodeData = graph.getNodeAttributes(node);
+        const nodeData = graphRef.current.getNodeAttributes(node);
         onClick(nodeData.originalData);
       });
     }
@@ -133,17 +171,9 @@ const DotVisualizationSigma = (props) => {
       });
     }
 
-    // Initial render
+    // Refresh to apply any changes
     sigma.refresh();
-
-    // Cleanup function
-    return () => {
-      if (sigmaRef.current) {
-        sigmaRef.current.kill();
-        sigmaRef.current = null;
-      }
-    };
-  }, [data, ensureIds, createGraph, onHover, onLeave, onClick, onBackgroundClick]);
+  }, [onHover, onLeave, onClick, onBackgroundClick]);
 
   // Update node styles when dotStyles change
   useEffect(() => {
