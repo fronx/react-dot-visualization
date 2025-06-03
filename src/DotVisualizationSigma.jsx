@@ -64,6 +64,37 @@ const DotVisualizationSigmaClient = (props) => {
     }));
   }, []);
 
+  // Fast RGB to hex conversion using bitwise operations
+  const rgbToHex = useCallback((r, g, b) => {
+    return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+  }, []);
+
+  // Convert color to hex format for Sigma
+  const toHexColor = useCallback((color) => {
+    if (!color) return '#3498db';
+    if (typeof color === 'string' && color.startsWith('#')) return color;
+    
+    // Handle rgb() and rgba() formats (both old and new CSS syntax)
+    const rgbMatch = color.match(/rgba?\((\d+)(?:,\s*|\s+)(\d+)(?:,\s*|\s+)(\d+)(?:(?:,\s*|\s*\/\s*)[\d.]+)?\)/);
+    if (rgbMatch) {
+      const [, r, g, b] = rgbMatch;
+      return rgbToHex(parseInt(r), parseInt(g), parseInt(b));
+    }
+    
+    // For CSS color names, use DOM parsing (fallback)
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, 1, 1);
+      const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+      return rgbToHex(r, g, b);
+    } catch (e) {
+      return color; // Return original if conversion fails
+    }
+  }, [rgbToHex]);
+
   // Create graph from data
   const createGraph = useCallback((processedData) => {
     if (!Graph) return null;
@@ -76,7 +107,7 @@ const DotVisualizationSigmaClient = (props) => {
 
       const nodeId = String(item.id);
       const customStyle = dotStyles.get(item.id) || {};
-      const color = customStyle.color || item.color || defaultColor;
+      const color = toHexColor(customStyle.color || item.color || defaultColor);
       const size = customStyle.size || item.size || defaultSize;
 
       graph.addNode(nodeId, {
@@ -90,7 +121,7 @@ const DotVisualizationSigmaClient = (props) => {
     });
 
     return graph;
-  }, [Graph, defaultColor, defaultSize, dotStyles]);
+  }, [Graph, defaultColor, defaultSize, dotStyles, toHexColor]);
 
   // Initialize Sigma (only when data changes significantly)
   useEffect(() => {
@@ -239,7 +270,7 @@ const DotVisualizationSigmaClient = (props) => {
     graph.forEachNode((nodeId, attributes) => {
       const originalData = attributes.originalData;
       const customStyle = dotStyles.get(originalData.id) || {};
-      const color = customStyle.color || originalData.color || defaultColor;
+      const color = toHexColor(customStyle.color || originalData.color || defaultColor);
       const size = customStyle.size || originalData.size || defaultSize;
 
       graph.setNodeAttribute(nodeId, 'color', color);
@@ -247,7 +278,7 @@ const DotVisualizationSigmaClient = (props) => {
     });
 
     sigmaRef.current.refresh();
-  }, [dotStyles, defaultColor, defaultSize]);
+  }, [dotStyles, defaultColor, defaultSize, toHexColor]);
 
   // Show loading state while libraries are loading
   if (!Sigma || !Graph) {
