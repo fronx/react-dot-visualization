@@ -114,10 +114,20 @@ const DotVisualizationSigmaClient = (props) => {
     graphRef.current = graph;
 
     console.log('sigmaRef.current', sigmaRef.current);
+    console.log('containerRef.current', containerRef.current, 'dimensions:', containerRef.current?.getBoundingClientRect());
+    
     // Only recreate Sigma if it doesn't exist
     if (!sigmaRef.current) {
-      // Create new Sigma renderer
-      const sigma = new Sigma(graph, containerRef.current, {
+      // Validate container has dimensions
+      const rect = containerRef.current.getBoundingClientRect();
+      if (rect.height === 0 || rect.width === 0) {
+        console.warn('Container has no dimensions, deferring Sigma creation');
+        return;
+      }
+
+      try {
+        // Create new Sigma renderer
+        const sigma = new Sigma(graph, containerRef.current, {
         renderLabels: false,
         renderEdgeLabels: false,
         hideEdgesOnMove: false,
@@ -136,9 +146,15 @@ const DotVisualizationSigmaClient = (props) => {
         })
       });
 
-      sigmaRef.current = sigma;
+        sigmaRef.current = sigma;
+        console.log('Created new Sigma instance');
+      } catch (error) {
+        console.error('Failed to create Sigma instance:', error);
+        return;
+      }
 
       // Disable hover highlighting by clearing hover state
+      const sigma = sigmaRef.current;
       sigma.on("enterNode", () => {
         if (sigma.hoveredNode) sigma.hoveredNode = null;
       });
@@ -255,15 +271,28 @@ const DotVisualizationSigmaClient = (props) => {
 
   return (
     <div
-      ref={containerRef}
-      className={`dot-visualization-sigma ${className}`}
+      className={`dot-visualization-sigma-wrapper ${className}`}
       style={{
         width: '100%',
         height: '100%',
+        minHeight: '400px', // Fallback minimum
+        flex: 1, // Take available space in flex containers
+        display: 'flex',
+        flexDirection: 'column',
         ...style
       }}
       {...otherProps}
-    />
+    >
+      <div
+        ref={containerRef}
+        className="dot-visualization-sigma"
+        style={{
+          flex: 1,
+          width: '100%',
+          minHeight: 0 // Allow flex child to shrink
+        }}
+      />
+    </div>
   );
 };
 
