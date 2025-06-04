@@ -1,11 +1,11 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
 import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import { calculateViewBox } from './utils.js';
 
-const DotVisualization = (props) => {
+const DotVisualization = forwardRef((props, ref) => {
   const {
     data = [],
     clusters = [],
@@ -198,6 +198,25 @@ const DotVisualization = (props) => {
     };
   }, [processedData, enableCollisionDetection, defaultSize]);
 
+  // Expose setDotColors method via ref
+  useImperativeHandle(ref, () => ({
+    setDotColors: (colorMap) => {
+      if (!colorMap || typeof colorMap !== 'object') {
+        console.warn('DotVisualization.setDotColors: colorMap must be an object');
+        return;
+      }
+
+      // Update colors directly in the DOM without re-rendering
+      Object.entries(colorMap).forEach(([itemId, color]) => {
+        const elementId = dotId(0, { id: itemId });
+        const element = d3.select(`#${elementId}`);
+        if (!element.empty() && color) {
+          element.attr('fill', color);
+        }
+      });
+    }
+  }), [dotId]);
+
   if (!processedData.length) {
     return null;
   }
@@ -247,6 +266,6 @@ const DotVisualization = (props) => {
       </g>
     </svg>
   );
-};
+});
 
 export default DotVisualization;
