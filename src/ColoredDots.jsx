@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
 
 const ColoredDots = React.memo((props) => {
@@ -11,6 +11,9 @@ const ColoredDots = React.memo((props) => {
     defaultSize = 2,
     dotStyles = new Map()
   } = props;
+
+  // Store original attributes for restoration
+  const originalAttrs = useRef(new Map());
 
   const getColor = (item, index) => {
     if (item.color) return item.color;
@@ -25,25 +28,37 @@ const ColoredDots = React.memo((props) => {
     return item.size || defaultSize;
   };
 
-  // Apply custom styles using d3 for direct DOM updates
+  // Apply SVG attributes using d3 for direct DOM updates
   useEffect(() => {
-    // Clear custom CSS styles
-    d3.selectAll('#colored-dots circle').each(function() {
-      const element = d3.select(this);
-      element.node().style.cssText = '';
-    });
-
-    // Apply new CSS styles
-    dotStyles.forEach((styles, itemId) => {
-      const elementId = dotId(0, { id: itemId });
+    // Process each dot
+    data.forEach((item, index) => {
+      const elementId = dotId(0, item);
       const element = d3.select(`#${elementId}`);
+
       if (!element.empty()) {
-        Object.entries(styles).forEach(([prop, value]) => {
-          element.style(prop, value);
+        // Start with base attributes from the data
+        const baseAttrs = {
+          r: getSize(item),
+          cx: item.x,
+          cy: item.y,
+          fill: getColor(item, index),
+          stroke: stroke,
+          'stroke-width': strokeWidth,
+          filter: '',
+          opacity: 0.7,
+        };
+
+        // Merge with custom attributes if any exist for this dot
+        const customAttrs = dotStyles.get(item.id) || {};
+        const mergedAttrs = { ...baseAttrs, ...customAttrs };
+
+        // Apply all attributes at once
+        Object.entries(mergedAttrs).forEach(([attr, value]) => {
+          element.attr(attr, value);
         });
       }
     });
-  }, [dotStyles, dotId]);
+  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize]);
 
   return (
     <g id="colored-dots">
