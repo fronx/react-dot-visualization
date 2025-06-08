@@ -201,17 +201,19 @@ const DotVisualization = forwardRef((props, ref) => {
   // Expose setDotColors method via ref
   useImperativeHandle(ref, () => ({
     setDotColors: (colorMap) => {
-      if (!colorMap || typeof colorMap !== 'object') {
-        console.warn('DotVisualization.setDotColors: colorMap must be an object');
+      if (!colorMap || !(colorMap instanceof Map)) {
+        console.warn('DotVisualization.setDotColors: colorMap must be a Map');
         return;
       }
 
       // Update colors directly in the DOM without re-rendering
-      Object.entries(colorMap).forEach(([itemId, color]) => {
+      colorMap.forEach((color, itemId) => {
+        console.log('itemId', itemId, 'color', color);
         const elementId = dotId(0, { id: itemId });
         const element = d3.select(`#${elementId}`);
         if (!element.empty() && color) {
           element.attr('fill', color);
+          console.log('element', element);
         }
       });
     }
