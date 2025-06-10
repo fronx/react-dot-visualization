@@ -130,7 +130,7 @@ const DotVisualization = forwardRef((props, ref) => {
         return item;
       });
     } else {
-      console.log('Positions changed, running collision detection');
+      // console.log('Positions changed, running collision detection');
     }
 
     // Calculate viewBox (use original positions for consistent bounds)
