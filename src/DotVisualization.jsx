@@ -5,6 +5,11 @@ import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import { calculateViewBox } from './utils.js';
 
+// Helper function to check if two numbers are equal after rounding to 2 decimal places
+const isWithinTolerance = (a, b) => {
+  return Math.round(a * 100) === Math.round(b * 100);
+};
+
 const DotVisualization = forwardRef((props, ref) => {
   const {
     data = [],
@@ -20,7 +25,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onBackgroundClick,
     onZoomStart,
     onZoomEnd,
-    enableCollisionDetection = true,
+    enableDecollisioning = true,
     zoomExtent = [0.7, 10],
     margin = 0.1,
     dotStroke = "#111",
@@ -43,6 +48,28 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomHandler = useRef(d3.zoom());
   const zoomTimerRef = useRef(null);
   const dataRef = useRef([]);
+  const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
+  const previousDataRef = useRef([]);
+
+  // Check if only non-positional properties have changed
+  const hasPositionsChanged = useCallback((newData, oldData) => {
+    if (newData.length !== oldData.length) return true;
+
+    for (let i = 0; i < newData.length; i++) {
+      const newItem = newData[i];
+      const oldItem = oldData[i];
+
+      if (newItem.id !== oldItem.id ||
+        !isWithinTolerance(newItem.x, oldItem.x) ||
+        !isWithinTolerance(newItem.y, oldItem.y) ||
+        (newItem.size || defaultSize) !== (oldItem.size || defaultSize)) {
+        // console.log('different newItem:', newItem, 'oldItem:', oldItem, 'isWithinTolerance(newItem.x, oldItem.x):', isWithinTolerance(newItem.x, oldItem.x), 'isWithinTolerance(newItem.y, oldItem.y):', isWithinTolerance(newItem.y, oldItem.y));
+        // console.log('newItem.x:', newItem.x, 'oldItem.x:', oldItem.x, 'newItem.y:', newItem.y, 'oldItem.y:', oldItem.y);
+        return true;
+      }
+    }
+    return false;
+  }, [defaultSize]);
 
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
@@ -64,6 +91,8 @@ const DotVisualization = forwardRef((props, ref) => {
       return;
     }
 
+    // console.log('DotVisualization incoming data:', data[0]?.x, data[0]?.y, "previousDataRef.current:", previousDataRef.current[0]?.x, previousDataRef.current[0]?.y);
+
     // Auto-generate IDs and validate required fields
     const dataWithIds = ensureIds(data);
     const validData = dataWithIds.filter(item =>
@@ -76,15 +105,45 @@ const DotVisualization = forwardRef((props, ref) => {
       return;
     }
 
-    // Calculate viewBox
+    // Check if positions have changed compared to original input data
+    const positionsChanged = previousDataRef.current.length === 0 ||
+      hasPositionsChanged(validData, previousDataRef.current);
+
+    // console.log('🔍 DotVisualization Data Processing:', {
+    //   previousCount: previousDataRef.current.length,
+    //   newCount: validData.length,
+    //   positionsChanged,
+    //   memoizedPositionsCount: memoizedPositions.current.size,
+    //   firstFewIds: validData.slice(0, 3).map(d => d.id)
+    // });
+
+    let processedValidData = validData;
+
+    // If positions haven't changed, restore memoized decollisioned positions
+    if (!positionsChanged && memoizedPositions.current.size > 0) {
+      console.log('📍 Restoring memoized positions for', validData.length, 'dots');
+      processedValidData = validData.map(item => {
+        const memoizedPos = memoizedPositions.current.get(item.id);
+        if (memoizedPos) {
+          return { ...item, x: memoizedPos.x, y: memoizedPos.y };
+        }
+        return item;
+      });
+    } else {
+      console.log('Positions changed, running collision detection');
+    }
+
+    // Calculate viewBox (use original positions for consistent bounds)
     const calculatedViewBox = calculateViewBox(validData, margin);
     setViewBox(calculatedViewBox);
 
-    // Store processed data
-    dataRef.current = validData;
-    setProcessedData(validData);
+    // Store original input data for future comparisons
+    previousDataRef.current = validData.map(item => ({ ...item })); // Deep copy of validData!! This is important!
+    // Store processed data (either original or with restored positions)
+    dataRef.current = processedValidData;
+    setProcessedData(processedValidData);
 
-  }, [data, margin, ensureIds]);
+  }, [data, margin, ensureIds, hasPositionsChanged]);
 
   // Set up zoom behavior
   useEffect(() => {
@@ -156,11 +215,20 @@ const DotVisualization = forwardRef((props, ref) => {
     };
   }, [processedData, zoomExtent, onZoomStart, onZoomEnd]);
 
-  // Collision detection force simulation
+
+  // Decolliding dots
   useEffect(() => {
-    if (!enableCollisionDetection || !processedData.length) {
+    // console.log('Decolliding Dots:', {
+    //   enableDecollisioning,
+    //   processedDataLength: processedData.length,
+    //   willRunCollision: enableDecollisioning && processedData.length > 0
+    // });
+
+    if (!enableDecollisioning || !processedData.length) {
       return;
     }
+
+    // console.log('Decolliding dots');
 
     let tick = 0;
     const dots0 = d3.selectAll('#colored-dots circle').data(processedData);
@@ -178,7 +246,10 @@ const DotVisualization = forwardRef((props, ref) => {
         if (tick % updateFrequency === 0) {
           dots0
             .attr('cx', d => d.x)
-            .attr('cy', d => d.y);
+            .attr('cy', d => d.y)
+            .each(d => {
+              memoizedPositions.current.set(d.id, { x: d.x, y: d.y });
+            });
           dots1
             .attr('cx', d => d.x)
             .attr('cy', d => d.y);
@@ -187,37 +258,22 @@ const DotVisualization = forwardRef((props, ref) => {
       .on('end', () => {
         dots0
           .attr('cx', d => d.x)
-          .attr('cy', d => d.y);
+          .attr('cy', d => d.y)
+          .each(d => {
+            memoizedPositions.current.set(d.id, { x: d.x, y: d.y });
+          });
         dots1
           .attr('cx', d => d.x)
           .attr('cy', d => d.y);
+
+        console.log('Decollided dots:', memoizedPositions.current.size);
       });
 
     return () => {
       simulation.stop();
     };
-  }, [processedData, enableCollisionDetection, defaultSize]);
+  }, [processedData, enableDecollisioning, defaultSize]);
 
-  // Expose setDotColors method via ref
-  useImperativeHandle(ref, () => ({
-    setDotColors: (colorMap) => {
-      if (!colorMap || !(colorMap instanceof Map)) {
-        console.warn('DotVisualization.setDotColors: colorMap must be a Map');
-        return;
-      }
-
-      // Update colors directly in the DOM without re-rendering
-      colorMap.forEach((color, itemId) => {
-        console.log('itemId', itemId, 'color', color);
-        const elementId = dotId(0, { id: itemId });
-        const element = d3.select(`#${elementId}`);
-        if (!element.empty() && color) {
-          element.attr('fill', color);
-          console.log('element', element);
-        }
-      });
-    }
-  }), [dotId]);
 
   if (!processedData.length) {
     return null;
