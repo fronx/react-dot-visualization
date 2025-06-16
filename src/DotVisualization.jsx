@@ -24,6 +24,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onClick,
     onBackgroundClick,
     onDragStart,
+    dragIcon,
     onZoomStart,
     onZoomEnd,
     enableDecollisioning = true,
@@ -41,13 +42,17 @@ const DotVisualization = forwardRef((props, ref) => {
 
   const [processedData, setProcessedData] = useState([]);
   const [viewBox, setViewBox] = useState([0, 0, 100, 100]);
-  const [isZooming, setIsZooming] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isWheelActive, setIsWheelActive] = useState(false);
+  
+  // Block hover when actively interacting
+  const isZooming = isDragging || isWheelActive;
 
   const zoomRef = useRef(null);
   const contentRef = useRef(null);
   const transform = useRef(null);
   const zoomHandler = useRef(d3.zoom());
-  const zoomTimerRef = useRef(null);
+  const wheelTimeoutRef = useRef(null);
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
   const previousDataRef = useRef([]);
@@ -152,22 +157,34 @@ const DotVisualization = forwardRef((props, ref) => {
       return;
     }
 
-    const zoomStarted = (event) => {
-      setIsZooming(true);
+    const handleDragStart = (event) => {
+      setIsDragging(true);
       if (onZoomStart) onZoomStart(event);
+    };
 
-      if (zoomTimerRef.current !== null) {
-        clearTimeout(zoomTimerRef.current);
+    const handleDragEnd = (event) => {
+      setIsDragging(false);
+      if (onZoomEnd) onZoomEnd(event);
+    };
+
+    const handleWheel = () => {
+      setIsWheelActive(true);
+      
+      // Clear existing timeout
+      if (wheelTimeoutRef.current) {
+        clearTimeout(wheelTimeoutRef.current);
       }
-      zoomTimerRef.current = setTimeout(() => {
-        setIsZooming(false);
-        if (onZoomEnd) onZoomEnd(event);
-        zoomTimerRef.current = null;
-      }, 250);
+      
+      // Set a short debounce for wheel events
+      wheelTimeoutRef.current = setTimeout(() => {
+        setIsWheelActive(false);
+        wheelTimeoutRef.current = null;
+      }, 100);
     };
 
     const onZoom = (event) => {
       event.preventDefault();
+      handleWheel(); // Track wheel activity
 
       const selection = d3.select(zoomRef.current);
       const currentZoom = selection.property("__zoom")?.k || 1;
@@ -203,18 +220,19 @@ const DotVisualization = forwardRef((props, ref) => {
 
     zoomHandler.current
       .scaleExtent(zoomExtent)
-      .on("start", zoomStarted);
+      .on("start", handleDragStart)
+      .on("end", handleDragEnd);
 
     d3.select(zoomRef.current)
       .call(zoomHandler.current)
       .on("wheel.zoom", onZoom);
 
     return () => {
-      if (zoomTimerRef.current) {
-        clearTimeout(zoomTimerRef.current);
+      if (wheelTimeoutRef.current) {
+        clearTimeout(wheelTimeoutRef.current);
       }
     };
-  }, [processedData, zoomExtent, onZoomStart, onZoomEnd]);
+  }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox]);
 
 
   // Decolliding dots

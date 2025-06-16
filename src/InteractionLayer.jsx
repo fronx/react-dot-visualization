@@ -24,6 +24,8 @@ const InteractionLayer = React.memo((props) => {
   const handleMouseEnter = (e, item) => {
     if (!isZooming && onHover) {
       onHover(item, e);
+    } else if (isZooming) {
+      console.log('❌ Hover blocked - isDragging/isWheelActive:', isZooming);
     }
   };
 
