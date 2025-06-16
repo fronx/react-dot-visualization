@@ -294,6 +294,16 @@ const DotVisualization = forwardRef((props, ref) => {
   }, [processedData, enableDecollisioning, defaultSize]);
 
 
+  // Handle mouse leave to reset interaction states
+  const handleMouseLeave = () => {
+    setIsDragging(false);
+    setIsWheelActive(false);
+    if (wheelTimeoutRef.current) {
+      clearTimeout(wheelTimeoutRef.current);
+      wheelTimeoutRef.current = null;
+    }
+  };
+
   if (!processedData.length) {
     return null;
   }
@@ -308,6 +318,7 @@ const DotVisualization = forwardRef((props, ref) => {
         height: '100%',
         ...style
       }}
+      onMouseLeave={handleMouseLeave}
       {...otherProps}
     >
       <g ref={contentRef}>

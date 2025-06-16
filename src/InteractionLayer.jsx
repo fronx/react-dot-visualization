@@ -47,6 +47,13 @@ const InteractionLayer = React.memo((props) => {
     }
   };
 
+  const handleLayerMouseLeave = (e) => {
+    // Clear any hover state when mouse leaves the entire visualization area
+    if (onLeave) {
+      onLeave(null, e);
+    }
+  };
+
   const handleDragStart = (e, item) => {
     if (onDragStart) {
       onDragStart(item, e);
