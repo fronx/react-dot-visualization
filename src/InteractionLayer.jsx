@@ -9,6 +9,7 @@ const InteractionLayer = React.memo((props) => {
     onLeave,
     onClick,
     onBackgroundClick,
+    onDragStart,
     isZooming = false,
     defaultSize = 2,
     dotStyles = new Map()
@@ -39,6 +40,12 @@ const InteractionLayer = React.memo((props) => {
   const handleBackgroundClick = (e) => {
     if (onBackgroundClick) {
       onBackgroundClick(e);
+    }
+  };
+
+  const handleDragStart = (e, item) => {
+    if (onDragStart) {
+      onDragStart(item, e);
     }
   };
 
@@ -74,9 +81,11 @@ const InteractionLayer = React.memo((props) => {
           cy={item.y}
           fill="transparent"
           style={{ cursor: onClick ? 'pointer' : 'default' }}
+          draggable={!!onDragStart}
           onClick={(e) => handleClick(e, item)}
           onMouseEnter={(e) => handleMouseEnter(e, item)}
           onMouseLeave={(e) => handleMouseLeave(e, item)}
+          onDragStart={onDragStart ? (e) => handleDragStart(e, item) : undefined}
         />
       ))}
     </g>

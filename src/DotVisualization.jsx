@@ -23,6 +23,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onLeave,
     onClick,
     onBackgroundClick,
+    onDragStart,
     onZoomStart,
     onZoomEnd,
     enableDecollisioning = true,
@@ -317,6 +318,7 @@ const DotVisualization = forwardRef((props, ref) => {
           onLeave={onLeave}
           onClick={onClick}
           onBackgroundClick={onBackgroundClick}
+          onDragStart={onDragStart}
           isZooming={isZooming}
           defaultSize={defaultSize}
           dotStyles={dotStyles}
