@@ -11,10 +11,6 @@ const ColoredDots = React.memo((props) => {
     defaultSize = 2,
     dotStyles = new Map()
   } = props;
-
-  // Store original attributes for restoration
-  const originalAttrs = useRef(new Map());
-
   const getColor = (item, index) => {
     if (item.color) return item.color;
     if (defaultColor) return defaultColor;
@@ -28,31 +24,26 @@ const ColoredDots = React.memo((props) => {
     return item.size || defaultSize;
   };
 
-  // Apply SVG attributes using d3 for direct DOM updates
   useEffect(() => {
-    // Process each dot
     data.forEach((item, index) => {
       const elementId = dotId(0, item);
       const element = d3.select(`#${elementId}`);
 
       if (!element.empty()) {
-        // Start with base attributes from the data
         const baseAttrs = {
           r: getSize(item),
           cx: item.x,
           cy: item.y,
           fill: getColor(item, index),
           stroke: stroke,
-          'stroke-width': strokeWidth,
+          strokeWidth: strokeWidth,
           filter: '',
           opacity: 0.7,
         };
 
-        // Merge with custom attributes if any exist for this dot
         const customAttrs = dotStyles.get(item.id) || {};
         const mergedAttrs = { ...baseAttrs, ...customAttrs };
 
-        // Apply all attributes at once
         Object.entries(mergedAttrs).forEach(([attr, value]) => {
           element.attr(attr, value);
         });
@@ -69,9 +60,9 @@ const ColoredDots = React.memo((props) => {
           r={getSize(item)}
           cx={item.x}
           cy={item.y}
-          fill={getColor(item, index)}
-          stroke={stroke}
-          strokeWidth={strokeWidth}
+          fill={item.fill}
+          stroke={item.stroke}
+          strokeWidth={item.strokeWidth || strokeWidth}
         />
       ))}
     </g>
