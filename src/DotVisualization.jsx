@@ -3,6 +3,7 @@ import * as d3 from 'd3';
 import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
+import EdgeLayer from './EdgeLayer.jsx';
 import { calculateViewBox } from './utils.js';
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
@@ -13,6 +14,7 @@ const isWithinTolerance = (a, b) => {
 const DotVisualization = forwardRef((props, ref) => {
   const {
     data = [],
+    edges = [],
     clusters = [],
     clusterKey = (item) => item.cluster_level_0,
     renderCluster,
@@ -35,6 +37,8 @@ const DotVisualization = forwardRef((props, ref) => {
     defaultColor = null,
     defaultSize = 2,
     dotStyles = new Map(),
+    edgeOpacity = 0.3,
+    edgeColor = "#999",
     className = "",
     style = {},
     ...otherProps
@@ -44,7 +48,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const [viewBox, setViewBox] = useState([0, 0, 100, 100]);
   const [isDragging, setIsDragging] = useState(false);
   const [isWheelActive, setIsWheelActive] = useState(false);
-  
+
   // Block hover when actively interacting
   const isZooming = isDragging || isWheelActive;
 
@@ -169,12 +173,12 @@ const DotVisualization = forwardRef((props, ref) => {
 
     const handleWheel = () => {
       setIsWheelActive(true);
-      
+
       // Clear existing timeout
       if (wheelTimeoutRef.current) {
         clearTimeout(wheelTimeoutRef.current);
       }
-      
+
       // Set a short debounce for wheel events
       wheelTimeoutRef.current = setTimeout(() => {
         setIsWheelActive(false);
@@ -322,6 +326,14 @@ const DotVisualization = forwardRef((props, ref) => {
       {...otherProps}
     >
       <g ref={contentRef}>
+        {(edges && edges.length > 0) && (
+          <EdgeLayer
+            edges={edges}
+            data={processedData}
+            edgeOpacity={edgeOpacity}
+            edgeColor={edgeColor}
+          />
+        )}
         <ColoredDots
           data={processedData}
           dotId={dotId}
