@@ -55,7 +55,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomRef = useRef(null);
   const contentRef = useRef(null);
   const transform = useRef(null);
-  const zoomHandler = useRef(d3.zoom());
+  const zoomHandler = useRef(null);
   const wheelTimeoutRef = useRef(null);
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
@@ -155,9 +155,16 @@ const DotVisualization = forwardRef((props, ref) => {
 
   }, [data, margin, ensureIds, hasPositionsChanged]);
 
+  // Initialize zoom handler (browser-only)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !zoomHandler.current) {
+      zoomHandler.current = d3.zoom();
+    }
+  }, []);
+
   // Set up zoom behavior
   useEffect(() => {
-    if (!processedData.length || !zoomRef.current) {
+    if (!processedData.length || !zoomRef.current || typeof window === 'undefined' || !zoomHandler.current) {
       return;
     }
 
@@ -247,7 +254,7 @@ const DotVisualization = forwardRef((props, ref) => {
     //   willRunCollision: enableDecollisioning && processedData.length > 0
     // });
 
-    if (!enableDecollisioning || !processedData.length) {
+    if (!enableDecollisioning || !processedData.length || typeof window === 'undefined') {
       return;
     }
 
@@ -308,8 +315,8 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   };
 
-  if (!processedData.length) {
-    return null;
+  if (!processedData.length || typeof window === 'undefined') {
+    return <div style={{ width: '100%', height: '100%', ...style }} className={className} />;
   }
 
   return (
