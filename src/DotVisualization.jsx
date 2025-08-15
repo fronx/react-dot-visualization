@@ -31,6 +31,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onZoomEnd,
     onDecollisionComplete,
     enableDecollisioning = true,
+    positionsAreIntermediate = false,
     zoomExtent = [0.7, 10],
     margin = 0.1,
     dotStroke = "#111",
@@ -130,8 +131,8 @@ const DotVisualization = forwardRef((props, ref) => {
 
     let processedValidData = validData;
 
-    // If positions haven't changed, restore memoized decollisioned positions
-    if (!positionsChanged && memoizedPositions.current.size > 0) {
+    // If positions haven't changed and positions are stable, restore memoized decollisioned positions
+    if (!positionsChanged && memoizedPositions.current.size > 0 && !positionsAreIntermediate) {
       console.log('📍 Restoring memoized positions for', validData.length, 'dots');
       processedValidData = validData.map(item => {
         const memoizedPos = memoizedPositions.current.get(item.id);
@@ -141,7 +142,9 @@ const DotVisualization = forwardRef((props, ref) => {
         return item;
       });
     } else {
-      // console.log('Positions changed, running collision detection');
+      if (positionsAreIntermediate) {
+        console.log('📍 Positions are intermediate - using raw positions from simulation');
+      }
     }
 
     // Calculate viewBox (use original positions for consistent bounds)
@@ -154,7 +157,7 @@ const DotVisualization = forwardRef((props, ref) => {
     dataRef.current = processedValidData;
     setProcessedData(processedValidData);
 
-  }, [data, margin, ensureIds, hasPositionsChanged]);
+  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate]);
 
   // Initialize zoom handler (browser-only)
   useEffect(() => {
