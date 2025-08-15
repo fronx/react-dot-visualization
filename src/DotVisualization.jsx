@@ -133,7 +133,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
     // If positions haven't changed and positions are stable, restore memoized decollisioned positions
     if (!positionsChanged && memoizedPositions.current.size > 0 && !positionsAreIntermediate) {
-      console.log('📍 Restoring memoized positions for', validData.length, 'dots');
+      // console.log('📍 Restoring memoized positions for', validData.length, 'dots');
       processedValidData = validData.map(item => {
         const memoizedPos = memoizedPositions.current.get(item.id);
         if (memoizedPos) {
@@ -143,7 +143,7 @@ const DotVisualization = forwardRef((props, ref) => {
       });
     } else {
       if (positionsAreIntermediate) {
-        console.log('📍 Positions are intermediate - using raw positions from simulation');
+        // console.log('📍 Positions are intermediate - using raw positions from simulation');
       }
     }
 
