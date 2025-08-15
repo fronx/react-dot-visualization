@@ -29,6 +29,7 @@ const DotVisualization = forwardRef((props, ref) => {
     dragIcon,
     onZoomStart,
     onZoomEnd,
+    onDecollisionComplete,
     enableDecollisioning = true,
     zoomExtent = [0.7, 10],
     margin = 0.1,
@@ -297,6 +298,9 @@ const DotVisualization = forwardRef((props, ref) => {
           .attr('cy', d => d.y);
 
         console.log('Decollided dots:', memoizedPositions.current.size);
+        if (onDecollisionComplete) {
+          onDecollisionComplete();
+        }
       });
 
     return () => {
