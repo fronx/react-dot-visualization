@@ -56,6 +56,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const [viewBox, setViewBox] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isWheelActive, setIsWheelActive] = useState(false);
+  const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
 
   // Block hover when actively interacting
   const isZooming = isDragging || isWheelActive;
@@ -292,10 +293,13 @@ const DotVisualization = forwardRef((props, ref) => {
       .call(zoomHandler.current)
       .on("wheel.zoom", onZoom);
 
+    setIsZoomSetupComplete(true);
+
     return () => {
       if (wheelTimeoutRef.current) {
         clearTimeout(wheelTimeoutRef.current);
       }
+      setIsZoomSetupComplete(false);
     };
   }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox]);
 
@@ -384,6 +388,7 @@ const DotVisualization = forwardRef((props, ref) => {
     if (!autoFitToVisible) return;
     if (!viewBox || !zoomRef.current || !zoomHandler.current) return;
     if (!processedData.length) return; // wait until data and zoom binding are ready
+    if (!isZoomSetupComplete) return; // wait until zoom behavior is fully set up
 
     // Defer to next microtask to ensure DOM/layout is up to date
     Promise.resolve().then(() => {
@@ -397,7 +402,8 @@ const DotVisualization = forwardRef((props, ref) => {
     occludeLeft, occludeRight, occludeTop, occludeBottom,
     fitMargin,              // if margin changes, recompute
     zoomToVisible,
-    processedData
+    processedData,
+    isZoomSetupComplete     // wait for zoom behavior to be fully configured
   ]);
 
   const effectiveViewBox = (viewBox && viewBox.length === 4) ? viewBox : [0, 0, 1, 1];
