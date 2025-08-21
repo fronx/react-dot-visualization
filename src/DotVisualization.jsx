@@ -13,8 +13,8 @@ const isWithinTolerance = (a, b) => {
 
 const vbEqual = (a, b, eps = 1e-9) =>
   Array.isArray(a) && Array.isArray(b) && a.length === 4 && b.length === 4 &&
-  Math.abs(a[0]-b[0]) < eps && Math.abs(a[1]-b[1]) < eps &&
-  Math.abs(a[2]-b[2]) < eps && Math.abs(a[3]-b[3]) < eps;
+  Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps &&
+  Math.abs(a[2] - b[2]) < eps && Math.abs(a[3] - b[3]) < eps;
 
 const DotVisualization = forwardRef((props, ref) => {
   const {
@@ -69,10 +69,12 @@ const DotVisualization = forwardRef((props, ref) => {
   const contentRef = useRef(null);
   const transform = useRef(null);
   const zoomHandler = useRef(null);
+  const baseScaleRef = useRef(1);
   const wheelTimeoutRef = useRef(null);
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
   const previousDataRef = useRef([]);
+  const didInitialAutoFitRef = useRef(false);
 
   // Check if only non-positional properties have changed
   const hasPositionsChanged = useCallback((newData, oldData) => {
@@ -106,16 +108,25 @@ const DotVisualization = forwardRef((props, ref) => {
   }, []);
 
   const zoomToVisible = useCallback(() => {
-    if (!zoomRef.current || !zoomHandler.current || !viewBox || !processedData.length) return;
+    if (!zoomRef.current || !zoomHandler.current || !viewBox || !processedData.length) return false;
     const rect = zoomRef.current.getBoundingClientRect();
     const bounds = boundsForData(processedData);
     const fit = computeFitTransformToVisible(bounds, viewBox, rect, {
       left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
     }, fitMargin);
-    if (!fit) return;
+    if (!fit) return false;
     const next = d3.zoomIdentity.translate(fit.x, fit.y).scale(fit.k);
+    // Rebase zoom extent so that the fitted state corresponds to relative scale 1
+    baseScaleRef.current = fit.k;
+    if (zoomHandler.current && Array.isArray(zoomExtent) && zoomExtent.length === 2) {
+      const [minRel, maxRel] = zoomExtent;
+      const minAbs = Math.min(minRel, maxRel) * fit.k;
+      const maxAbs = Math.max(minRel, maxRel) * fit.k;
+      zoomHandler.current.scaleExtent([minAbs, maxAbs]);
+    }
     applyTransform(next);
-  }, [processedData, viewBox, occludeLeft, occludeRight, occludeTop, occludeBottom, fitMargin, applyTransform]);
+    return true;
+  }, [processedData, viewBox, occludeLeft, occludeRight, occludeTop, occludeBottom, fitMargin, applyTransform, zoomExtent]);
 
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
@@ -189,6 +200,7 @@ const DotVisualization = forwardRef((props, ref) => {
         const vb = computeOcclusionAwareViewBox(bounds, { width: rect.width, height: rect.height }, {
           left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
         }, margin);
+        console.log('Initialized viewBox:', vb);
         if (vb) setViewBox(vb);
       }
     }
@@ -368,7 +380,28 @@ const DotVisualization = forwardRef((props, ref) => {
     zoomToVisible,
   }), [zoomToVisible]);
 
-  // (Auto-fit/reactive occlusion compensation effect removed)
+  // Auto-fit to visible region
+  useEffect(() => {
+    // Only run once; do not auto-fit again after first successful fit
+    if (didInitialAutoFitRef.current) return;
+    if (!autoFitToVisible) return;
+    if (!viewBox || !zoomRef.current || !zoomHandler.current) return;
+    if (!processedData.length) return; // wait until data and zoom binding are ready
+
+    // Defer to next microtask to ensure DOM/layout is up to date
+    Promise.resolve().then(() => {
+      const ok = zoomToVisible();
+      console.log('zoomed to visible, ok: ', ok);
+      // if (ok) didInitialAutoFitRef.current = true;
+    });
+  }, [
+    autoFitToVisible,
+    viewBox,                // run when initial viewBox appears or changes
+    occludeLeft, occludeRight, occludeTop, occludeBottom,
+    fitMargin,              // if margin changes, recompute
+    zoomToVisible,
+    processedData
+  ]);
 
   const effectiveViewBox = (viewBox && viewBox.length === 4) ? viewBox : [0, 0, 1, 1];
   if (!processedData.length || typeof window === 'undefined') {

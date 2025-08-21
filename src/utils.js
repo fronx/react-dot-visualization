@@ -59,6 +59,7 @@ export function fitViewBoxToAspect(viewBox, targetAR, anchor = 'top-left') {
 }
 
 export function computeFitTransformToVisible(bounds, viewBox, svgRect, occlusion = {}, margin = 0.9) {
+  console.log('computeFitTransformToVisible called with bounds', { bounds, viewBox, svgRect, occlusion, margin });
   if (!bounds || !viewBox || !svgRect) return null;
   const { left = 0, right = 0, top = 0, bottom = 0 } = occlusion;
   const [minX, minY, maxX, maxY] = [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY];
@@ -105,30 +106,88 @@ export function getStableViewBoxUpdate(data, currentViewBox, margin = 0.1) {
   return null;
 }
 
+/**
+ * computeOcclusionAwareViewBox
+ *
+ * Purpose: Fit `bounds` into the *visible* part of an SVG container that has
+ *          occluded strips on its sides, keeping aspect ratio, adding a margin,
+ *          and returning an SVG viewBox [x, y, w, h] in data coordinates.
+ *
+ * ASCII map (not to scale)
+ *
+ *   Data space (returned viewBox is in these units; x→ right, y→ down if SVG):
+ *
+ *   ┌────────────────────────────── container (W × H) ───────────────────────────────┐
+ *   │◄───────────────────────────────  W (container)  ─────────────────────────────►│
+ *   │ ┌──── left ────┐                      visible window (Wv × Hv)                │
+ *   │ │   ▒▒▒▒▒▒▒▒▒  │   x_vc = (W + left - right)/2                                │
+ *   │ │   ▒          │   y_vc = (H +  top - bottom)/2                               │
+ *   │ │   ▒   ┌──────────────────────────────────────────────────────────────┐      │
+ *   │ │   ▒   │                Sx × Sy (fits dxm × dym at aspect a)         │      │
+ *   │ │   ▒   │   (dxm, dym = data extent with margin)                      │      │
+ *   │ │   ▒   │   centered at (cx, cy)                                      │      │
+ *   │ │   ▒   └──────────────────────────────────────────────────────────────┘      │
+ *   │ │   ▒          │                                                             │
+ *   │ │   ▒▒▒▒▒▒▒▒▒  │                                                             │
+ *   │ └──────────────┘ top                                                      bottom
+ *   │                                  ┌────── right ──────┐                        │
+ *   │                                  │      ▒▒▒▒▒▒▒      │                        │
+ *   │                                  │      ▒     ▒      │                        │
+ *   │                                  │      ▒▒▒▒▒▒▒      │                        │
+ *   └────────────────────────────────────────────────────────────────────────────────┘
+ *
+ * Legend:
+ *   W,H     : container width/height
+ *   left,…  : occlusion thickness on each side (inside the container)
+ *   Wv,Hv   : visible window size = (W-left-right, H-top-bottom)
+ *   bounds  : data box {minX,maxX,minY,maxY}; dx,dy its size; (cx,cy) its center
+ *   margin  : relative padding around data (e.g. 0.1 → +10% on each side)
+ *   dxm,dym : padded data extents = dx*(1+2m), dy*(1+2m)
+ *   a       : aspect ratio of visible window, a = Wv/Hv
+ *   Sx,Sy   : smallest extents that fit dxm×dym into aspect a without cropping
+ *             Sx = max(dxm, a*dym),  Sy = Sx/a
+ *   w,h     : final SVG viewBox size; scale Sx,Sy back up so the *visible* window
+ *             shows Sx×Sy once occlusions are accounted for:
+ *                w = Sx * (W / Wv),   h = Sy * (H / Hv)
+ *   x,y     : viewBox origin so that the visible window’s center aligns with (cx,cy).
+ *             Visible center in container coordinates:
+ *                x_vc = left + Wv/2 = (W + (left - right)) / 2
+ *                y_vc = top  + Hv/2 = (H + (top  - bottom)) / 2
+ *             Convert that center to data units by scaling with w/W and h/H:
+ *                x = cx - w * (x_vc / W)
+ *                y = cy - h * (y_vc / H)
+ */
 export function computeOcclusionAwareViewBox(bounds, container, occlusion = {}, margin = 0.1) {
+  console.log('computeOcclusionAwareViewBox called with bounds', { bounds, container, occlusion, margin });
   if (!bounds || !container) return null;
   const { width: W, height: H } = container;
   if (!(W > 0) || !(H > 0)) return null;
   const { left = 0, right = 0, top = 0, bottom = 0 } = occlusion;
 
+  // Data extents and center in data coordinates
   const dx = Math.max(1e-9, bounds.maxX - bounds.minX);
   const dy = Math.max(1e-9, bounds.maxY - bounds.minY);
   const cx = (bounds.minX + bounds.maxX) / 2;
   const cy = (bounds.minY + bounds.maxY) / 2;
 
+  // Pad extents by margin on both sides
   const dxm = dx * (1 + 2 * margin);
   const dym = dy * (1 + 2 * margin);
 
+  // Visible window after occlusions and its aspect
   const Wv = Math.max(1, W - left - right);
   const Hv = Math.max(1, H - top - bottom);
   const a = Wv / Hv;
 
+  // Fit padded data into visible aspect without cropping
   const Sx = Math.max(dxm, a * dym);
   const Sy = Sx / a;
 
+  // Scale to full container so the visible window shows Sx×Sy
   const w = Sx * (W / Wv);
   const h = Sy * (H / Hv);
 
+  // Align visible window center with (cx,cy)
   const x = cx - w * (W + (left - right)) / (2 * W);
   const y = cy - h * (H + (top - bottom)) / (2 * H);
 
