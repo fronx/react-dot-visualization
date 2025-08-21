@@ -4,7 +4,7 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { getStableViewBoxUpdate } from './utils.js';
+import { getStableViewBoxUpdate, fitViewBoxToAspect } from './utils.js';
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
 const isWithinTolerance = (a, b) => {
@@ -163,7 +163,13 @@ const DotVisualization = forwardRef((props, ref) => {
     if (stableUpdate) {
       const { newViewBox } = stableUpdate;
       // Only set the initial viewBox; all later navigation uses the D3 transform
-      setViewBox(newViewBox);
+      const rect = zoomRef.current?.getBoundingClientRect?.();
+      let vb = newViewBox;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        const targetAR = rect.width / rect.height;
+        vb = fitViewBoxToAspect(newViewBox, targetAR, 'top-left'); // extend right/bottom
+      }
+      setViewBox(vb);
     }
 
     // Store original input data for future comparisons
@@ -337,15 +343,25 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   };
 
-  if (!processedData.length || !viewBox || typeof window === 'undefined') {
-    return <div style={{ width: '100%', height: '100%', ...style }} className={className} />;
+  const effectiveViewBox = (viewBox && viewBox.length === 4) ? viewBox : [0, 0, 1, 1];
+  if (!processedData.length || typeof window === 'undefined') {
+    return (
+      <svg
+        ref={zoomRef}
+        className={`dot-visualization ${className}`}
+        viewBox={effectiveViewBox.join(' ')}
+        style={{ width: '100%', height: '100%', ...style }}
+        onMouseLeave={handleMouseLeave}
+        {...otherProps}
+      />
+    );
   }
 
   return (
     <svg
       ref={zoomRef}
       className={`dot-visualization ${className}`}
-      viewBox={viewBox.join(' ')}
+      viewBox={effectiveViewBox.join(' ')}
       style={{
         width: '100%',
         height: '100%',

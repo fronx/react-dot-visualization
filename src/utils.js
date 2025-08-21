@@ -26,6 +26,38 @@ export function calculateViewBox(data, margin = 0.1) {
   return withMargin(margin, box);
 }
 
+export function fitViewBoxToAspect(viewBox, targetAR, anchor = 'top-left') {
+  const EPSILON = 1e-9;
+  let [x, y, w, h] = viewBox;
+  const currentAR = w / h;
+
+  if (Math.abs(currentAR - targetAR) < EPSILON) {
+    // Aspect ratios are close enough; no change.
+    return [x, y, w, h];
+  }
+
+  if (currentAR < targetAR) {
+    // Need to increase width
+    const newW = h * targetAR;
+    if (anchor === 'top-left') {
+      // Keep x, y unchanged; expand to the right
+      return [x, y, newW, h];
+    }
+    // Other anchors could be implemented here if needed
+  } else if (currentAR > targetAR) {
+    // Need to increase height
+    const newH = w / targetAR;
+    if (anchor === 'top-left') {
+      // Keep x, y unchanged; expand downward
+      return [x, y, w, newH];
+    }
+    // Other anchors could be implemented here if needed
+  }
+
+  // If no changes needed or anchor not recognized, return original
+  return [x, y, w, h];
+}
+
 // Pure function: calculate stable viewBox update (no d3 dependencies)
 export function getStableViewBoxUpdate(data, currentViewBox, margin = 0.1) {
   if (!data || data.length === 0) return null;
