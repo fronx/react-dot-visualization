@@ -4,7 +4,7 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { calculateViewBox } from './utils.js';
+import { calculateViewBox, getStableViewBoxUpdate, shouldApplyCompensatingTransform } from './utils.js';
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
 const isWithinTolerance = (a, b) => {
@@ -47,7 +47,7 @@ const DotVisualization = forwardRef((props, ref) => {
   } = props;
 
   const [processedData, setProcessedData] = useState([]);
-  const [viewBox, setViewBox] = useState([0, 0, 100, 100]);
+  const [viewBox, setViewBox] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isWheelActive, setIsWheelActive] = useState(false);
 
@@ -82,6 +82,17 @@ const DotVisualization = forwardRef((props, ref) => {
     }
     return false;
   }, [defaultSize]);
+
+  // Apply zoom/pan transform to both d3 zoom handler and content
+  const applyTransform = useCallback((newTransform) => {
+    if (!zoomHandler.current || !zoomRef.current) return;
+
+    d3.select(zoomRef.current).call(zoomHandler.current.transform, newTransform);
+    transform.current = newTransform;
+    if (contentRef.current) {
+      contentRef.current.setAttribute("transform", newTransform.toString());
+    }
+  }, []);
 
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
@@ -147,9 +158,41 @@ const DotVisualization = forwardRef((props, ref) => {
       }
     }
 
-    // Calculate viewBox (use original positions for consistent bounds)
-    const calculatedViewBox = calculateViewBox(validData, margin);
-    setViewBox(calculatedViewBox);
+    // Handle stable viewBox expansion
+    const stableUpdate = getStableViewBoxUpdate(validData, viewBox, margin);
+
+    if (stableUpdate) {
+      const { newViewBox, compensatingFactors } = stableUpdate;
+      console.log('Setting viewBox:', newViewBox, 'from data bounds:', validData.slice(0, 3));
+      setViewBox(newViewBox);
+
+      // Only apply compensating transform for data expansions, not replacements
+      const shouldCompensate = shouldApplyCompensatingTransform(validData, previousDataRef.current, positionsChanged);
+      // console.log('🔍 Transform decision:', {
+      //   shouldCompensate,
+      //   positionsChanged,
+      //   newDataLength: validData.length,
+      //   previousDataLength: previousDataRef.current.length,
+      //   firstFewNewIds: validData.slice(0, 3).map(d => d.id),
+      //   firstFewPreviousIds: previousDataRef.current.slice(0, 3).map(d => d.id),
+      //   compensatingFactors
+      // });
+
+      if (shouldCompensate) {
+        const currentTransform = zoomRef.current ? d3.select(zoomRef.current).property("__zoom") : null;
+        let newTransform = d3.zoomIdentity
+          .translate(compensatingFactors.translateX, compensatingFactors.translateY)
+          .scale(compensatingFactors.scaleX, compensatingFactors.scaleY);
+
+        if (currentTransform) {
+          newTransform = newTransform
+            .translate(currentTransform.x, currentTransform.y)
+            .scale(currentTransform.k);
+        }
+
+        applyTransform(newTransform);
+      }
+    }
 
     // Store original input data for future comparisons
     previousDataRef.current = validData.map(item => ({ ...item })); // Deep copy of validData!! This is important!
@@ -322,7 +365,7 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   };
 
-  if (!processedData.length || typeof window === 'undefined') {
+  if (!processedData.length || !viewBox || typeof window === 'undefined') {
     return <div style={{ width: '100%', height: '100%', ...style }} className={className} />;
   }
 

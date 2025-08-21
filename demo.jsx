@@ -83,7 +83,8 @@ const App = () => {
 
       {hoveredDot && (
         <div className="hover-info">
-          {hoveredDot.name}: {hoveredDot.value}
+          {hoveredDot.name}: {hoveredDot.value}<br/>
+          x: {Math.round(hoveredDot.x * 100) / 100}, y: {Math.round(hoveredDot.y * 100) / 100}
         </div>
       )}
     </div>
