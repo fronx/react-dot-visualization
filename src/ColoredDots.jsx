@@ -60,9 +60,9 @@ const ColoredDots = React.memo((props) => {
           r={getSize(item)}
           cx={item.x}
           cy={item.y}
-          fill={item.fill}
-          stroke={item.stroke || stroke}
-          strokeWidth={item.strokeWidth || strokeWidth}
+          fill={getColor(item, index)}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
         />
       ))}
     </g>
