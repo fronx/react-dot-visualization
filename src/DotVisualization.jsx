@@ -4,7 +4,7 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { calculateViewBox, getStableViewBoxUpdate, shouldApplyCompensatingTransform } from './utils.js';
+import { getStableViewBoxUpdate } from './utils.js';
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
 const isWithinTolerance = (a, b) => {
@@ -158,40 +158,12 @@ const DotVisualization = forwardRef((props, ref) => {
       }
     }
 
-    // Handle stable viewBox expansion
+    // Initialize viewBox once (do not change it on subsequent data updates)
     const stableUpdate = getStableViewBoxUpdate(validData, viewBox, margin);
-
     if (stableUpdate) {
-      const { newViewBox, compensatingFactors } = stableUpdate;
-      console.log('Setting viewBox:', newViewBox, 'from data bounds:', validData.slice(0, 3));
+      const { newViewBox } = stableUpdate;
+      // Only set the initial viewBox; all later navigation uses the D3 transform
       setViewBox(newViewBox);
-
-      // Only apply compensating transform for data expansions, not replacements
-      const shouldCompensate = shouldApplyCompensatingTransform(validData, previousDataRef.current, positionsChanged);
-      // console.log('🔍 Transform decision:', {
-      //   shouldCompensate,
-      //   positionsChanged,
-      //   newDataLength: validData.length,
-      //   previousDataLength: previousDataRef.current.length,
-      //   firstFewNewIds: validData.slice(0, 3).map(d => d.id),
-      //   firstFewPreviousIds: previousDataRef.current.slice(0, 3).map(d => d.id),
-      //   compensatingFactors
-      // });
-
-      if (shouldCompensate) {
-        const currentTransform = zoomRef.current ? d3.select(zoomRef.current).property("__zoom") : null;
-        let newTransform = d3.zoomIdentity
-          .translate(compensatingFactors.translateX, compensatingFactors.translateY)
-          .scale(compensatingFactors.scaleX, compensatingFactors.scaleY);
-
-        if (currentTransform) {
-          newTransform = newTransform
-            .translate(currentTransform.x, currentTransform.y)
-            .scale(currentTransform.k);
-        }
-
-        applyTransform(newTransform);
-      }
     }
 
     // Store original input data for future comparisons
