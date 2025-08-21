@@ -19,6 +19,7 @@ const App = () => {
 
   // Generate random data that fills the actual container
   const [data, setData] = useState([]);
+  const panelWidth = 220;
 
   useEffect(() => {
     if (containerSize.width > 0) {
@@ -106,10 +107,34 @@ const App = () => {
         • <strong>Zoom:</strong> Ctrl/Cmd + mouse wheel (or trackpad pinch)<br />
         • <strong>Pan:</strong> Mouse wheel or trackpad scroll<br />
         • <strong>Hover:</strong> Move mouse over dots<br />
-        • <strong>Add Dots:</strong> <button onClick={handleAddDots} style={{ padding: '4px 8px', marginLeft: '8px' }}>Add 7 Gray Dots</button>
+        • <strong>Add Dots:</strong> Use the button in the left panel
       </div>
 
-      <div className="viz" ref={containerRef}>
+      <div className="viz" ref={containerRef} style={{ position: 'relative', width: '100%', height: '60vh' }}>
+        <div
+          className="demo-left-panel"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: panelWidth,
+            height: '100%',
+            background: 'rgba(255,255,255,0.55)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            borderRight: '1px solid rgba(0,0,0,0.06)',
+            boxShadow: '2px 0 8px rgba(0,0,0,0.06)',
+            zIndex: 2,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            padding: 12,
+          }}
+        >
+          <button onClick={handleAddDots} style={{ padding: '6px 10px', cursor: 'pointer' }}>
+            + Add 7 Gray Dots
+          </button>
+        </div>
         <DotVisualization
           data={data}
           onHover={setHoveredDot}
@@ -119,6 +144,10 @@ const App = () => {
           dotStyles={dotStyles}
           defaultSize={10}
           margin={0.05}
+          style={{ position: 'absolute', inset: 0 }}
+          occludeLeft={panelWidth}
+          autoFitToVisible
+          fitMargin={0.92}
         />
       </div>
 

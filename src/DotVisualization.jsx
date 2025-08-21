@@ -4,12 +4,17 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { getStableViewBoxUpdate, fitViewBoxToAspect } from './utils.js';
+import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible } from './utils.js';
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
 const isWithinTolerance = (a, b) => {
   return Math.round(a * 100) === Math.round(b * 100);
 };
+
+const vbEqual = (a, b, eps = 1e-9) =>
+  Array.isArray(a) && Array.isArray(b) && a.length === 4 && b.length === 4 &&
+  Math.abs(a[0]-b[0]) < eps && Math.abs(a[1]-b[1]) < eps &&
+  Math.abs(a[2]-b[2]) < eps && Math.abs(a[3]-b[3]) < eps;
 
 const DotVisualization = forwardRef((props, ref) => {
   const {
@@ -43,6 +48,12 @@ const DotVisualization = forwardRef((props, ref) => {
     edgeColor = "#999",
     className = "",
     style = {},
+    occludeLeft = 0,
+    occludeRight = 0,
+    occludeTop = 0,
+    occludeBottom = 0,
+    autoFitToVisible = false,
+    fitMargin = 0.9,
     ...otherProps
   } = props;
 
@@ -93,6 +104,18 @@ const DotVisualization = forwardRef((props, ref) => {
       contentRef.current.setAttribute("transform", newTransform.toString());
     }
   }, []);
+
+  const zoomToVisible = useCallback(() => {
+    if (!zoomRef.current || !zoomHandler.current || !viewBox || !processedData.length) return;
+    const rect = zoomRef.current.getBoundingClientRect();
+    const bounds = boundsForData(processedData);
+    const fit = computeFitTransformToVisible(bounds, viewBox, rect, {
+      left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
+    }, fitMargin);
+    if (!fit) return;
+    const next = d3.zoomIdentity.translate(fit.x, fit.y).scale(fit.k);
+    applyTransform(next);
+  }, [processedData, viewBox, occludeLeft, occludeRight, occludeTop, occludeBottom, fitMargin, applyTransform]);
 
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
@@ -158,18 +181,16 @@ const DotVisualization = forwardRef((props, ref) => {
       }
     }
 
-    // Initialize viewBox once (do not change it on subsequent data updates)
-    const stableUpdate = getStableViewBoxUpdate(validData, viewBox, margin);
-    if (stableUpdate) {
-      const { newViewBox } = stableUpdate;
-      // Only set the initial viewBox; all later navigation uses the D3 transform
+    // Initialize viewBox once (occlusion-aware; then freeze)
+    if (!viewBox) {
       const rect = zoomRef.current?.getBoundingClientRect?.();
-      let vb = newViewBox;
       if (rect && rect.width > 0 && rect.height > 0) {
-        const targetAR = rect.width / rect.height;
-        vb = fitViewBoxToAspect(newViewBox, targetAR, 'top-left'); // extend right/bottom
+        const bounds = boundsForData(validData);
+        const vb = computeOcclusionAwareViewBox(bounds, { width: rect.width, height: rect.height }, {
+          left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
+        }, margin);
+        if (vb) setViewBox(vb);
       }
-      setViewBox(vb);
     }
 
     // Store original input data for future comparisons
@@ -342,6 +363,12 @@ const DotVisualization = forwardRef((props, ref) => {
       wheelTimeoutRef.current = null;
     }
   };
+
+  useImperativeHandle(ref, () => ({
+    zoomToVisible,
+  }), [zoomToVisible]);
+
+  // (Auto-fit/reactive occlusion compensation effect removed)
 
   const effectiveViewBox = (viewBox && viewBox.length === 4) ? viewBox : [0, 0, 1, 1];
   if (!processedData.length || typeof window === 'undefined') {
