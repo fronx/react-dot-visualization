@@ -11,11 +11,6 @@ const isWithinTolerance = (a, b) => {
   return Math.round(a * 100) === Math.round(b * 100);
 };
 
-const vbEqual = (a, b, eps = 1e-9) =>
-  Array.isArray(a) && Array.isArray(b) && a.length === 4 && b.length === 4 &&
-  Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps &&
-  Math.abs(a[2] - b[2]) < eps && Math.abs(a[3] - b[3]) < eps;
-
 const DotVisualization = forwardRef((props, ref) => {
   const {
     data = [],
@@ -110,6 +105,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomToVisible = useCallback(() => {
     if (!zoomRef.current || !zoomHandler.current || !viewBox || !processedData.length) return false;
     const rect = zoomRef.current.getBoundingClientRect();
+    console.log('zoomToVisible processedData sample:', processedData.slice(0, 5).map(d => ({id: d.id, x: d.x, y: d.y})));
     const bounds = boundsForData(processedData);
     const fit = computeFitTransformToVisible(bounds, viewBox, rect, {
       left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
@@ -319,10 +315,11 @@ const DotVisualization = forwardRef((props, ref) => {
     // console.log('Decolliding dots');
 
     let tick = 0;
-    const dots0 = d3.selectAll('#colored-dots circle').data(processedData);
-    const dots1 = d3.selectAll('#interaction-layer circle').data(processedData);
+    const simulationData = processedData.map(d => ({ ...d }));
+    const dots0 = d3.selectAll('#colored-dots circle').data(simulationData);
+    const dots1 = d3.selectAll('#interaction-layer circle').data(simulationData);
 
-    const simulation = d3.forceSimulation(processedData)
+    const simulation = d3.forceSimulation(simulationData)
       .alpha(1)
       .alphaMin(0.01)
       .alphaDecay(0.01)
@@ -392,7 +389,7 @@ const DotVisualization = forwardRef((props, ref) => {
     Promise.resolve().then(() => {
       const ok = zoomToVisible();
       console.log('zoomed to visible, ok: ', ok);
-      // if (ok) didInitialAutoFitRef.current = true;
+      if (ok) didInitialAutoFitRef.current = true;
     });
   }, [
     autoFitToVisible,
