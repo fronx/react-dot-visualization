@@ -32,7 +32,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onDecollisionComplete,
     enableDecollisioning = true,
     positionsAreIntermediate = false,
-    zoomExtent = [0.7, 10],
+    zoomExtent = [0.5, 10],
     margin = 0.1,
     dotStroke = "#111",
     dotStrokeWidth = 0.2,
@@ -106,7 +106,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomToVisible = useCallback(() => {
     if (!zoomRef.current || !zoomHandler.current || !viewBox || !processedData.length) return false;
     const rect = zoomRef.current.getBoundingClientRect();
-    console.log('zoomToVisible processedData sample:', processedData.slice(0, 5).map(d => ({id: d.id, x: d.x, y: d.y})));
+    console.log('zoomToVisible processedData sample:', processedData.slice(0, 5).map(d => ({ id: d.id, x: d.x, y: d.y })));
     const bounds = boundsForData(processedData);
     const fit = computeFitTransformToVisible(bounds, viewBox, rect, {
       left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
