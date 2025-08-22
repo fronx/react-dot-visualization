@@ -4,7 +4,7 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible } from './utils.js';
+import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent } from './utils.js';
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
 const isWithinTolerance = (a, b) => {
@@ -32,7 +32,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onDecollisionComplete,
     enableDecollisioning = true,
     positionsAreIntermediate = false,
-    zoomExtent = [0.5, 10],
+    zoomExtent = [0.25, 10],
     margin = 0.1,
     dotStroke = "#111",
     dotStrokeWidth = 0.2,
@@ -49,6 +49,8 @@ const DotVisualization = forwardRef((props, ref) => {
     occludeBottom = 0,
     autoFitToVisible = false,
     fitMargin = 0.9,
+    autoZoomToNewContent = false,
+    autoZoomDuration = 200,
     ...otherProps
   } = props;
 
@@ -71,6 +73,8 @@ const DotVisualization = forwardRef((props, ref) => {
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
   const previousDataRef = useRef([]);
   const didInitialAutoFitRef = useRef(false);
+  const autoZoomTimeoutRef = useRef(null);
+  const lastDataBoundsRef = useRef(null);
 
   // Check if only non-positional properties have changed
   const hasPositionsChanged = useCallback((newData, oldData) => {
@@ -103,25 +107,72 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, []);
 
-  const zoomToVisible = useCallback(() => {
-    if (!zoomRef.current || !zoomHandler.current || !viewBox || !processedData.length) return false;
+  const zoomToVisible = useCallback((duration = 0, easing = d3.easeCubicInOut, dataOverride = null) => {
+    const dataToUse = dataOverride || processedData;
+    if (!zoomRef.current || !zoomHandler.current || !viewBox || !dataToUse.length) return false;
     const rect = zoomRef.current.getBoundingClientRect();
-    console.log('zoomToVisible processedData sample:', processedData.slice(0, 5).map(d => ({ id: d.id, x: d.x, y: d.y })));
-    const bounds = boundsForData(processedData);
+    const bounds = boundsForData(dataToUse);
     const fit = computeFitTransformToVisible(bounds, viewBox, rect, {
       left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
     }, fitMargin);
     if (!fit) return false;
     const next = d3.zoomIdentity.translate(fit.x, fit.y).scale(fit.k);
-    // Rebase zoom extent so that the fitted state corresponds to relative scale 1
-    baseScaleRef.current = fit.k;
-    if (zoomHandler.current && Array.isArray(zoomExtent) && zoomExtent.length === 2) {
-      const [minRel, maxRel] = zoomExtent;
-      const minAbs = Math.min(minRel, maxRel) * fit.k;
-      const maxAbs = Math.max(minRel, maxRel) * fit.k;
-      zoomHandler.current.scaleExtent([minAbs, maxAbs]);
+    
+    const rebaseZoomExtent = () => {
+      // Rebase zoom extent so that the fitted state corresponds to relative scale 1
+      baseScaleRef.current = fit.k;
+      if (zoomHandler.current && Array.isArray(zoomExtent) && zoomExtent.length === 2) {
+        const [minRel, maxRel] = zoomExtent;
+        const minAbs = Math.min(minRel, maxRel) * fit.k;
+        const maxAbs = Math.max(minRel, maxRel) * fit.k;
+        zoomHandler.current.scaleExtent([minAbs, maxAbs]);
+      }
+    };
+    
+    if (duration > 0) {
+      // Get current transform for interpolation
+      const currentTransform = transform.current || d3.zoomIdentity;
+      
+      // Use D3's interpolateZoom for smooth transition
+      const interpolator = d3.interpolateZoom(
+        [currentTransform.x, currentTransform.y, viewBox[2] / currentTransform.k],
+        [next.x, next.y, viewBox[2] / next.k]
+      );
+      
+      // Create smooth transition using D3's recommended approach
+      d3.select(zoomRef.current)
+        .transition()
+        .duration(duration)
+        .ease(easing)
+        .tween('zoom', () => {
+          return (t) => {
+            const [x, y, scale] = interpolator(t);
+            const k = viewBox[2] / scale;
+            const interpolatedTransform = d3.zoomIdentity.translate(x, y).scale(k);
+            
+            // Update both D3 zoom state and visual transform
+            d3.select(zoomRef.current).property('__zoom', interpolatedTransform);
+            transform.current = interpolatedTransform;
+            
+            if (contentRef.current) {
+              contentRef.current.setAttribute('transform', interpolatedTransform.toString());
+            }
+          };
+        })
+        .on('end', () => {
+          // Ensure final state is exactly what we calculated and rebase zoom extents
+          transform.current = next;
+          d3.select(zoomRef.current).property('__zoom', next);
+          if (contentRef.current) {
+            contentRef.current.setAttribute('transform', next.toString());
+          }
+          rebaseZoomExtent();
+        });
+    } else {
+      // Immediate transform
+      applyTransform(next);
+      rebaseZoomExtent();
     }
-    applyTransform(next);
     return true;
   }, [processedData, viewBox, occludeLeft, occludeRight, occludeTop, occludeBottom, fitMargin, applyTransform, zoomExtent]);
 
@@ -202,13 +253,35 @@ const DotVisualization = forwardRef((props, ref) => {
       }
     }
 
+    // Calculate current data bounds
+    const currentBounds = validData.length > 0 ? boundsForData(validData) : null;
+    
+    // Auto-zoom to new content if enabled
+    if (autoZoomToNewContent && currentBounds && viewBox && lastDataBoundsRef.current) {
+      const shouldAutoZoom = shouldAutoZoomToNewContent(
+        validData, 
+        lastDataBoundsRef.current, 
+        viewBox, 
+        transform.current || d3.zoomIdentity
+      );
+      
+      if (shouldAutoZoom) {
+        zoomToVisible(autoZoomDuration, d3.easeCubicInOut, validData);
+      }
+    }
+
     // Store original input data for future comparisons
     previousDataRef.current = validData.map(item => ({ ...item })); // Deep copy of validData!! This is important!
     // Store processed data (either original or with restored positions)
     dataRef.current = processedValidData;
     setProcessedData(processedValidData);
+    
+    // Update last data bounds for auto-zoom detection
+    if (currentBounds) {
+      lastDataBoundsRef.current = currentBounds;
+    }
 
-  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate]);
+  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, viewBox]);
 
   // Initialize zoom handler (browser-only)
   useEffect(() => {
@@ -377,6 +450,16 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   };
 
+  // Cleanup auto-zoom timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (autoZoomTimeoutRef.current) {
+        clearTimeout(autoZoomTimeoutRef.current);
+      }
+    };
+  }, []);
+
+
   useImperativeHandle(ref, () => ({
     zoomToVisible,
   }), [zoomToVisible]);
@@ -394,7 +477,9 @@ const DotVisualization = forwardRef((props, ref) => {
     Promise.resolve().then(() => {
       const ok = zoomToVisible();
       console.log('zoomed to visible, ok: ', ok);
-      if (ok) didInitialAutoFitRef.current = true;
+      if (ok) {
+        didInitialAutoFitRef.current = true;
+      }
     });
   }, [
     autoFitToVisible,
@@ -405,6 +490,7 @@ const DotVisualization = forwardRef((props, ref) => {
     processedData,
     isZoomSetupComplete     // wait for zoom behavior to be fully configured
   ]);
+
 
   const effectiveViewBox = (viewBox && viewBox.length === 4) ? viewBox : [0, 0, 1, 1];
   if (!processedData.length || typeof window === 'undefined') {

@@ -7,6 +7,8 @@ const App = () => {
   const [clickedDot, setClickedDot] = useState(null);
   const [dotStyles, setDotStyles] = useState(new Map());
   const [containerSize, setContainerSize] = useState({ width: 640, height: 400 });
+  const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
+  const [autoZoomDuration, setAutoZoomDuration] = useState(200);
   const containerRef = useRef(null);
 
   // Measure container size once
@@ -107,7 +109,7 @@ const App = () => {
         • <strong>Zoom:</strong> Ctrl/Cmd + mouse wheel (or trackpad pinch)<br />
         • <strong>Pan:</strong> Mouse wheel or trackpad scroll<br />
         • <strong>Hover:</strong> Move mouse over dots<br />
-        • <strong>Add Dots:</strong> Use the button in the left panel
+        • <strong>Add Dots:</strong> Use the button in the left panel (auto-zoom will trigger if enabled)
       </div>
 
       <div className="viz" ref={containerRef} style={{ position: 'relative', width: '100%', height: '60vh' }}>
@@ -134,6 +136,30 @@ const App = () => {
           <button onClick={handleAddDots} style={{ padding: '6px 10px', cursor: 'pointer' }}>
             + Add 7 Gray Dots
           </button>
+          
+          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Auto-Zoom Settings</div>
+            
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input 
+                type="checkbox" 
+                checked={autoZoomEnabled}
+                onChange={(e) => setAutoZoomEnabled(e.target.checked)}
+              />
+              Enable Auto-Zoom
+            </label>
+            
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Duration (ms):</div>
+            <input 
+              type="number"
+              value={autoZoomDuration}
+              onChange={(e) => setAutoZoomDuration(Number(e.target.value))}
+              min="0"
+              max="2000"
+              step="50"
+              style={{ width: '80px', padding: '4px', fontSize: '11px' }}
+            />
+          </div>
         </div>
         <DotVisualization
           data={data}
@@ -148,6 +174,8 @@ const App = () => {
           occludeLeft={panelWidth}
           autoFitToVisible
           fitMargin={0.92}
+          autoZoomToNewContent={autoZoomEnabled}
+          autoZoomDuration={autoZoomDuration}
         />
       </div>
 

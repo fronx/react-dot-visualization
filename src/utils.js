@@ -193,3 +193,40 @@ export function computeOcclusionAwareViewBox(bounds, container, occlusion = {}, 
 
   return [x, y, w, h];
 }
+
+/**
+ * Check if new data extends beyond the currently visible area
+ * @param {Array} newData - Array of data points with x,y coordinates
+ * @param {Object} previousBounds - Previous data bounds {minX, maxX, minY, maxY}
+ * @param {Array} viewBox - Current viewBox [x, y, width, height]
+ * @param {Object} transform - Current zoom transform {k, x, y}
+ * @returns {boolean} True if new content extends beyond visible area
+ */
+export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform) {
+  if (!newData.length || !viewBox || !transform || !previousBounds) return false;
+  
+  const newBounds = boundsForData(newData);
+  
+  // Check if new data extends beyond previous bounds
+  const hasExtended = 
+    newBounds.minX < previousBounds.minX || 
+    newBounds.maxX > previousBounds.maxX ||
+    newBounds.minY < previousBounds.minY || 
+    newBounds.maxY > previousBounds.maxY;
+  
+  if (!hasExtended) return false;
+  
+  // Calculate current visible area in data coordinates
+  const [vbX, vbY, vbW, vbH] = viewBox;
+  const k = transform.k;
+  const visibleMinX = (vbX - transform.x) / k;
+  const visibleMaxX = (vbX + vbW - transform.x) / k;
+  const visibleMinY = (vbY - transform.y) / k;
+  const visibleMaxY = (vbY + vbH - transform.y) / k;
+  
+  // Check if new content extends outside visible area
+  return newBounds.minX < visibleMinX || 
+         newBounds.maxX > visibleMaxX ||
+         newBounds.minY < visibleMinY || 
+         newBounds.maxY > visibleMaxY;
+}
