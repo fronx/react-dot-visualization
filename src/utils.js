@@ -230,3 +230,29 @@ export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, tra
          newBounds.minY < visibleMinY || 
          newBounds.maxY > visibleMaxY;
 }
+
+// --- Zoom extent helpers (absolute-extent management) ---
+
+export function computeAbsoluteExtent(relExtent, baseScale) {
+  const [rmin, rmax] = Array.isArray(relExtent) && relExtent.length === 2
+    ? relExtent
+    : [0.25, 10]; // fallback if needed
+  const s = baseScale > 0 ? baseScale : 1;
+  const a = Math.min(rmin, rmax) * s;
+  const b = Math.max(rmin, rmax) * s;
+  return [a, b];
+}
+
+export function unionExtent(a, b) {
+  // a, b are [min,max]; treat undefined defensively
+  const [amin, amax] = a || [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+  const [bmin, bmax] = b || [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+  return [Math.min(amin, bmin), Math.max(amax, bmax)];
+}
+
+// Sets handler's absolute extent. Guard for handler existence.
+export function setAbsoluteExtent(handler, absExtent) {
+  if (handler && absExtent && absExtent.length === 2) {
+    handler.scaleExtent(absExtent);
+  }
+}

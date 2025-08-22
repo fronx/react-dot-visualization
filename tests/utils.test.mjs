@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeOcclusionAwareViewBox, shouldAutoZoomToNewContent } from '../src/utils.js';
+import { computeOcclusionAwareViewBox, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent } from '../src/utils.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -226,4 +226,83 @@ test('shouldAutoZoomToNewContent: handles edge cases', () => {
     false,
     'should return false when viewBox is null'
   );
+});
+
+// --- zoom extent helpers tests ---------------------------------------------
+
+test('computeAbsoluteExtent: basic functionality', () => {
+  const result = computeAbsoluteExtent([0.5, 4], 2);
+  assert.deepStrictEqual(result, [1, 8], 'should multiply relative extent by base scale');
+});
+
+test('computeAbsoluteExtent: handles reversed extents', () => {
+  const result = computeAbsoluteExtent([4, 0.5], 2);
+  assert.deepStrictEqual(result, [1, 8], 'should handle reversed extents correctly');
+});
+
+test('computeAbsoluteExtent: uses fallback for invalid extent', () => {
+  const result = computeAbsoluteExtent(null, 2);
+  assert.deepStrictEqual(result, [0.5, 20], 'should use fallback [0.25, 10] for invalid extent');
+  
+  const result2 = computeAbsoluteExtent([1], 2);
+  assert.deepStrictEqual(result2, [0.5, 20], 'should use fallback for array with wrong length');
+});
+
+test('computeAbsoluteExtent: handles zero or negative base scale', () => {
+  const result = computeAbsoluteExtent([0.5, 4], 0);
+  assert.deepStrictEqual(result, [0.5, 4], 'should use 1 as fallback for zero base scale');
+  
+  const result2 = computeAbsoluteExtent([0.5, 4], -1);
+  assert.deepStrictEqual(result2, [0.5, 4], 'should use 1 as fallback for negative base scale');
+});
+
+test('unionExtent: basic functionality', () => {
+  const result = unionExtent([1, 3], [2, 5]);
+  assert.deepStrictEqual(result, [1, 5], 'should return union of two extents');
+});
+
+test('unionExtent: handles non-overlapping extents', () => {
+  const result = unionExtent([1, 2], [4, 5]);
+  assert.deepStrictEqual(result, [1, 5], 'should return union of non-overlapping extents');
+});
+
+test('unionExtent: handles undefined inputs defensively', () => {
+  const result = unionExtent(null, [2, 5]);
+  assert.deepStrictEqual(result, [2, 5], 'should handle null first extent');
+  
+  const result2 = unionExtent([1, 3], undefined);
+  assert.deepStrictEqual(result2, [1, 3], 'should handle undefined second extent');
+  
+  const result3 = unionExtent(null, null);
+  assert.deepStrictEqual(result3, [Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY], 'should handle both null extents');
+});
+
+test('setAbsoluteExtent: calls scaleExtent when valid', () => {
+  let calledWith = null;
+  const mockHandler = {
+    scaleExtent: (extent) => {
+      calledWith = extent;
+    }
+  };
+  
+  setAbsoluteExtent(mockHandler, [1, 10]);
+  assert.deepStrictEqual(calledWith, [1, 10], 'should call scaleExtent with provided extent');
+});
+
+test('setAbsoluteExtent: handles invalid inputs gracefully', () => {
+  let called = false;
+  const mockHandler = {
+    scaleExtent: () => {
+      called = true;
+    }
+  };
+  
+  setAbsoluteExtent(null, [1, 10]);
+  assert.strictEqual(called, false, 'should not call scaleExtent when handler is null');
+  
+  setAbsoluteExtent(mockHandler, null);
+  assert.strictEqual(called, false, 'should not call scaleExtent when extent is null');
+  
+  setAbsoluteExtent(mockHandler, [1]);
+  assert.strictEqual(called, false, 'should not call scaleExtent when extent has wrong length');
 });

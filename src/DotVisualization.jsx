@@ -4,7 +4,8 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent } from './utils.js';
+import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent } from './utils.js';
+
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
 const isWithinTolerance = (a, b) => {
@@ -32,7 +33,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onDecollisionComplete,
     enableDecollisioning = true,
     positionsAreIntermediate = false,
-    zoomExtent = [0.25, 10],
+    zoomExtent = [0.5, 20],
     margin = 0.1,
     dotStroke = "#111",
     dotStrokeWidth = 0.2,
@@ -67,7 +68,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const contentRef = useRef(null);
   const transform = useRef(null);
   const zoomHandler = useRef(null);
-  const baseScaleRef = useRef(1);
+  const baseScaleRef = useRef(null);
   const wheelTimeoutRef = useRef(null);
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
@@ -117,29 +118,28 @@ const DotVisualization = forwardRef((props, ref) => {
     }, fitMargin);
     if (!fit) return false;
     const next = d3.zoomIdentity.translate(fit.x, fit.y).scale(fit.k);
-    
-    const rebaseZoomExtent = () => {
-      // Rebase zoom extent so that the fitted state corresponds to relative scale 1
+
+    // --- NEW: compute next absolute extent from proposed baseScale = fit.k
+    const newAbsExtent = computeAbsoluteExtent(zoomExtent, fit.k);
+    const oldAbsExtent = zoomHandler.current ? zoomHandler.current.scaleExtent() : null;
+    const widenedExtent = unionExtent(oldAbsExtent, newAbsExtent);
+
+    // Helper to finalize base and extent
+    const finalizeBaseAndExtent = () => {
       baseScaleRef.current = fit.k;
-      if (zoomHandler.current && Array.isArray(zoomExtent) && zoomExtent.length === 2) {
-        const [minRel, maxRel] = zoomExtent;
-        const minAbs = Math.min(minRel, maxRel) * fit.k;
-        const maxAbs = Math.max(minRel, maxRel) * fit.k;
-        zoomHandler.current.scaleExtent([minAbs, maxAbs]);
-      }
+      setAbsoluteExtent(zoomHandler.current, newAbsExtent);
     };
-    
+
     if (duration > 0) {
-      // Get current transform for interpolation
+      // --- NEW: widen before the animation so it can't be clamped mid-flight
+      setAbsoluteExtent(zoomHandler.current, widenedExtent);
+
       const currentTransform = transform.current || d3.zoomIdentity;
-      
-      // Use D3's interpolateZoom for smooth transition
       const interpolator = d3.interpolateZoom(
         [currentTransform.x, currentTransform.y, viewBox[2] / currentTransform.k],
         [next.x, next.y, viewBox[2] / next.k]
       );
-      
-      // Create smooth transition using D3's recommended approach
+
       d3.select(zoomRef.current)
         .transition()
         .duration(duration)
@@ -149,29 +149,35 @@ const DotVisualization = forwardRef((props, ref) => {
             const [x, y, scale] = interpolator(t);
             const k = viewBox[2] / scale;
             const interpolatedTransform = d3.zoomIdentity.translate(x, y).scale(k);
-            
-            // Update both D3 zoom state and visual transform
             d3.select(zoomRef.current).property('__zoom', interpolatedTransform);
             transform.current = interpolatedTransform;
-            
             if (contentRef.current) {
               contentRef.current.setAttribute('transform', interpolatedTransform.toString());
             }
           };
         })
         .on('end', () => {
-          // Ensure final state is exactly what we calculated and rebase zoom extents
+          // Ensure final state + finalize extents
           transform.current = next;
           d3.select(zoomRef.current).property('__zoom', next);
           if (contentRef.current) {
             contentRef.current.setAttribute('transform', next.toString());
           }
-          rebaseZoomExtent();
+          finalizeBaseAndExtent();  // --- NEW
+        })
+        .on('interrupt', () => {
+          // On interrupt, derive base from current transform, not target
+          const sel = d3.select(zoomRef.current);
+          const cur = sel.property('__zoom') || transform.current || d3.zoomIdentity;
+          baseScaleRef.current = cur.k;
+          const abs = computeAbsoluteExtent(zoomExtent, baseScaleRef.current);
+          setAbsoluteExtent(zoomHandler.current, abs);
         });
     } else {
-      // Immediate transform
+      // Immediate transform path
+      setAbsoluteExtent(zoomHandler.current, widenedExtent);
       applyTransform(next);
-      rebaseZoomExtent();
+      finalizeBaseAndExtent(); // --- NEW
     }
     return true;
   }, [processedData, viewBox, occludeLeft, occludeRight, occludeTop, occludeBottom, fitMargin, applyTransform, zoomExtent]);
@@ -255,16 +261,16 @@ const DotVisualization = forwardRef((props, ref) => {
 
     // Calculate current data bounds
     const currentBounds = validData.length > 0 ? boundsForData(validData) : null;
-    
+
     // Auto-zoom to new content if enabled
     if (autoZoomToNewContent && currentBounds && viewBox && lastDataBoundsRef.current) {
       const shouldAutoZoom = shouldAutoZoomToNewContent(
-        validData, 
-        lastDataBoundsRef.current, 
-        viewBox, 
+        validData,
+        lastDataBoundsRef.current,
+        viewBox,
         transform.current || d3.zoomIdentity
       );
-      
+
       if (shouldAutoZoom) {
         zoomToVisible(autoZoomDuration, d3.easeCubicInOut, validData);
       }
@@ -275,7 +281,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Store processed data (either original or with restored positions)
     dataRef.current = processedValidData;
     setProcessedData(processedValidData);
-    
+
     // Update last data bounds for auto-zoom detection
     if (currentBounds) {
       lastDataBoundsRef.current = currentBounds;
@@ -287,6 +293,7 @@ const DotVisualization = forwardRef((props, ref) => {
   useEffect(() => {
     if (typeof window !== 'undefined' && !zoomHandler.current) {
       zoomHandler.current = d3.zoom();
+      zoomHandler.current.scaleExtent([1e-6, 1e6]); // optional safety net
     }
   }, []);
 
@@ -358,7 +365,6 @@ const DotVisualization = forwardRef((props, ref) => {
     };
 
     zoomHandler.current
-      .scaleExtent(zoomExtent)
       .on("start", handleDragStart)
       .on("end", handleDragEnd);
 
@@ -449,6 +455,14 @@ const DotVisualization = forwardRef((props, ref) => {
       wheelTimeoutRef.current = null;
     }
   };
+
+  // Keep extents in sync when zoomExtent prop changes
+  useEffect(() => {
+    if (!zoomHandler.current) return;
+    if (baseScaleRef.current == null) return; // wait for first fit
+    const abs = computeAbsoluteExtent(zoomExtent, baseScaleRef.current);
+    setAbsoluteExtent(zoomHandler.current, abs);
+  }, [zoomExtent]);
 
   // Cleanup auto-zoom timeout on unmount
   useEffect(() => {
