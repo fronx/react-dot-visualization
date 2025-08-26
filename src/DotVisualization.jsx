@@ -287,7 +287,7 @@ const DotVisualization = forwardRef((props, ref) => {
       lastDataBoundsRef.current = currentBounds;
     }
 
-  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, viewBox]);
+  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration]);
 
   // Initialize zoom handler (browser-only)
   useEffect(() => {
