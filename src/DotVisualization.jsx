@@ -112,7 +112,7 @@ const DotVisualization = forwardRef((props, ref) => {
     const dataToUse = dataOverride || processedData;
     if (!zoomRef.current || !zoomHandler.current || !viewBox || !dataToUse.length) return false;
     const rect = zoomRef.current.getBoundingClientRect();
-    const bounds = boundsForData(dataToUse);
+    const bounds = boundsForData(dataToUse, defaultSize);
     const fit = computeFitTransformToVisible(bounds, viewBox, rect, {
       left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
     }, fitMargin);
@@ -250,7 +250,7 @@ const DotVisualization = forwardRef((props, ref) => {
     if (!viewBox) {
       const rect = zoomRef.current?.getBoundingClientRect?.();
       if (rect && rect.width > 0 && rect.height > 0) {
-        const bounds = boundsForData(validData);
+        const bounds = boundsForData(validData, defaultSize);
         const vb = computeOcclusionAwareViewBox(bounds, { width: rect.width, height: rect.height }, {
           left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
         }, margin);
@@ -260,7 +260,7 @@ const DotVisualization = forwardRef((props, ref) => {
     }
 
     // Calculate current data bounds
-    const currentBounds = validData.length > 0 ? boundsForData(validData) : null;
+    const currentBounds = validData.length > 0 ? boundsForData(validData, defaultSize) : null;
 
     // Auto-zoom to new content if enabled
     if (autoZoomToNewContent && currentBounds && viewBox && lastDataBoundsRef.current) {
@@ -268,7 +268,8 @@ const DotVisualization = forwardRef((props, ref) => {
         validData,
         lastDataBoundsRef.current,
         viewBox,
-        transform.current || d3.zoomIdentity
+        transform.current || d3.zoomIdentity,
+        defaultSize
       );
 
       if (shouldAutoZoom) {
@@ -279,7 +280,7 @@ const DotVisualization = forwardRef((props, ref) => {
       // to see all data when new content is added outside current bounds
       const rect = zoomRef.current?.getBoundingClientRect();
       const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
-      updateZoomExtentForData(zoomHandler.current, validData, viewBox, rect, occlusion, zoomExtent, fitMargin);
+      updateZoomExtentForData(zoomHandler.current, validData, viewBox, rect, occlusion, zoomExtent, fitMargin, defaultSize);
     }
 
     // Store original input data for future comparisons

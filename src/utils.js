@@ -1,9 +1,25 @@
-export function boundsForData(data) {
+export function boundsForData(data, dotSize = 2) {
+  if (!data || data.length === 0) {
+    return {
+      minX: Infinity,
+      minY: Infinity,
+      maxX: -Infinity,
+      maxY: -Infinity,
+    };
+  }
+
+  // Find the maximum radius among all dots
+  const maxRadius = data.reduce((max, obj) => {
+    const radius = obj.size || dotSize;
+    return Math.max(max, radius);
+  }, 0);
+
+  // Calculate bounds using each dot's center position plus the maximum radius
   return data.reduce((acc, obj) => ({
-    minX: Math.min(acc.minX, obj.x),
-    minY: Math.min(acc.minY, obj.y),
-    maxX: Math.max(acc.maxX, obj.x),
-    maxY: Math.max(acc.maxY, obj.y),
+    minX: Math.min(acc.minX, obj.x - maxRadius),
+    minY: Math.min(acc.minY, obj.y - maxRadius),
+    maxX: Math.max(acc.maxX, obj.x + maxRadius),
+    maxY: Math.max(acc.maxY, obj.y + maxRadius),
   }), {
     minX: Infinity,
     minY: Infinity,
@@ -20,8 +36,8 @@ export function withMargin(margin, box) {
   return [minX, minY, width, height];
 }
 
-export function calculateViewBox(data, margin = 0.1) {
-  const bounds = boundsForData(data);
+export function calculateViewBox(data, margin = 0.1, dotSize) {
+  const bounds = boundsForData(data, dotSize);
   const box = [bounds.minX, bounds.minY, bounds.maxX - bounds.minX, bounds.maxY - bounds.minY];
   return withMargin(margin, box);
 }
@@ -90,12 +106,12 @@ export function computeFitTransformToVisible(bounds, viewBox, svgRect, occlusion
 }
 
 // Pure function: calculate stable viewBox update (no d3 dependencies)
-export function getStableViewBoxUpdate(data, currentViewBox, margin = 0.1) {
+export function getStableViewBoxUpdate(data, currentViewBox, margin = 0.1, dotSize) {
   if (!data || data.length === 0) return null;
 
   // If no current viewBox, this is the initial setup: compute it from the data once.
   if (!currentViewBox) {
-    const initialViewBox = calculateViewBox(data, margin);
+    const initialViewBox = calculateViewBox(data, margin, dotSize);
     return {
       newViewBox: initialViewBox
     };
@@ -200,10 +216,10 @@ export function computeOcclusionAwareViewBox(bounds, container, occlusion = {}, 
  * @param {Object} transform - Current zoom transform {k, x, y}
  * @returns {boolean} True if new content extends beyond visible area
  */
-export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform) {
+export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform, dotSize) {
   if (!newData.length || !viewBox || !transform || !previousBounds) return false;
 
-  const newBounds = boundsForData(newData);
+  const newBounds = boundsForData(newData, dotSize);
 
   // Check if new data extends beyond previous bounds
   const hasExtended =
@@ -267,11 +283,11 @@ export function setAbsoluteExtent(handler, absExtent) {
  * @param {number} fitMargin - Margin for fitting (0-1)
  * @returns {boolean} True if extent was updated
  */
-export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occlusion, zoomExtent, fitMargin = 0.92) {
+export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occlusion, zoomExtent, fitMargin = 0.92, dotSize) {
   if (!zoomHandler || !data.length || !viewBox || !svgRect || !zoomExtent) return false;
 
   const currentExtent = zoomHandler.scaleExtent();
-  const bounds = boundsForData(data);
+  const bounds = boundsForData(data, dotSize);
 
   // Use the EXACT same code path as auto-zoom: computeFitTransformToVisible
   const fitTransform = computeFitTransformToVisible(bounds, viewBox, svgRect, occlusion, fitMargin);

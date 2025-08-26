@@ -9,6 +9,8 @@ const App = () => {
   const [containerSize, setContainerSize] = useState({ width: 640, height: 400 });
   const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
   const [autoZoomDuration, setAutoZoomDuration] = useState(200);
+  const [dotSize, setDotSize] = useState(10);
+  const [newDotSize, setNewDotSize] = useState(100);
   const containerRef = useRef(null);
 
   // Measure container size once
@@ -31,7 +33,9 @@ const App = () => {
         y: Math.random() * containerSize.height,
         color: `hsl(${Math.random() * 360}, 70%, 50%)`,
         name: `Point ${i}`,
-        value: Math.round(Math.random() * 100)
+        value: Math.round(Math.random() * 100),
+        // Add individual sizes to some dots for testing
+        size: i < 10 ? Math.random() * 20 + 5 : undefined // first 10 dots have random individual sizes
       })));
     }
   }, [containerSize]);
@@ -90,7 +94,8 @@ const App = () => {
         y: bounds.minY - extendY + Math.random() * (height + 2 * extendY),
         color: '#666', // Gray color
         name: `Added Point ${id}`,
-        value: Math.round(Math.random() * 100)
+        value: Math.round(Math.random() * 100),
+        size: newDotSize // Use the controlled new dot size
       };
     });
 
@@ -109,7 +114,8 @@ const App = () => {
         • <strong>Zoom:</strong> Ctrl/Cmd + mouse wheel (or trackpad pinch)<br />
         • <strong>Pan:</strong> Mouse wheel or trackpad scroll<br />
         • <strong>Hover:</strong> Move mouse over dots<br />
-        • <strong>Add Dots:</strong> Use the button in the left panel (auto-zoom will trigger if enabled)
+        • <strong>Add Dots:</strong> Use the button in the left panel. Set "New Dots Size" slider first (auto-zoom will trigger if enabled)<br />
+        • <strong>Dot Sizes:</strong> "Default Size" affects dots without individual sizes. "New Dots Size" controls size of added dots
       </div>
 
       <div className="viz" ref={containerRef} style={{ position: 'relative', width: '100%', height: '60vh' }}>
@@ -136,21 +142,47 @@ const App = () => {
           <button onClick={handleAddDots} style={{ padding: '6px 10px', cursor: 'pointer' }}>
             + Add 7 Gray Dots
           </button>
-          
+
+          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Dot Sizes</div>
+
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Default Size: {dotSize}</div>
+            <input
+              type="range"
+              value={dotSize}
+              onChange={(e) => setDotSize(Number(e.target.value))}
+              min="1"
+              max="200"
+              step="1"
+              style={{ width: '100%', marginBottom: '8px' }}
+            />
+            
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>New Dots Size: {newDotSize}</div>
+            <input
+              type="range"
+              value={newDotSize}
+              onChange={(e) => setNewDotSize(Number(e.target.value))}
+              min="1"
+              max="200"
+              step="1"
+              style={{ width: '100%', marginBottom: '12px' }}
+            />
+          </div>
+
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
             <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Auto-Zoom Settings</div>
-            
+
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
-              <input 
-                type="checkbox" 
+              <input
+                type="checkbox"
                 checked={autoZoomEnabled}
                 onChange={(e) => setAutoZoomEnabled(e.target.checked)}
               />
               Enable Auto-Zoom
             </label>
-            
+
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>Duration (ms):</div>
-            <input 
+            <input
               type="number"
               value={autoZoomDuration}
               onChange={(e) => setAutoZoomDuration(Number(e.target.value))}
@@ -168,7 +200,7 @@ const App = () => {
           onClick={handleClick}
           onBackgroundClick={handleBackgroundClick}
           dotStyles={dotStyles}
-          defaultSize={10}
+          defaultSize={dotSize}
           margin={0.05}
           style={{ position: 'absolute', inset: 0 }}
           occludeLeft={panelWidth}
