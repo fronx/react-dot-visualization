@@ -258,53 +258,41 @@ export function setAbsoluteExtent(handler, absExtent) {
 }
 
 /**
- * Compute zoom extent that allows viewing all data, even when auto-zoom is disabled
- * @param {Array} data - Array of data points with x,y coordinates  
- * @param {Array} viewBox - Current viewBox [x, y, width, height]
+ * Updates zoom extent to accommodate data, using the exact same code path as auto-zoom.
+ * This ensures perfect consistency between auto-zoom and manual zoom extent calculations.
+ * @param {Object} zoomHandler - D3 zoom handler
+ * @param {Array} data - Array of data points with x,y coordinates
+ * @param {Array} viewBox - Current viewBox [x, y, width, height] 
+ * @param {Object} svgRect - DOM rect with width/height
+ * @param {Object} occlusion - Occlusion object {left, right, top, bottom}
  * @param {Array} zoomExtent - Relative zoom extent [min, max]
- * @param {Object} currentTransform - Current zoom transform {k, x, y}
  * @param {number} fitMargin - Margin for fitting (0-1)
- * @returns {Object} { baseScale, absoluteExtent } or null if no update needed
+ * @returns {boolean} True if extent was updated
  */
-export function computeZoomExtentForData(data, viewBox, zoomExtent, currentTransform, fitMargin = 0.9) {
-  if (!data.length || !viewBox || !currentTransform) return null;
+export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occlusion, zoomExtent, fitMargin = 0.92) {
+  if (!zoomHandler || !data.length || !viewBox || !svgRect || !zoomExtent) return false;
   
+  const currentExtent = zoomHandler.scaleExtent();
   const bounds = boundsForData(data);
-  const [, , vbW, vbH] = viewBox;
   
-  // Calculate what scale would be needed to fit all data
-  const dx = Math.max(1e-9, bounds.maxX - bounds.minX);
-  const dy = Math.max(1e-9, bounds.maxY - bounds.minY);
+  // Use the EXACT same code path as auto-zoom: computeFitTransformToVisible
+  const fitTransform = computeFitTransformToVisible(bounds, viewBox, svgRect, occlusion, fitMargin);
+  if (!fitTransform) return false;
   
-  // Use a similar calculation to computeFitTransformToVisible but just get the scale
-  const baseScale = fitMargin * Math.min(vbW / dx, vbH / dy);
+  const baseScale = fitTransform.k;
+  const requiredExtent = computeAbsoluteExtent(zoomExtent, baseScale);
   
-  // Compute absolute extent for this base scale
-  const absoluteExtent = computeAbsoluteExtent(zoomExtent, baseScale);
+  // Only update if we need a more permissive extent (allow zooming out further)
+  const hasNoExtent = !currentExtent || currentExtent[0] === 0 && currentExtent[1] === Infinity;
+  const needsMorePermissive = requiredExtent[0] < currentExtent[0];
   
-  return { baseScale, absoluteExtent };
+  if (hasNoExtent || needsMorePermissive) {
+    // Expand current extent to accommodate new data
+    const newExtent = hasNoExtent ? requiredExtent : unionExtent(currentExtent, requiredExtent);
+    setAbsoluteExtent(zoomHandler, newExtent);
+    return true;
+  }
+  
+  return false;
 }
 
-/**
- * Check if zoom extent needs updating to accommodate new data
- * @param {Array} data - Current data points
- * @param {Object} currentExtent - Current zoom handler extent [min, max] 
- * @param {Array} viewBox - Current viewBox
- * @param {Array} zoomExtent - Relative zoom extent 
- * @param {Object} transform - Current transform
- * @param {number} fitMargin - Fit margin
- * @returns {boolean} True if extent should be updated
- */
-export function shouldUpdateZoomExtent(data, currentExtent, viewBox, zoomExtent, transform, fitMargin = 0.9) {
-  if (!data.length || !currentExtent || !viewBox || !transform) return false;
-  
-  const extentCalc = computeZoomExtentForData(data, viewBox, zoomExtent, transform, fitMargin);
-  if (!extentCalc) return false;
-  
-  const { absoluteExtent } = extentCalc;
-  const [currentMin, currentMax] = currentExtent;
-  const [requiredMin, requiredMax] = absoluteExtent;
-  
-  // Update if current extent doesn't allow zooming out enough to see all data
-  return requiredMin < currentMin || requiredMax > currentMax;
-}

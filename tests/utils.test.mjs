@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { computeOcclusionAwareViewBox, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, computeZoomExtentForData, shouldUpdateZoomExtent } from '../src/utils.js';
+import { computeOcclusionAwareViewBox, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, updateZoomExtentForData } from '../src/utils.js';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -307,201 +307,68 @@ test('setAbsoluteExtent: handles invalid inputs gracefully', () => {
   assert.strictEqual(called, false, 'should not call scaleExtent when extent has wrong length');
 });
 
-// --- zoom extent for data tests --------------------------------------------
+// --- updateZoomExtentForData tests -----------------------------------------
 
-test('computeZoomExtentForData: basic functionality', () => {
+test('updateZoomExtentForData: updates extent when needed for larger data', () => {
+  let currentExtent = [1, 4]; // restrictive extent
+  const mockHandler = {
+    scaleExtent: (newExtent) => {
+      if (newExtent) {
+        currentExtent = newExtent;
+        return mockHandler;
+      }
+      return currentExtent;
+    }
+  };
+  
   const data = [
-    { x: 0, y: 0 },
-    { x: 100, y: 50 }
-  ];
-  const viewBox = [0, 0, 200, 100];
-  const zoomExtent = [0.5, 4];
-  const transform = { k: 1, x: 0, y: 0 };
-  const fitMargin = 0.9;
-  
-  const result = computeZoomExtentForData(data, viewBox, zoomExtent, transform, fitMargin);
-  
-  assert.ok(result !== null, 'should return result object');
-  assert.ok('baseScale' in result, 'should have baseScale property');
-  assert.ok('absoluteExtent' in result, 'should have absoluteExtent property');
-  assert.ok(result.baseScale > 0, 'baseScale should be positive');
-  assert.ok(Array.isArray(result.absoluteExtent) && result.absoluteExtent.length === 2, 'absoluteExtent should be array of length 2');
-});
-
-test('computeZoomExtentForData: calculates correct baseScale for fitting data', () => {
-  const data = [
-    { x: 0, y: 0 },
-    { x: 50, y: 25 }  // data is 50x25
-  ];
-  const viewBox = [0, 0, 100, 50];  // viewBox is 100x50
-  const zoomExtent = [0.5, 4];
-  const transform = { k: 1, x: 0, y: 0 };
-  const fitMargin = 1.0;  // no margin for easier calculation
-  
-  const result = computeZoomExtentForData(data, viewBox, zoomExtent, transform, fitMargin);
-  
-  // Scale needed: min(100/50, 50/25) = min(2, 2) = 2
-  assert.ok(approx(result.baseScale, 2), `expected baseScale ~2, got ${result.baseScale}`);
-  
-  // Absolute extent should be [0.5*2, 4*2] = [1, 8]
-  assert.deepStrictEqual(result.absoluteExtent, [1, 8], 'absoluteExtent should be scaled correctly');
-});
-
-test('computeZoomExtentForData: handles edge cases', () => {
-  // Empty data
-  const result1 = computeZoomExtentForData([], [0, 0, 100, 100], [0.5, 4], { k: 1, x: 0, y: 0 });
-  assert.strictEqual(result1, null, 'should return null for empty data');
-  
-  // Missing viewBox
-  const data = [{ x: 0, y: 0 }];
-  const result2 = computeZoomExtentForData(data, null, [0.5, 4], { k: 1, x: 0, y: 0 });
-  assert.strictEqual(result2, null, 'should return null for missing viewBox');
-  
-  // Missing transform
-  const result3 = computeZoomExtentForData(data, [0, 0, 100, 100], [0.5, 4], null);
-  assert.strictEqual(result3, null, 'should return null for missing transform');
-});
-
-test('computeZoomExtentForData: handles degenerate data dimensions', () => {
-  const data = [
-    { x: 10, y: 0 },
-    { x: 10, y: 100 }  // vertical line (dx ~ 0)
+    { x: -100, y: -100 },
+    { x: 200, y: 200 }  // large data requiring wider extent
   ];
   const viewBox = [0, 0, 100, 100];
-  const zoomExtent = [0.5, 4];
-  const transform = { k: 1, x: 0, y: 0 };
-  
-  const result = computeZoomExtentForData(data, viewBox, zoomExtent, transform, 1.0);
-  
-  assert.ok(result !== null, 'should handle degenerate dimensions');
-  assert.ok(result.baseScale > 0, 'should have positive baseScale even with degenerate data');
-  assert.ok(result.absoluteExtent[0] > 0, 'should have positive minimum extent');
-});
-
-// --- shouldUpdateZoomExtent tests ------------------------------------------
-
-test('shouldUpdateZoomExtent: should update when current extent is too restrictive', () => {
-  const data = [
-    { x: 0, y: 0 },
-    { x: 200, y: 100 }  // large data that needs wide extent
-  ];
-  const currentExtent = [1, 2];  // restrictive extent
-  const viewBox = [0, 0, 100, 50];
-  const zoomExtent = [0.5, 4];
-  const transform = { k: 1, x: 0, y: 0 };
-  
-  const result = shouldUpdateZoomExtent(data, currentExtent, viewBox, zoomExtent, transform, 1.0);
-  assert.strictEqual(result, true, 'should update when current extent is too restrictive');
-});
-
-test('shouldUpdateZoomExtent: should not update when current extent is sufficient', () => {
-  const data = [
-    { x: 0, y: 0 },
-    { x: 50, y: 25 }  // small data
-  ];
-  const currentExtent = [0.1, 10];  // generous extent
-  const viewBox = [0, 0, 100, 50];
-  const zoomExtent = [0.5, 4];
-  const transform = { k: 1, x: 0, y: 0 };
-  
-  const result = shouldUpdateZoomExtent(data, currentExtent, viewBox, zoomExtent, transform, 1.0);
-  assert.strictEqual(result, false, 'should not update when current extent is sufficient');
-});
-
-test('shouldUpdateZoomExtent: handles edge cases', () => {
-  const data = [{ x: 0, y: 0 }];
-  const currentExtent = [1, 4];
-  const viewBox = [0, 0, 100, 100];
-  const zoomExtent = [0.5, 4];
-  const transform = { k: 1, x: 0, y: 0 };
-  
-  // Empty data
-  const result1 = shouldUpdateZoomExtent([], currentExtent, viewBox, zoomExtent, transform);
-  assert.strictEqual(result1, false, 'should return false for empty data');
-  
-  // Missing current extent
-  const result2 = shouldUpdateZoomExtent(data, null, viewBox, zoomExtent, transform);
-  assert.strictEqual(result2, false, 'should return false when currentExtent is missing');
-  
-  // Missing viewBox
-  const result3 = shouldUpdateZoomExtent(data, currentExtent, null, zoomExtent, transform);
-  assert.strictEqual(result3, false, 'should return false when viewBox is missing');
-  
-  // Missing transform
-  const result4 = shouldUpdateZoomExtent(data, currentExtent, viewBox, zoomExtent, null);
-  assert.strictEqual(result4, false, 'should return false when transform is missing');
-});
-
-test('shouldUpdateZoomExtent: boundary cases for extent comparison', () => {
-  const data = [
-    { x: 0, y: 0 },
-    { x: 100, y: 50 }
-  ];
-  const viewBox = [0, 0, 100, 50];
-  const zoomExtent = [0.5, 4];
-  const transform = { k: 1, x: 0, y: 0 };
-  
-  // Calculate what the required extent would be
-  const extentCalc = computeZoomExtentForData(data, viewBox, zoomExtent, transform, 1.0);
-  const [requiredMin, requiredMax] = extentCalc.absoluteExtent;
-  
-  // Test with exact required extent (should not update)
-  const result1 = shouldUpdateZoomExtent(data, [requiredMin, requiredMax], viewBox, zoomExtent, transform, 1.0);
-  assert.strictEqual(result1, false, 'should not update when extent exactly matches requirement');
-  
-  // Test with slightly more restrictive extent (should update)
-  const result2 = shouldUpdateZoomExtent(data, [requiredMin + 0.1, requiredMax - 0.1], viewBox, zoomExtent, transform, 1.0);
-  assert.strictEqual(result2, true, 'should update when extent is slightly too restrictive');
-  
-  // Test with more generous extent (should not update)
-  const result3 = shouldUpdateZoomExtent(data, [requiredMin - 0.1, requiredMax + 0.1], viewBox, zoomExtent, transform, 1.0);
-  assert.strictEqual(result3, false, 'should not update when extent is more generous');
-});
-
-// This test demonstrates the real root cause: the zoomExtent useEffect overwrites 
-// the carefully calculated extent for new data with an extent based on old baseScale
-test('FAILING: baseScaleRef from old data causes extent to be too restrictive for new data', () => {
-  // Simulate the component's behavior:
-  // 1. Initial small data leads to initial baseScale and extent
-  const initialData = [{ x: 10, y: 10 }, { x: 20, y: 20 }];
-  const viewBox = [0, 0, 100, 100]; 
+  const svgRect = { width: 100, height: 100 };
+  const occlusion = { left: 0, right: 0, top: 0, bottom: 0 };
   const zoomExtent = [0.25, 10];
   
-  // Initial fit would set baseScale to a value that fits the small initial data
-  const initialFitCalc = computeZoomExtentForData(initialData, viewBox, zoomExtent, { k: 1, x: 0, y: 0 }, 0.9);
-  const initialBaseScale = initialFitCalc.baseScale;  // This will be relatively high (small data = high scale to fit)
+  const updated = updateZoomExtentForData(mockHandler, data, viewBox, svgRect, occlusion, zoomExtent, 0.9);
   
-  // 2. User adds much larger data range
-  const expandedData = [
-    ...initialData,
-    { x: -100, y: -100 },  // Much larger range
-    { x: 200, y: 200 }
-  ];
-  
-  // 3. Data processing useEffect correctly calculates extent for ALL data
-  const correctExtentCalc = computeZoomExtentForData(expandedData, viewBox, zoomExtent, { k: 1, x: 0, y: 0 }, 0.9);
-  const correctExtent = correctExtentCalc.absoluteExtent;
-  
-  // 4. But then zoomExtent useEffect runs and overwrites with extent based on old baseScale
-  const overridingExtent = computeAbsoluteExtent(zoomExtent, initialBaseScale);
-  
-  // The problem: the overriding extent is more restrictive than what's needed for the new data
-  // because it's based on the old, smaller data's baseScale
-  console.log('Initial baseScale (small data):', initialBaseScale);
-  console.log('Correct extent for expanded data:', correctExtent);
-  console.log('Overriding extent from old baseScale:', overridingExtent);
-  
-  const isMoreRestrictive = overridingExtent[0] > correctExtent[0];
-  console.log('Is overriding extent more restrictive?', isMoreRestrictive);
-  
-  if (!isMoreRestrictive) {
-    // If this assertion fails, our hypothesis was wrong - let's understand why
-    assert.fail(`Expected overriding extent min ${overridingExtent[0]} to be more restrictive than correct extent min ${correctExtent[0]}, but it wasn't. This suggests the root cause is different.`);
-  }
-  
-  // This demonstrates that users can't zoom out far enough to see the new data
-  // The test succeeds in demonstrating the root cause
-  assert(true, 'Root cause confirmed: baseScaleRef causes extent override issue');
+  assert.strictEqual(updated, true, 'should return true when extent is updated');
+  assert(currentExtent[0] < 1, 'should allow zooming out further (lower minimum)');
 });
+
+test('updateZoomExtentForData: does not update when extent is sufficient', () => {
+  const currentExtent = [0.1, 10]; // already permissive extent  
+  const mockHandler = {
+    scaleExtent: () => currentExtent
+  };
+  
+  const data = [
+    { x: 10, y: 10 },
+    { x: 20, y: 20 }  // small data
+  ];
+  const viewBox = [0, 0, 100, 100];
+  const svgRect = { width: 100, height: 100 };
+  const occlusion = { left: 0, right: 0, top: 0, bottom: 0 };
+  const zoomExtent = [0.25, 10];
+  
+  const updated = updateZoomExtentForData(mockHandler, data, viewBox, svgRect, occlusion, zoomExtent, 0.9);
+  
+  assert.strictEqual(updated, false, 'should return false when extent is sufficient');
+});
+
+test('updateZoomExtentForData: handles edge cases', () => {
+  const mockHandler = { scaleExtent: () => [1, 4] };
+  const svgRect = { width: 100, height: 100 };
+  const occlusion = { left: 0, right: 0, top: 0, bottom: 0 };
+  
+  // No data
+  const result1 = updateZoomExtentForData(mockHandler, [], [0, 0, 100, 100], svgRect, occlusion, [0.25, 10]);
+  assert.strictEqual(result1, false, 'should return false for empty data');
+  
+  // No handler
+  const result2 = updateZoomExtentForData(null, [{ x: 0, y: 0 }], [0, 0, 100, 100], svgRect, occlusion, [0.25, 10]);
+  assert.strictEqual(result2, false, 'should return false for missing handler');
+});
+
 
 

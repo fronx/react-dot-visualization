@@ -4,7 +4,7 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, shouldUpdateZoomExtent, computeZoomExtentForData } from './utils.js';
+import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, updateZoomExtentForData } from './utils.js';
 
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
@@ -274,40 +274,12 @@ const DotVisualization = forwardRef((props, ref) => {
       if (shouldAutoZoom) {
         zoomToVisible(autoZoomDuration, d3.easeCubicInOut, validData);
       }
-    } else if (!autoZoomToNewContent && zoomHandler.current && viewBox && validData.length > 0) {
-      // Even when auto-zoom is disabled, update zoom extents to allow manual zoom out
+    } else if (!autoZoomToNewContent) {
+      // When auto-zoom is disabled, still update zoom extents to allow manual zoom out
       // to see all data when new content is added outside current bounds
-      const currentExtent = zoomHandler.current.scaleExtent();
-      
-      // If no extent has been set yet (returns default [0, Infinity]), 
-      // or if we need to update the extent for new data
-      const hasNoExtent = !currentExtent || currentExtent[0] === 0 && currentExtent[1] === Infinity;
-      const shouldUpdate = hasNoExtent || shouldUpdateZoomExtent(
-        validData,
-        currentExtent,
-        viewBox,
-        zoomExtent,
-        transform.current || d3.zoomIdentity,
-        fitMargin
-      );
-      
-      if (shouldUpdate) {
-        const extentCalc = computeZoomExtentForData(
-          validData,
-          viewBox,
-          zoomExtent,
-          transform.current || d3.zoomIdentity,
-          fitMargin
-        );
-        
-        if (extentCalc) {
-          // If no extent exists, set it directly; otherwise expand it
-          const newAbsoluteExtent = hasNoExtent 
-            ? extentCalc.absoluteExtent
-            : unionExtent(currentExtent, extentCalc.absoluteExtent);
-          setAbsoluteExtent(zoomHandler.current, newAbsoluteExtent);
-        }
-      }
+      const rect = zoomRef.current?.getBoundingClientRect();
+      const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
+      updateZoomExtentForData(zoomHandler.current, validData, viewBox, rect, occlusion, zoomExtent, fitMargin);
     }
 
     // Store original input data for future comparisons
