@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
-import { getSyncedInteractionPosition } from './positionSync.js';
+import { getDotSize, getSyncedInteractionPosition, updateDotAttributes } from './dotUtils.js';
 
 const InteractionLayer = React.memo((props) => {
   const {
@@ -19,12 +19,7 @@ const InteractionLayer = React.memo((props) => {
   const interactionLayerRef = useRef(null);
 
   const getSize = (item) => {
-    // Check if there's a custom size in dotStyles first
-    const customStyles = dotStyles.get(item.id);
-    if (customStyles && customStyles.r !== undefined) {
-      return customStyles.r;
-    }
-    return item.size || defaultSize;
+    return getDotSize(item, dotStyles, defaultSize);
   };
 
   const handleMouseEnter = (e, item) => {
@@ -70,18 +65,10 @@ const InteractionLayer = React.memo((props) => {
   useEffect(() => {
     data.forEach((item) => {
       const elementId = dotId(1, item);
-      const element = d3.select(`#${elementId}`);
+      const position = getSyncedInteractionPosition(item, dotId);
+      const size = getSize(item);
       
-      if (!element.empty()) {
-        // Always update position and size to stay in sync with colored dots
-        const { x, y } = getSyncedInteractionPosition(item, dotId);
-        const size = getSize(item);
-        
-        element
-          .attr('cx', x)
-          .attr('cy', y) 
-          .attr('r', size);
-      }
+      updateDotAttributes(item, elementId, position, size);
     });
   }, [data, dotStyles, dotId]);
 

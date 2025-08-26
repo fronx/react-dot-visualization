@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import * as d3 from 'd3';
-import { getSyncedPosition } from './positionSync.js';
+import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 
 const ColoredDots = React.memo((props) => {
   const {
@@ -22,41 +22,17 @@ const ColoredDots = React.memo((props) => {
   };
 
   const getSize = (item) => {
-    // Check if there's a custom size in dotStyles first
-    const customStyles = dotStyles.get(item.id);
-    if (customStyles && customStyles.r !== undefined) {
-      return customStyles.r;
-    }
-    return item.size || defaultSize;
+    return getDotSize(item, dotStyles, defaultSize);
   };
 
   useEffect(() => {
     data.forEach((item, index) => {
       const elementId = dotId(0, item);
-      const element = d3.select(`#${elementId}`);
-
-      if (!element.empty()) {
-        // Get synchronized position (preserves D3 decollision positions)
-        const { x, y } = getSyncedPosition(item, elementId);
-        
-        const baseAttrs = {
-          r: getSize(item),
-          cx: x,
-          cy: y,
-          fill: getColor(item, index),
-          stroke: stroke,
-          strokeWidth: strokeWidth,
-          filter: '',
-          opacity: 0.7,
-        };
-
-        const customAttrs = dotStyles.get(item.id) || {};
-        const mergedAttrs = { ...baseAttrs, ...customAttrs };
-
-        Object.entries(mergedAttrs).forEach(([attr, value]) => {
-          element.attr(attr, value);
-        });
-      }
+      const position = getSyncedPosition(item, elementId);
+      const size = getSize(item);
+      const color = getColor(item, index);
+      
+      updateColoredDotAttributes(item, elementId, position, size, color, stroke, strokeWidth, dotStyles);
     });
   }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize]);
 
