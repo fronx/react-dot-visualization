@@ -256,3 +256,55 @@ export function setAbsoluteExtent(handler, absExtent) {
     handler.scaleExtent(absExtent);
   }
 }
+
+/**
+ * Compute zoom extent that allows viewing all data, even when auto-zoom is disabled
+ * @param {Array} data - Array of data points with x,y coordinates  
+ * @param {Array} viewBox - Current viewBox [x, y, width, height]
+ * @param {Array} zoomExtent - Relative zoom extent [min, max]
+ * @param {Object} currentTransform - Current zoom transform {k, x, y}
+ * @param {number} fitMargin - Margin for fitting (0-1)
+ * @returns {Object} { baseScale, absoluteExtent } or null if no update needed
+ */
+export function computeZoomExtentForData(data, viewBox, zoomExtent, currentTransform, fitMargin = 0.9) {
+  if (!data.length || !viewBox || !currentTransform) return null;
+  
+  const bounds = boundsForData(data);
+  const [, , vbW, vbH] = viewBox;
+  
+  // Calculate what scale would be needed to fit all data
+  const dx = Math.max(1e-9, bounds.maxX - bounds.minX);
+  const dy = Math.max(1e-9, bounds.maxY - bounds.minY);
+  
+  // Use a similar calculation to computeFitTransformToVisible but just get the scale
+  const baseScale = fitMargin * Math.min(vbW / dx, vbH / dy);
+  
+  // Compute absolute extent for this base scale
+  const absoluteExtent = computeAbsoluteExtent(zoomExtent, baseScale);
+  
+  return { baseScale, absoluteExtent };
+}
+
+/**
+ * Check if zoom extent needs updating to accommodate new data
+ * @param {Array} data - Current data points
+ * @param {Object} currentExtent - Current zoom handler extent [min, max] 
+ * @param {Array} viewBox - Current viewBox
+ * @param {Array} zoomExtent - Relative zoom extent 
+ * @param {Object} transform - Current transform
+ * @param {number} fitMargin - Fit margin
+ * @returns {boolean} True if extent should be updated
+ */
+export function shouldUpdateZoomExtent(data, currentExtent, viewBox, zoomExtent, transform, fitMargin = 0.9) {
+  if (!data.length || !currentExtent || !viewBox || !transform) return false;
+  
+  const extentCalc = computeZoomExtentForData(data, viewBox, zoomExtent, transform, fitMargin);
+  if (!extentCalc) return false;
+  
+  const { absoluteExtent } = extentCalc;
+  const [currentMin, currentMax] = currentExtent;
+  const [requiredMin, requiredMax] = absoluteExtent;
+  
+  // Update if current extent doesn't allow zooming out enough to see all data
+  return requiredMin < currentMin || requiredMax > currentMax;
+}

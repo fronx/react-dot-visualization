@@ -4,7 +4,7 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent } from './utils.js';
+import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, shouldUpdateZoomExtent, computeZoomExtentForData } from './utils.js';
 
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
@@ -274,6 +274,40 @@ const DotVisualization = forwardRef((props, ref) => {
       if (shouldAutoZoom) {
         zoomToVisible(autoZoomDuration, d3.easeCubicInOut, validData);
       }
+    } else if (!autoZoomToNewContent && zoomHandler.current && viewBox && validData.length > 0) {
+      // Even when auto-zoom is disabled, update zoom extents to allow manual zoom out
+      // to see all data when new content is added outside current bounds
+      const currentExtent = zoomHandler.current.scaleExtent();
+      
+      // If no extent has been set yet (returns default [0, Infinity]), 
+      // or if we need to update the extent for new data
+      const hasNoExtent = !currentExtent || currentExtent[0] === 0 && currentExtent[1] === Infinity;
+      const shouldUpdate = hasNoExtent || shouldUpdateZoomExtent(
+        validData,
+        currentExtent,
+        viewBox,
+        zoomExtent,
+        transform.current || d3.zoomIdentity,
+        fitMargin
+      );
+      
+      if (shouldUpdate) {
+        const extentCalc = computeZoomExtentForData(
+          validData,
+          viewBox,
+          zoomExtent,
+          transform.current || d3.zoomIdentity,
+          fitMargin
+        );
+        
+        if (extentCalc) {
+          // If no extent exists, set it directly; otherwise expand it
+          const newAbsoluteExtent = hasNoExtent 
+            ? extentCalc.absoluteExtent
+            : unionExtent(currentExtent, extentCalc.absoluteExtent);
+          setAbsoluteExtent(zoomHandler.current, newAbsoluteExtent);
+        }
+      }
     }
 
     // Store original input data for future comparisons
@@ -293,7 +327,8 @@ const DotVisualization = forwardRef((props, ref) => {
   useEffect(() => {
     if (typeof window !== 'undefined' && !zoomHandler.current) {
       zoomHandler.current = d3.zoom();
-      zoomHandler.current.scaleExtent([1e-6, 1e6]); // optional safety net
+      // Don't set a safety net extent here - let it be set properly based on actual data
+      // The initial extent will be set when data is processed
     }
   }, []);
 
@@ -460,8 +495,19 @@ const DotVisualization = forwardRef((props, ref) => {
   useEffect(() => {
     if (!zoomHandler.current) return;
     if (baseScaleRef.current == null) return; // wait for first fit
-    const abs = computeAbsoluteExtent(zoomExtent, baseScaleRef.current);
-    setAbsoluteExtent(zoomHandler.current, abs);
+    
+    const newExtentFromBase = computeAbsoluteExtent(zoomExtent, baseScaleRef.current);
+    const currentExtent = zoomHandler.current.scaleExtent();
+    
+    // Only update if there's no current extent, or if the new extent is more permissive
+    // (allows more zoom out) than the current one. This prevents overriding extents
+    // that were carefully calculated for larger data ranges.
+    const hasNoExtent = !currentExtent || currentExtent[0] === 0 && currentExtent[1] === Infinity;
+    const isMorePermissive = !hasNoExtent && newExtentFromBase[0] < currentExtent[0];
+    
+    if (hasNoExtent || isMorePermissive) {
+      setAbsoluteExtent(zoomHandler.current, newExtentFromBase);
+    }
   }, [zoomExtent]);
 
   // Cleanup auto-zoom timeout on unmount
