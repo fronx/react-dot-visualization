@@ -444,7 +444,15 @@ const DotVisualization = forwardRef((props, ref) => {
 
         console.log('Decollided dots:', memoizedPositions.current.size);
         if (onDecollisionComplete) {
-          onDecollisionComplete();
+          // Create final positions array with updated coordinates from decollision
+          const finalPositions = processedValidData.map(item => {
+            const memoizedPos = memoizedPositions.current.get(item.id);
+            if (memoizedPos) {
+              return { ...item, x: memoizedPos.x, y: memoizedPos.y };
+            }
+            return item;
+          });
+          onDecollisionComplete(finalPositions);
         }
       });
 
@@ -468,16 +476,16 @@ const DotVisualization = forwardRef((props, ref) => {
   useEffect(() => {
     if (!zoomHandler.current) return;
     if (baseScaleRef.current == null) return; // wait for first fit
-    
+
     const newExtentFromBase = computeAbsoluteExtent(zoomExtent, baseScaleRef.current);
     const currentExtent = zoomHandler.current.scaleExtent();
-    
+
     // Only update if there's no current extent, or if the new extent is more permissive
     // (allows more zoom out) than the current one. This prevents overriding extents
     // that were carefully calculated for larger data ranges.
     const hasNoExtent = !currentExtent || currentExtent[0] === 0 && currentExtent[1] === Infinity;
     const isMorePermissive = !hasNoExtent && newExtentFromBase[0] < currentExtent[0];
-    
+
     if (hasNoExtent || isMorePermissive) {
       setAbsoluteExtent(zoomHandler.current, newExtentFromBase);
     }
