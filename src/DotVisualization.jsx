@@ -327,6 +327,7 @@ const DotVisualization = forwardRef((props, ref) => {
       // Clear existing timeout
       if (wheelTimeoutRef.current) {
         clearTimeout(wheelTimeoutRef.current);
+        wheelTimeoutRef.current = null;
       }
 
       // Set a short debounce for wheel events
@@ -336,49 +337,33 @@ const DotVisualization = forwardRef((props, ref) => {
       }, 100);
     };
 
-    const onZoom = (event) => {
-      event.preventDefault();
-      handleWheel(); // Track wheel activity
-
-      const selection = d3.select(zoomRef.current);
-      const currentZoom = selection.property("__zoom")?.k || 1;
-
-      if (event.ctrlKey) {
-        // Use mouse wheel + ctrl key, or trackpad pinch to zoom
-        const nextZoom = currentZoom * Math.pow(2, -event.deltaY * 0.01);
-        zoomHandler.current.scaleTo(selection, nextZoom, d3.pointer(event));
-      } else {
-        // Pan with mouse wheel or trackpad
-        // Calculate pan speed relative to viewport size, not coordinate scale
-        const svgRect = zoomRef.current.getBoundingClientRect();
-        const viewBoxWidth = viewBox[2];
-        const viewBoxHeight = viewBox[3];
-
-        // Scale pan speed based on viewBox to viewport ratio
-        const panSensitivity = 1.0; // Adjust this to fine-tune pan speed
-        const panSpeedX = (viewBoxWidth / svgRect.width) * panSensitivity;
-        const panSpeedY = (viewBoxHeight / svgRect.height) * panSensitivity;
-
-        zoomHandler.current.translateBy(
-          selection,
-          -(event.deltaX * panSpeedX / currentZoom),
-          -(event.deltaY * panSpeedY / currentZoom)
-        );
-      }
-
-      transform.current = selection.property("__zoom");
-      if (contentRef.current) {
-        contentRef.current.setAttribute("transform", transform.current.toString());
-      }
-    };
 
     zoomHandler.current
       .on("start", handleDragStart)
-      .on("end", handleDragEnd);
+      .on("end", handleDragEnd)
+      .on("zoom", (event) => {
+        // Track wheel activity when zooming via wheel
+        if (event.sourceEvent && event.sourceEvent.type === 'wheel') {
+          handleWheel();
+        }
+        
+        transform.current = event.transform;
+        if (contentRef.current) {
+          contentRef.current.setAttribute("transform", transform.current.toString());
+        }
+      });
 
     d3.select(zoomRef.current)
-      .call(zoomHandler.current)
-      .on("wheel.zoom", onZoom);
+      .call(zoomHandler.current);
+
+    // Add global mouseup listener to ensure drag state is always cleared
+    const handleGlobalMouseUp = () => {
+      if (isDragging) {
+        setIsDragging(false);
+      }
+    };
+
+    document.addEventListener('mouseup', handleGlobalMouseUp);
 
     setIsZoomSetupComplete(true);
 
@@ -386,6 +371,7 @@ const DotVisualization = forwardRef((props, ref) => {
       if (wheelTimeoutRef.current) {
         clearTimeout(wheelTimeoutRef.current);
       }
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
       setIsZoomSetupComplete(false);
     };
   }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox]);
