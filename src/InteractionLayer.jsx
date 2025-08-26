@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
+import { getSyncedInteractionPosition } from './positionSync.js';
 
 const InteractionLayer = React.memo((props) => {
   const {
@@ -205,20 +206,25 @@ const InteractionLayer = React.memo((props) => {
         fill="transparent"
         onClick={handleBackgroundClick}
       />
-      {data.map((item) => (
-        <circle
-          id={dotId(1, item)}
-          key={dotId(1, item)}
-          r={getSize(item)}
-          cx={item.x}
-          cy={item.y}
-          fill="transparent"
-          style={{ cursor: onDragStart ? 'grab' : (onClick ? 'pointer' : 'default') }}
-          onClick={(e) => handleClick(e, item)}
-          onMouseEnter={(e) => handleMouseEnter(e, item)}
-          onMouseLeave={(e) => handleMouseLeave(e, item)}
-        />
-      ))}
+      {data.map((item) => {
+        // Get synchronized position to match ColoredDots
+        const { x, y } = getSyncedInteractionPosition(item, dotId);
+        
+        return (
+          <circle
+            id={dotId(1, item)}
+            key={dotId(1, item)}
+            r={getSize(item)}
+            cx={x}
+            cy={y}
+            fill="transparent"
+            style={{ cursor: onDragStart ? 'grab' : (onClick ? 'pointer' : 'default') }}
+            onClick={(e) => handleClick(e, item)}
+            onMouseEnter={(e) => handleMouseEnter(e, item)}
+            onMouseLeave={(e) => handleMouseLeave(e, item)}
+          />
+        );
+      })}
     </g>
   );
 });

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
+import { getSyncedPosition } from './positionSync.js';
 
 const ColoredDots = React.memo((props) => {
   const {
@@ -30,15 +31,13 @@ const ColoredDots = React.memo((props) => {
       const element = d3.select(`#${elementId}`);
 
       if (!element.empty()) {
-        // Preserve existing DOM positions (which may have been set by D3 decollision)
-        const currentCx = element.attr('cx');
-        const currentCy = element.attr('cy');
+        // Get synchronized position (preserves D3 decollision positions)
+        const { x, y } = getSyncedPosition(item, elementId);
         
         const baseAttrs = {
           r: getSize(item),
-          // Only use data positions if DOM positions don't exist (first render)
-          cx: currentCx !== null ? parseFloat(currentCx) : item.x,
-          cy: currentCy !== null ? parseFloat(currentCy) : item.y,
+          cx: x,
+          cy: y,
           fill: getColor(item, index),
           stroke: stroke,
           strokeWidth: strokeWidth,
