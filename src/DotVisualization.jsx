@@ -444,15 +444,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
         console.log('Decollided dots:', memoizedPositions.current.size);
         if (onDecollisionComplete) {
-          // Create final positions array with updated coordinates from decollision
-          const finalPositions = processedValidData.map(item => {
-            const memoizedPos = memoizedPositions.current.get(item.id);
-            if (memoizedPos) {
-              return { ...item, x: memoizedPos.x, y: memoizedPos.y };
-            }
-            return item;
-          });
-          onDecollisionComplete(finalPositions);
+          onDecollisionComplete();
         }
       });
 

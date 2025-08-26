@@ -30,10 +30,15 @@ const ColoredDots = React.memo((props) => {
       const element = d3.select(`#${elementId}`);
 
       if (!element.empty()) {
+        // Preserve existing DOM positions (which may have been set by D3 decollision)
+        const currentCx = element.attr('cx');
+        const currentCy = element.attr('cy');
+        
         const baseAttrs = {
           r: getSize(item),
-          cx: item.x,
-          cy: item.y,
+          // Only use data positions if DOM positions don't exist (first render)
+          cx: currentCx !== null ? parseFloat(currentCx) : item.x,
+          cy: currentCy !== null ? parseFloat(currentCy) : item.y,
           fill: getColor(item, index),
           stroke: stroke,
           strokeWidth: strokeWidth,
