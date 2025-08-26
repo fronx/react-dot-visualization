@@ -59,7 +59,6 @@ export function fitViewBoxToAspect(viewBox, targetAR, anchor = 'top-left') {
 }
 
 export function computeFitTransformToVisible(bounds, viewBox, svgRect, occlusion = {}, margin = 0.9) {
-  console.log('computeFitTransformToVisible called with bounds', { bounds, viewBox, svgRect, occlusion, margin });
   if (!bounds || !viewBox || !svgRect) return null;
   const { left = 0, right = 0, top = 0, bottom = 0 } = occlusion;
   const [minX, minY, maxX, maxY] = [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY];
@@ -158,7 +157,6 @@ export function getStableViewBoxUpdate(data, currentViewBox, margin = 0.1) {
  *                y = cy - h * (y_vc / H)
  */
 export function computeOcclusionAwareViewBox(bounds, container, occlusion = {}, margin = 0.1) {
-  console.log('computeOcclusionAwareViewBox called with bounds', { bounds, container, occlusion, margin });
   if (!bounds || !container) return null;
   const { width: W, height: H } = container;
   if (!(W > 0) || !(H > 0)) return null;
@@ -204,18 +202,18 @@ export function computeOcclusionAwareViewBox(bounds, container, occlusion = {}, 
  */
 export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform) {
   if (!newData.length || !viewBox || !transform || !previousBounds) return false;
-  
+
   const newBounds = boundsForData(newData);
-  
+
   // Check if new data extends beyond previous bounds
-  const hasExtended = 
-    newBounds.minX < previousBounds.minX || 
+  const hasExtended =
+    newBounds.minX < previousBounds.minX ||
     newBounds.maxX > previousBounds.maxX ||
-    newBounds.minY < previousBounds.minY || 
+    newBounds.minY < previousBounds.minY ||
     newBounds.maxY > previousBounds.maxY;
-  
+
   if (!hasExtended) return false;
-  
+
   // Calculate current visible area in data coordinates
   const [vbX, vbY, vbW, vbH] = viewBox;
   const k = transform.k;
@@ -223,12 +221,12 @@ export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, tra
   const visibleMaxX = (vbX + vbW - transform.x) / k;
   const visibleMinY = (vbY - transform.y) / k;
   const visibleMaxY = (vbY + vbH - transform.y) / k;
-  
+
   // Check if new content extends outside visible area
-  return newBounds.minX < visibleMinX || 
-         newBounds.maxX > visibleMaxX ||
-         newBounds.minY < visibleMinY || 
-         newBounds.maxY > visibleMaxY;
+  return newBounds.minX < visibleMinX ||
+    newBounds.maxX > visibleMaxX ||
+    newBounds.minY < visibleMinY ||
+    newBounds.maxY > visibleMaxY;
 }
 
 // --- Zoom extent helpers (absolute-extent management) ---
@@ -271,28 +269,28 @@ export function setAbsoluteExtent(handler, absExtent) {
  */
 export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occlusion, zoomExtent, fitMargin = 0.92) {
   if (!zoomHandler || !data.length || !viewBox || !svgRect || !zoomExtent) return false;
-  
+
   const currentExtent = zoomHandler.scaleExtent();
   const bounds = boundsForData(data);
-  
+
   // Use the EXACT same code path as auto-zoom: computeFitTransformToVisible
   const fitTransform = computeFitTransformToVisible(bounds, viewBox, svgRect, occlusion, fitMargin);
   if (!fitTransform) return false;
-  
+
   const baseScale = fitTransform.k;
   const requiredExtent = computeAbsoluteExtent(zoomExtent, baseScale);
-  
+
   // Only update if we need a more permissive extent (allow zooming out further)
   const hasNoExtent = !currentExtent || currentExtent[0] === 0 && currentExtent[1] === Infinity;
   const needsMorePermissive = requiredExtent[0] < currentExtent[0];
-  
+
   if (hasNoExtent || needsMorePermissive) {
     // Expand current extent to accommodate new data
     const newExtent = hasNoExtent ? requiredExtent : unionExtent(currentExtent, requiredExtent);
     setAbsoluteExtent(zoomHandler, newExtent);
     return true;
   }
-  
+
   return false;
 }
 
