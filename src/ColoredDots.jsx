@@ -22,6 +22,11 @@ const ColoredDots = React.memo((props) => {
   };
 
   const getSize = (item) => {
+    // Check if there's a custom size in dotStyles first
+    const customStyles = dotStyles.get(item.id);
+    if (customStyles && customStyles.r !== undefined) {
+      return customStyles.r;
+    }
     return item.size || defaultSize;
   };
 

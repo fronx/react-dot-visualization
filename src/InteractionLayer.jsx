@@ -19,6 +19,11 @@ const InteractionLayer = React.memo((props) => {
   const interactionLayerRef = useRef(null);
 
   const getSize = (item) => {
+    // Check if there's a custom size in dotStyles first
+    const customStyles = dotStyles.get(item.id);
+    if (customStyles && customStyles.r !== undefined) {
+      return customStyles.r;
+    }
     return item.size || defaultSize;
   };
 
@@ -63,18 +68,22 @@ const InteractionLayer = React.memo((props) => {
 
   // Apply custom styles to interaction layer dots
   useEffect(() => {
-    dotStyles.forEach((styles, itemId) => {
-      const elementId = dotId(1, { id: itemId });
+    data.forEach((item) => {
+      const elementId = dotId(1, item);
       const element = d3.select(`#${elementId}`);
+      
       if (!element.empty()) {
-        Object.entries(styles).forEach(([prop, value]) => {
-          if (prop === 'r' || prop === 'cx' || prop === 'cy') {
-            element.attr(prop, value);
-          }
-        });
+        // Always update position and size to stay in sync with colored dots
+        const { x, y } = getSyncedInteractionPosition(item, dotId);
+        const size = getSize(item);
+        
+        element
+          .attr('cx', x)
+          .attr('cy', y) 
+          .attr('r', size);
       }
     });
-  }, [dotStyles, dotId]);
+  }, [data, dotStyles, dotId]);
 
   // Set up D3 drag behavior for SVG circles
   useEffect(() => {
