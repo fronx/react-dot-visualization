@@ -220,29 +220,26 @@ export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, tra
   if (!newData.length || !viewBox || !transform || !previousBounds) return false;
 
   const newBounds = boundsForData(newData, dotSize);
+  
+  // Check if bounds have changed beyond a small tolerance (2%)
+  const tolerance = 0.02;
+  
+  const prevWidth = previousBounds.maxX - previousBounds.minX;
+  const prevHeight = previousBounds.maxY - previousBounds.minY;
+  const newWidth = newBounds.maxX - newBounds.minX;
+  const newHeight = newBounds.maxY - newBounds.minY;
+  
+  const widthChanged = Math.abs(newWidth - prevWidth) / prevWidth > tolerance;
+  const heightChanged = Math.abs(newHeight - prevHeight) / prevHeight > tolerance;
+  
+  const boundsChanged = 
+    Math.abs(newBounds.minX - previousBounds.minX) / prevWidth > tolerance ||
+    Math.abs(newBounds.maxX - previousBounds.maxX) / prevWidth > tolerance ||
+    Math.abs(newBounds.minY - previousBounds.minY) / prevHeight > tolerance ||
+    Math.abs(newBounds.maxY - previousBounds.maxY) / prevHeight > tolerance ||
+    widthChanged || heightChanged;
 
-  // Check if new data extends beyond previous bounds
-  const hasExtended =
-    newBounds.minX < previousBounds.minX ||
-    newBounds.maxX > previousBounds.maxX ||
-    newBounds.minY < previousBounds.minY ||
-    newBounds.maxY > previousBounds.maxY;
-
-  if (!hasExtended) return false;
-
-  // Calculate current visible area in data coordinates
-  const [vbX, vbY, vbW, vbH] = viewBox;
-  const k = transform.k;
-  const visibleMinX = (vbX - transform.x) / k;
-  const visibleMaxX = (vbX + vbW - transform.x) / k;
-  const visibleMinY = (vbY - transform.y) / k;
-  const visibleMaxY = (vbY + vbH - transform.y) / k;
-
-  // Check if new content extends outside visible area
-  return newBounds.minX < visibleMinX ||
-    newBounds.maxX > visibleMaxX ||
-    newBounds.minY < visibleMinY ||
-    newBounds.maxY > visibleMaxY;
+  return boundsChanged;
 }
 
 // --- Zoom extent helpers (absolute-extent management) ---

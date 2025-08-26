@@ -154,7 +154,7 @@ test('degenerate skinny data is still fully visible (dx ~ 0)', () => {
 
 // --- shouldAutoZoomToNewContent tests ----------------------------------------
 
-test('shouldAutoZoomToNewContent: no extension, should not auto-zoom', () => {
+test('shouldAutoZoomToNewContent: bounds changed significantly, should auto-zoom', () => {
   const newData = [
     { x: 10, y: 20 },
     { x: 30, y: 40 }
@@ -164,7 +164,7 @@ test('shouldAutoZoomToNewContent: no extension, should not auto-zoom', () => {
   const transform = { k: 1, x: 0, y: 0 };
   
   const result = shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform);
-  assert.strictEqual(result, false, 'should not auto-zoom when data stays within previous bounds');
+  assert.strictEqual(result, true, 'should auto-zoom when bounds have changed significantly');
 });
 
 test('shouldAutoZoomToNewContent: data extends beyond previous bounds but within visible area', () => {
@@ -177,7 +177,7 @@ test('shouldAutoZoomToNewContent: data extends beyond previous bounds but within
   const transform = { k: 1, x: 20, y: 20 }; // visible area is -20 to 80
   
   const result = shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform);
-  assert.strictEqual(result, false, 'should not auto-zoom when new data is still within visible area');
+  assert.strictEqual(result, true, 'should auto-zoom when bounds have changed');
 });
 
 test('shouldAutoZoomToNewContent: data extends beyond visible area', () => {
@@ -203,7 +203,7 @@ test('shouldAutoZoomToNewContent: data extends in multiple directions', () => {
   const transform = { k: 1, x: 25, y: 25 }; // visible area is -25 to 75
   
   const result = shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform);
-  assert.strictEqual(result, false, 'should not auto-zoom when extensions are still within visible bounds');
+  assert.strictEqual(result, true, 'should auto-zoom when bounds have changed significantly');
 });
 
 test('shouldAutoZoomToNewContent: handles edge cases', () => {
