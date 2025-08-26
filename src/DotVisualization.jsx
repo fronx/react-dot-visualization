@@ -559,6 +559,7 @@ const DotVisualization = forwardRef((props, ref) => {
             data={processedData}
             edgeOpacity={edgeOpacity}
             edgeColor={edgeColor}
+            strokeWidth={dotStroke}
           />
         )}
         <ColoredDots

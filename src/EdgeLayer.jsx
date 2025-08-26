@@ -1,4 +1,10 @@
-const EdgeLayer = ({ edges = [], data, edgeOpacity = 0.3, edgeColor = '#999' }) => {
+const EdgeLayer = ({
+  edges = [],
+  data,
+  edgeOpacity = 0.3,
+  edgeColor = '#999',
+  strokeWidth = 1
+}) => {
   // Create a map of node positions by ID for quick lookup
   const nodeMap = new Map();
   data.forEach(node => {
@@ -22,7 +28,7 @@ const EdgeLayer = ({ edges = [], data, edgeOpacity = 0.3, edgeColor = '#999' }) 
             y2={target.y}
             stroke={edgeColor}
             strokeOpacity={edge.strength * edge.strength * edgeOpacity}
-            strokeWidth={edge.strength * 0.5}
+            strokeWidth={edge.strength * strokeWidth}
           />
         );
       })}
