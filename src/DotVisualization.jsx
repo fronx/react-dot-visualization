@@ -385,7 +385,16 @@ const DotVisualization = forwardRef((props, ref) => {
       }
     };
 
+    // Add global blur event listener to clear hover states when window loses focus
+    const handleWindowBlur = () => {
+      setHoveredDotId(null);
+      if (onLeave) {
+        onLeave(null, null);
+      }
+    };
+
     document.addEventListener('mouseup', handleGlobalMouseUp);
+    window.addEventListener('blur', handleWindowBlur);
 
     setIsZoomSetupComplete(true);
 
@@ -394,6 +403,7 @@ const DotVisualization = forwardRef((props, ref) => {
         clearTimeout(wheelTimeoutRef.current);
       }
       document.removeEventListener('mouseup', handleGlobalMouseUp);
+      window.removeEventListener('blur', handleWindowBlur);
       setIsZoomSetupComplete(false);
     };
   }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox]);
@@ -466,9 +476,14 @@ const DotVisualization = forwardRef((props, ref) => {
   const handleMouseLeave = () => {
     setIsDragging(false);
     setIsWheelActive(false);
+    setHoveredDotId(null); // Clear hover state when mouse leaves container
     if (wheelTimeoutRef.current) {
       clearTimeout(wheelTimeoutRef.current);
       wheelTimeoutRef.current = null;
+    }
+    // Also call the original onLeave callback to notify parent
+    if (onLeave) {
+      onLeave(null, null);
     }
   };
 

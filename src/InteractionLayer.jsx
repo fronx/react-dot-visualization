@@ -202,7 +202,7 @@ const InteractionLayer = React.memo((props) => {
   }, [onDragStart, data, dotId, onClick]);
 
   return (
-    <g id="interaction-layer" ref={interactionLayerRef}>
+    <g id="interaction-layer" ref={interactionLayerRef} onMouseLeave={handleLayerMouseLeave}>
       <rect
         width="100%"
         height="100%"
