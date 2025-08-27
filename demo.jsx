@@ -11,6 +11,8 @@ const App = () => {
   const [autoZoomDuration, setAutoZoomDuration] = useState(200);
   const [dotSize, setDotSize] = useState(10);
   const [newDotSize, setNewDotSize] = useState(100);
+  const [hoverSizeEnabled, setHoverSizeEnabled] = useState(true);
+  const [hoverSizeMultiplier, setHoverSizeMultiplier] = useState(1.5);
   const containerRef = useRef(null);
 
   // Measure container size once
@@ -170,6 +172,31 @@ const App = () => {
           </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Hover Effects</div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input
+                type="checkbox"
+                checked={hoverSizeEnabled}
+                onChange={(e) => setHoverSizeEnabled(e.target.checked)}
+              />
+              Enable Hover Size
+            </label>
+
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Size Multiplier: {hoverSizeMultiplier}x</div>
+            <input
+              type="range"
+              value={hoverSizeMultiplier}
+              onChange={(e) => setHoverSizeMultiplier(Number(e.target.value))}
+              min="1.25"
+              max="3"
+              step="0.25"
+              style={{ width: '100%', marginBottom: '12px' }}
+              disabled={!hoverSizeEnabled}
+            />
+          </div>
+
+          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
             <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Auto-Zoom Settings</div>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
@@ -208,6 +235,8 @@ const App = () => {
           fitMargin={0.92}
           autoZoomToNewContent={autoZoomEnabled}
           autoZoomDuration={autoZoomDuration}
+          hoverSizeEnabled={hoverSizeEnabled}
+          hoverSizeMultiplier={hoverSizeMultiplier}
         />
       </div>
 

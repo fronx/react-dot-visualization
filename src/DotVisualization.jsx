@@ -52,6 +52,8 @@ const DotVisualization = forwardRef((props, ref) => {
     fitMargin = 0.9,
     autoZoomToNewContent = false,
     autoZoomDuration = 200,
+    hoverSizeEnabled = false,
+    hoverSizeMultiplier = 1.5,
     ...otherProps
   } = props;
 
@@ -60,9 +62,29 @@ const DotVisualization = forwardRef((props, ref) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isWheelActive, setIsWheelActive] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
+  const [hoveredDotId, setHoveredDotId] = useState(null);
 
   // Block hover when actively interacting
   const isZooming = isDragging || isWheelActive;
+
+  // Wrapper functions to track hovered dot for size effects
+  const handleDotHover = useCallback((item, event) => {
+    if (hoverSizeEnabled && item) {
+      setHoveredDotId(item.id);
+    }
+    if (onHover) {
+      onHover(item, event);
+    }
+  }, [hoverSizeEnabled, onHover]);
+
+  const handleDotLeave = useCallback((item, event) => {
+    if (hoverSizeEnabled) {
+      setHoveredDotId(null);
+    }
+    if (onLeave) {
+      onLeave(item, event);
+    }
+  }, [hoverSizeEnabled, onLeave]);
 
   const zoomRef = useRef(null);
   const contentRef = useRef(null);
@@ -556,6 +578,9 @@ const DotVisualization = forwardRef((props, ref) => {
           defaultColor={defaultColor}
           defaultSize={defaultSize}
           dotStyles={dotStyles}
+          hoveredDotId={hoveredDotId}
+          hoverSizeEnabled={hoverSizeEnabled}
+          hoverSizeMultiplier={hoverSizeMultiplier}
         />
         <ClusterLabels
           data={processedData}
@@ -569,14 +594,17 @@ const DotVisualization = forwardRef((props, ref) => {
         <InteractionLayer
           data={processedData}
           dotId={dotId}
-          onHover={onHover}
-          onLeave={onLeave}
+          onHover={handleDotHover}
+          onLeave={handleDotLeave}
           onClick={onClick}
           onBackgroundClick={onBackgroundClick}
           onDragStart={onDragStart}
           isZooming={isZooming}
           defaultSize={defaultSize}
           dotStyles={dotStyles}
+          hoveredDotId={hoveredDotId}
+          hoverSizeEnabled={hoverSizeEnabled}
+          hoverSizeMultiplier={hoverSizeMultiplier}
         />
       </g>
     </svg>

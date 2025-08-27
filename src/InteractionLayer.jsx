@@ -13,13 +13,20 @@ const InteractionLayer = React.memo((props) => {
     onDragStart,
     isZooming = false,
     defaultSize = 2,
-    dotStyles = new Map()
+    dotStyles = new Map(),
+    hoveredDotId = null,
+    hoverSizeEnabled = false,
+    hoverSizeMultiplier = 1.5
   } = props;
   
   const interactionLayerRef = useRef(null);
 
   const getSize = (item) => {
-    return getDotSize(item, dotStyles, defaultSize);
+    const baseSize = getDotSize(item, dotStyles, defaultSize);
+    if (hoverSizeEnabled && hoveredDotId === item.id) {
+      return baseSize * hoverSizeMultiplier;
+    }
+    return baseSize;
   };
 
   const handleMouseEnter = (e, item) => {
@@ -70,7 +77,7 @@ const InteractionLayer = React.memo((props) => {
       
       updateDotAttributes(item, elementId, position, size);
     });
-  }, [data, dotStyles, dotId]);
+  }, [data, dotStyles, dotId, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier]);
 
   // Set up D3 drag behavior for SVG circles
   useEffect(() => {

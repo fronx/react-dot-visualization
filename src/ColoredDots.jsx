@@ -10,7 +10,10 @@ const ColoredDots = React.memo((props) => {
     strokeWidth = 0.2,
     defaultColor = null,
     defaultSize = 2,
-    dotStyles = new Map()
+    dotStyles = new Map(),
+    hoveredDotId = null,
+    hoverSizeEnabled = false,
+    hoverSizeMultiplier = 1.5
   } = props;
   const getColor = (item, index) => {
     if (item.color) return item.color;
@@ -22,7 +25,11 @@ const ColoredDots = React.memo((props) => {
   };
 
   const getSize = (item) => {
-    return getDotSize(item, dotStyles, defaultSize);
+    const baseSize = getDotSize(item, dotStyles, defaultSize);
+    if (hoverSizeEnabled && hoveredDotId === item.id) {
+      return baseSize * hoverSizeMultiplier;
+    }
+    return baseSize;
   };
 
   useEffect(() => {
@@ -34,7 +41,7 @@ const ColoredDots = React.memo((props) => {
       
       updateColoredDotAttributes(item, elementId, position, size, color, stroke, strokeWidth, dotStyles);
     });
-  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize]);
+  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier]);
 
   return (
     <g id="colored-dots">
