@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedInteractionPosition, updateDotAttributes } from './dotUtils.js';
 
@@ -20,6 +20,11 @@ const InteractionLayer = React.memo((props) => {
   } = props;
   
   const interactionLayerRef = useRef(null);
+  const [dragState, setDragState] = useState(null);
+
+  // Constants for click vs drag detection
+  const DRAG_THRESHOLD = 5; // pixels
+  const CLICK_TIME_THRESHOLD = 300; // milliseconds
 
   const getSize = (item) => {
     const baseSize = getDotSize(item, dotStyles, defaultSize);
@@ -43,10 +48,52 @@ const InteractionLayer = React.memo((props) => {
     }
   };
 
-  const handleClick = (e, item) => {
-    if (onClick) {
+  const handleMouseDown = (e, item) => {
+    const startTime = Date.now();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    
+    setDragState({
+      item,
+      startTime,
+      startX,
+      startY,
+      hasMoved: false
+    });
+    
+    // Don't prevent default here - let the event bubble up for panning
+  };
+
+  const handleMouseMove = (e) => {
+    if (!dragState) return;
+    
+    const deltaX = Math.abs(e.clientX - dragState.startX);
+    const deltaY = Math.abs(e.clientY - dragState.startY);
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    
+    if (distance > DRAG_THRESHOLD) {
+      setDragState(prev => prev ? { ...prev, hasMoved: true } : null);
+    }
+  };
+
+  const handleMouseUp = (e, item) => {
+    if (!dragState) return;
+    
+    const timeDelta = Date.now() - dragState.startTime;
+    const deltaX = Math.abs(e.clientX - dragState.startX);
+    const deltaY = Math.abs(e.clientY - dragState.startY);
+    const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+    
+    // Consider it a click if:
+    // 1. Mouse didn't move much AND
+    // 2. Time was short (to distinguish from long press)
+    const isClick = distance <= DRAG_THRESHOLD && timeDelta <= CLICK_TIME_THRESHOLD;
+    
+    if (isClick && onClick && dragState.item.id === item.id) {
       onClick(item, e);
     }
+    
+    setDragState(null);
   };
 
   const handleBackgroundClick = (e) => {
@@ -78,6 +125,22 @@ const InteractionLayer = React.memo((props) => {
       updateDotAttributes(item, elementId, position, size);
     });
   }, [data, dotStyles, dotId, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier]);
+
+  // Global mouse event listeners for drag detection
+  useEffect(() => {
+    const handleGlobalMouseMove = (e) => handleMouseMove(e);
+    const handleGlobalMouseUp = () => setDragState(null);
+
+    if (dragState) {
+      document.addEventListener('mousemove', handleGlobalMouseMove);
+      document.addEventListener('mouseup', handleGlobalMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [dragState]);
 
   // Set up D3 drag behavior for SVG circles
   useEffect(() => {
@@ -222,7 +285,8 @@ const InteractionLayer = React.memo((props) => {
             cy={y}
             fill="transparent"
             style={{ cursor: onDragStart ? 'grab' : (onClick ? 'pointer' : 'default') }}
-            onClick={(e) => handleClick(e, item)}
+            onMouseDown={(e) => handleMouseDown(e, item)}
+            onMouseUp={(e) => handleMouseUp(e, item)}
             onMouseEnter={(e) => handleMouseEnter(e, item)}
             onMouseLeave={(e) => handleMouseLeave(e, item)}
           />
