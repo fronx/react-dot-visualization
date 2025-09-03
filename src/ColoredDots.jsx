@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
+import ImagePatterns from './ImagePatterns.jsx';
 
 const ColoredDots = React.memo((props) => {
   const {
@@ -13,7 +14,8 @@ const ColoredDots = React.memo((props) => {
     dotStyles = new Map(),
     hoveredDotId = null,
     hoverSizeEnabled = false,
-    hoverSizeMultiplier = 1.5
+    hoverSizeMultiplier = 1.5,
+    useImages = false
   } = props;
   const getColor = (item, index) => {
     if (item.color) return item.color;
@@ -22,6 +24,18 @@ const ColoredDots = React.memo((props) => {
     const colorScale = d3.scaleSequential(d3.interpolatePlasma)
       .domain([0, data.length - 1]);
     return colorScale(index);
+  };
+
+  const getFill = (item, index) => {
+    // Support both bitmap images (imageUrl) and SVG content (svgContent)
+    if (useImages && (item.imageUrl || item.svgContent)) {
+      const fillValue = `url(#image-pattern-${item.id})`;
+      console.log('Using pattern fill for item', item.id, ':', fillValue);
+      return fillValue;
+    }
+    const colorValue = getColor(item, index);
+    console.log('Using color fill for item', item.id, ':', colorValue);
+    return colorValue;
   };
 
   const getSize = (item) => {
@@ -37,14 +51,15 @@ const ColoredDots = React.memo((props) => {
       const elementId = dotId(0, item);
       const position = getSyncedPosition(item, elementId);
       const size = getSize(item);
-      const color = getColor(item, index);
+      const fill = getFill(item, index);
       
-      updateColoredDotAttributes(item, elementId, position, size, color, stroke, strokeWidth, dotStyles);
+      updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, dotStyles);
     });
-  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier]);
+  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier, useImages]);
 
   return (
     <g id="colored-dots">
+      <ImagePatterns data={data} useImages={useImages} />
       {data.map((item, index) => (
         <circle
           id={dotId(0, item)}
@@ -52,7 +67,7 @@ const ColoredDots = React.memo((props) => {
           r={getSize(item)}
           cx={item.x}
           cy={item.y}
-          fill={getColor(item, index)}
+          fill={getFill(item, index)}
           stroke={stroke}
           strokeWidth={strokeWidth}
         />

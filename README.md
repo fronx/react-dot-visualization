@@ -138,6 +138,7 @@ Test the interactions:
 | `dotStrokeWidth` | `Number` | `0.2` | Default stroke width for dots |
 | `defaultColor` | `String` | `null` | Default color for dots without color property |
 | `defaultSize` | `Number` | `2` | Default size for dots without size property |
+| `useImages` | `Boolean` | `false` | Enable image patterns inside dots (requires `imageUrl` or `svgContent` in data) |
 | `className` | `String` | `""` | CSS class name for the SVG element |
 | `style` | `Object` | `{}` | Inline styles for the SVG element |
 
@@ -152,8 +153,109 @@ Each data point should be an object with these properties:
   y: number,              // Required: Y coordinate
   size?: number,          // Optional: Dot radius
   color?: string,         // Optional: Fill color (CSS color value)
+  imageUrl?: string,      // Optional: URL to bitmap image (JPG, PNG, etc.)
+  svgContent?: string,    // Optional: Raw SVG content for pattern
   ...customData           // Optional: Any additional properties for your callbacks
 }
+```
+
+## Images in Dots
+
+You can display images inside the circular dots using two approaches:
+
+### Bitmap Images (Recommended for Photos/Album Covers)
+
+Use the `imageUrl` property to display bitmap images (JPG, PNG, etc.):
+
+```javascript
+const data = [
+  {
+    id: 1,
+    x: 100, y: 150,
+    imageUrl: "/path/to/album-cover.jpg"  // Local or remote image
+  },
+  {
+    id: 2, 
+    x: 200, y: 100,
+    imageUrl: "https://example.com/photo.png"  // Remote image
+  }
+];
+```
+
+### SVG Content (For Generated Graphics)
+
+Use the `svgContent` property to embed raw SVG:
+
+```javascript
+import * as jdenticon from 'jdenticon';
+
+const data = [
+  {
+    id: 1,
+    x: 100, y: 150,
+    svgContent: jdenticon.toSvg('user1', 64)  // Generated identicon
+  },
+  {
+    id: 2,
+    x: 200, y: 100, 
+    svgContent: '<svg xmlns="...">...</svg>'  // Custom SVG
+  }
+];
+```
+
+### Enabling Image Display
+
+To show images in dots, pass the `useImages` prop:
+
+```jsx
+<DotVisualization
+  data={data}
+  useImages={true}  // Enable image patterns
+  defaultSize={15}  // Larger dots show images better
+/>
+```
+
+### How It Works
+
+- **Automatic scaling**: Images automatically resize to match each dot's size (10px dot = 10px image, 50px dot = 50px image)
+- **Smart cropping**: Images are centered and cropped to fill the entire circle (like CSS `background-size: cover`)
+- **Aspect ratio preserved**: Images maintain their proportions while filling the circle completely
+- **Zoom responsive**: Images scale smoothly with zoom level - no pixelation or distortion
+- **Circular masking**: Images are automatically clipped to perfect circles
+- **Preserves all interactions**: Hover, click, zoom, collision detection all work normally  
+- **Fallback to colors**: Dots without images use normal color fills
+- **Performance optimized**: Uses SVG patterns for efficient rendering
+
+### Example: Album Cover Visualization
+
+```jsx
+const AlbumViz = () => {
+  const albums = [
+    { 
+      id: 'album1', 
+      x: 100, y: 100, 
+      imageUrl: '/covers/dark-side-moon.jpg',
+      title: 'Dark Side of the Moon',
+      artist: 'Pink Floyd'
+    },
+    { 
+      id: 'album2', 
+      x: 200, y: 150,
+      imageUrl: '/covers/abbey-road.jpg', 
+      title: 'Abbey Road',
+      artist: 'The Beatles'
+    }
+  ];
+
+  return (
+    <DotVisualization
+      data={albums}
+      useImages={true}
+      defaultSize={20}  // Larger dots for album covers
+      onHover={(album) => console.log(`${album.title} by ${album.artist}`)}
+    />
+  );
+};
 ```
 
 ## Advanced Usage

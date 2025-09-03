@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
+import * as jdenticon from 'jdenticon';
 import DotVisualization from './src/DotVisualization.jsx';
 
 const App = () => {
@@ -13,6 +14,9 @@ const App = () => {
   const [newDotSize, setNewDotSize] = useState(100);
   const [hoverSizeEnabled, setHoverSizeEnabled] = useState(true);
   const [hoverSizeMultiplier, setHoverSizeMultiplier] = useState(1.5);
+  const [useImages, setUseImages] = useState(false);
+  const [patternType, setPatternType] = useState('normal');
+  const [imageMode, setImageMode] = useState('identicons'); // 'identicons' or 'bitmaps'
   const containerRef = useRef(null);
 
   // Measure container size once
@@ -22,6 +26,28 @@ const App = () => {
       setContainerSize({ width: rect.width, height: rect.height });
     }
   }, []);
+
+  // Generate identicon SVG content directly (not as data URI)
+  const generateSvgContent = (dotId) => {
+    const size = patternType === 'large' ? 64 : 32;
+    return jdenticon.toSvg(`dot-${dotId}`, size);
+  };
+
+  // Sample bitmap image URLs for demo (in real apps, these would be actual album covers)
+  const sampleBitmapUrls = [
+    'https://picsum.photos/64/64?random=1',
+    'https://picsum.photos/64/64?random=2', 
+    'https://picsum.photos/64/64?random=3',
+    'https://picsum.photos/64/64?random=4',
+    'https://picsum.photos/64/64?random=5',
+    'https://picsum.photos/64/64?random=6',
+    'https://picsum.photos/64/64?random=7',
+    'https://picsum.photos/64/64?random=8'
+  ];
+
+  const generateBitmapUrl = (dotId) => {
+    return sampleBitmapUrls[dotId % sampleBitmapUrls.length];
+  };
 
   // Generate random data that fills the actual container
   const [data, setData] = useState([]);
@@ -37,10 +63,13 @@ const App = () => {
         name: `Point ${i}`,
         value: Math.round(Math.random() * 100),
         // Add individual sizes to some dots for testing
-        size: i < 10 ? Math.random() * 20 + 5 : undefined // first 10 dots have random individual sizes
+        size: i < 10 ? Math.random() * 20 + 5 : undefined, // first 10 dots have random individual sizes
+        // Add both SVG content and bitmap URL based on mode
+        svgContent: imageMode === 'identicons' ? generateSvgContent(i) : undefined,
+        imageUrl: imageMode === 'bitmaps' ? generateBitmapUrl(i) : undefined
       })));
     }
-  }, [containerSize]);
+  }, [containerSize, patternType, imageMode]);
 
   const handleClick = (item) => {
     setClickedDot(item);
@@ -97,7 +126,10 @@ const App = () => {
         color: '#666', // Gray color
         name: `Added Point ${id}`,
         value: Math.round(Math.random() * 100),
-        size: newDotSize // Use the controlled new dot size
+        size: newDotSize, // Use the controlled new dot size
+        // Generate both types for new dots based on mode
+        svgContent: imageMode === 'identicons' ? generateSvgContent(id) : undefined,
+        imageUrl: imageMode === 'bitmaps' ? generateBitmapUrl(id) : undefined
       };
     });
 
@@ -111,6 +143,7 @@ const App = () => {
 
       <div className="instructions">
         <strong>🎯 Try the new features!</strong><br />
+        • <strong>Images in Dots:</strong> Toggle "Show Images in Dots" and choose between generated identicons or sample photos<br />
         • <strong>Click a dot:</strong> Desaturates all other dots<br />
         • <strong>Click background:</strong> Resets all styles to original colors<br />
         • <strong>Zoom:</strong> Ctrl/Cmd + mouse wheel (or trackpad pinch)<br />
@@ -172,7 +205,38 @@ const App = () => {
           </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Hover Effects</div>
+            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Visual Settings</div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input
+                type="checkbox"
+                checked={useImages}
+                onChange={(e) => setUseImages(e.target.checked)}
+              />
+              Show Images in Dots
+            </label>
+
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Image Type:</div>
+            <select 
+              value={imageMode} 
+              onChange={(e) => setImageMode(e.target.value)}
+              style={{ width: '100%', padding: '4px', fontSize: '11px', marginBottom: '8px' }}
+              disabled={!useImages}
+            >
+              <option value="identicons">Generated Identicons</option>
+              <option value="bitmaps">Sample Photos</option>
+            </select>
+
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Identicon Size:</div>
+            <select 
+              value={patternType} 
+              onChange={(e) => setPatternType(e.target.value)}
+              style={{ width: '100%', padding: '4px', fontSize: '11px', marginBottom: '8px' }}
+              disabled={!useImages || imageMode !== 'identicons'}
+            >
+              <option value="normal">Normal Size (32px)</option>
+              <option value="large">Large Size (64px)</option>
+            </select>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
               <input
@@ -237,6 +301,7 @@ const App = () => {
           autoZoomDuration={autoZoomDuration}
           hoverSizeEnabled={hoverSizeEnabled}
           hoverSizeMultiplier={hoverSizeMultiplier}
+          useImages={useImages}
         />
       </div>
 
