@@ -388,6 +388,12 @@ const DotVisualization = forwardRef((props, ref) => {
     // Add global blur event listener to clear hover states when window loses focus
     const handleWindowBlur = () => {
       setHoveredDotId(null);
+      setIsDragging(false);
+      setIsWheelActive(false);
+      if (wheelTimeoutRef.current) {
+        clearTimeout(wheelTimeoutRef.current);
+        wheelTimeoutRef.current = null;
+      }
       if (onLeave) {
         onLeave(null, null);
       }
