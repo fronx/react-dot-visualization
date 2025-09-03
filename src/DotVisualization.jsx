@@ -60,12 +60,11 @@ const DotVisualization = forwardRef((props, ref) => {
   const [processedData, setProcessedData] = useState([]);
   const [viewBox, setViewBox] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [isWheelActive, setIsWheelActive] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
   const [hoveredDotId, setHoveredDotId] = useState(null);
 
-  // Block hover when actively interacting
-  const isZooming = isDragging || isWheelActive;
+  // Block hover only when dragging (not during wheel zoom)
+  const isZooming = isDragging;
 
   // Wrapper functions to track hovered dot for size effects
   const handleDotHover = useCallback((item, event) => {
@@ -91,13 +90,10 @@ const DotVisualization = forwardRef((props, ref) => {
   const transform = useRef(null);
   const zoomHandler = useRef(null);
   const baseScaleRef = useRef(null);
-  const wheelTimeoutRef = useRef(null);
   const isDraggingRef = useRef(false);
-  const isWheelActiveRef = useRef(false);
   
   // Keep refs in sync with state for use in closures
   isDraggingRef.current = isDragging;
-  isWheelActiveRef.current = isWheelActive;
   
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
@@ -352,34 +348,12 @@ const DotVisualization = forwardRef((props, ref) => {
       if (onZoomEnd) onZoomEnd(event);
     };
 
-    const handleWheel = () => {
-      console.log('🔍 Setting isWheelActive to true');
-      setIsWheelActive(true);
-
-      // Clear existing timeout
-      if (wheelTimeoutRef.current) {
-        clearTimeout(wheelTimeoutRef.current);
-        wheelTimeoutRef.current = null;
-      }
-
-      // Set a short debounce for wheel events
-      wheelTimeoutRef.current = setTimeout(() => {
-        console.log('🔍 Setting isWheelActive to false (timeout)');
-        setIsWheelActive(false);
-        wheelTimeoutRef.current = null;
-      }, 100);
-    };
 
 
     zoomHandler.current
       .on("start", handleDragStart)
       .on("end", handleDragEnd)
       .on("zoom", (event) => {
-        // Track wheel activity when zooming via wheel
-        if (event.sourceEvent && event.sourceEvent.type === 'wheel') {
-          handleWheel();
-        }
-        
         transform.current = event.transform;
         if (contentRef.current) {
           contentRef.current.setAttribute("transform", transform.current.toString());
@@ -402,11 +376,6 @@ const DotVisualization = forwardRef((props, ref) => {
       console.log('🔍 Window blur - resetting all states');
       setHoveredDotId(null);
       setIsDragging(false);
-      setIsWheelActive(false);
-      if (wheelTimeoutRef.current) {
-        clearTimeout(wheelTimeoutRef.current);
-        wheelTimeoutRef.current = null;
-      }
       if (onLeave) {
         onLeave(null, null);
       }
@@ -418,9 +387,6 @@ const DotVisualization = forwardRef((props, ref) => {
     setIsZoomSetupComplete(true);
 
     return () => {
-      if (wheelTimeoutRef.current) {
-        clearTimeout(wheelTimeoutRef.current);
-      }
       document.removeEventListener('mouseup', handleGlobalMouseUp);
       window.removeEventListener('blur', handleWindowBlur);
       setIsZoomSetupComplete(false);
@@ -495,12 +461,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const handleMouseLeave = () => {
     console.log('🔍 Mouse leave - resetting interaction states');
     setIsDragging(false);
-    setIsWheelActive(false);
     setHoveredDotId(null); // Clear hover state when mouse leaves container
-    if (wheelTimeoutRef.current) {
-      clearTimeout(wheelTimeoutRef.current);
-      wheelTimeoutRef.current = null;
-    }
     // Also call the original onLeave callback to notify parent
     if (onLeave) {
       onLeave(null, null);
