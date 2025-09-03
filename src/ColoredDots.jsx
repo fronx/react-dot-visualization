@@ -29,13 +29,9 @@ const ColoredDots = React.memo((props) => {
   const getFill = (item, index) => {
     // Support both bitmap images (imageUrl) and SVG content (svgContent)
     if (useImages && (item.imageUrl || item.svgContent)) {
-      const fillValue = `url(#image-pattern-${item.id})`;
-      console.log('Using pattern fill for item', item.id, ':', fillValue);
-      return fillValue;
+      return `url(#image-pattern-${item.id})`;
     }
-    const colorValue = getColor(item, index);
-    console.log('Using color fill for item', item.id, ':', colorValue);
-    return colorValue;
+    return getColor(item, index);
   };
 
   const getSize = (item) => {

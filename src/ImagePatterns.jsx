@@ -4,8 +4,6 @@ const ImagePatterns = ({ data, useImages }) => {
   if (!useImages) return null;
 
   const renderSvgPattern = (item) => {
-    console.log('Creating SVG pattern for item', item.id, 'with svgContent length:', item.svgContent?.length);
-    
     const parser = new DOMParser();
     const svgDoc = parser.parseFromString(item.svgContent, 'image/svg+xml');
     const svgElement = svgDoc.querySelector('svg');
@@ -27,8 +25,6 @@ const ImagePatterns = ({ data, useImages }) => {
   };
 
   const renderBitmapPattern = (item) => {
-    console.log('Creating bitmap pattern for item', item.id, 'with imageUrl:', item.imageUrl);
-    
     return (
       <pattern
         key={`pattern-${item.id}`}
