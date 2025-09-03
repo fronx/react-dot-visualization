@@ -92,6 +92,13 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomHandler = useRef(null);
   const baseScaleRef = useRef(null);
   const wheelTimeoutRef = useRef(null);
+  const isDraggingRef = useRef(false);
+  const isWheelActiveRef = useRef(false);
+  
+  // Keep refs in sync with state for use in closures
+  isDraggingRef.current = isDragging;
+  isWheelActiveRef.current = isWheelActive;
+  
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
   const previousDataRef = useRef([]);
@@ -334,16 +341,19 @@ const DotVisualization = forwardRef((props, ref) => {
     }
 
     const handleDragStart = (event) => {
+      console.log('🔍 Setting isDragging to true');
       setIsDragging(true);
       if (onZoomStart) onZoomStart(event);
     };
 
     const handleDragEnd = (event) => {
+      console.log('🔍 Setting isDragging to false');
       setIsDragging(false);
       if (onZoomEnd) onZoomEnd(event);
     };
 
     const handleWheel = () => {
+      console.log('🔍 Setting isWheelActive to true');
       setIsWheelActive(true);
 
       // Clear existing timeout
@@ -354,6 +364,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
       // Set a short debounce for wheel events
       wheelTimeoutRef.current = setTimeout(() => {
+        console.log('🔍 Setting isWheelActive to false (timeout)');
         setIsWheelActive(false);
         wheelTimeoutRef.current = null;
       }, 100);
@@ -380,13 +391,15 @@ const DotVisualization = forwardRef((props, ref) => {
 
     // Add global mouseup listener to ensure drag state is always cleared
     const handleGlobalMouseUp = () => {
-      if (isDragging) {
+      if (isDraggingRef.current) {
+        console.log('🔍 Setting isDragging to false (global mouseup)');
         setIsDragging(false);
       }
     };
 
     // Add global blur event listener to clear hover states when window loses focus
     const handleWindowBlur = () => {
+      console.log('🔍 Window blur - resetting all states');
       setHoveredDotId(null);
       setIsDragging(false);
       setIsWheelActive(false);
@@ -480,6 +493,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Handle mouse leave to reset interaction states
   const handleMouseLeave = () => {
+    console.log('🔍 Mouse leave - resetting interaction states');
     setIsDragging(false);
     setIsWheelActive(false);
     setHoveredDotId(null); // Clear hover state when mouse leaves container
