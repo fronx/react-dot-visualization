@@ -147,6 +147,7 @@ const InteractionLayer = React.memo((props) => {
     if (!onDragStart || !interactionLayerRef.current) return;
 
     const drag = d3.drag()
+      .clickDistance(DRAG_THRESHOLD) // Only consider it a drag if moved more than threshold
       .on('start', function(event, d) {
         console.log('🔴 D3 drag start', d);
         
@@ -285,8 +286,9 @@ const InteractionLayer = React.memo((props) => {
             cy={y}
             fill="transparent"
             style={{ cursor: onDragStart ? 'grab' : (onClick ? 'pointer' : 'default') }}
-            onMouseDown={(e) => handleMouseDown(e, item)}
-            onMouseUp={(e) => handleMouseUp(e, item)}
+            onClick={!onDragStart && onClick ? (e) => onClick(item, e) : undefined}
+            onMouseDown={onDragStart ? (e) => handleMouseDown(e, item) : undefined}
+            onMouseUp={onDragStart ? (e) => handleMouseUp(e, item) : undefined}
             onMouseEnter={(e) => handleMouseEnter(e, item)}
             onMouseLeave={(e) => handleMouseLeave(e, item)}
           />
