@@ -556,6 +556,14 @@ const DotVisualization = forwardRef((props, ref) => {
       onMouseLeave={handleMouseLeave}
       {...otherProps}
     >
+      {/* Background click area - outside transformed group so it always covers full SVG */}
+      <rect
+        width="100%"
+        height="100%"
+        fill="transparent"
+        onClick={onBackgroundClick}
+        style={{ pointerEvents: 'fill' }}
+      />
       <g ref={contentRef}>
         {(edges && edges.length > 0) && (
           <EdgeLayer
@@ -593,7 +601,7 @@ const DotVisualization = forwardRef((props, ref) => {
           onHover={handleDotHover}
           onLeave={handleDotLeave}
           onClick={onClick}
-          onBackgroundClick={onBackgroundClick}
+          onBackgroundClick={null}
           onDragStart={onDragStart}
           isZooming={isZooming}
           defaultSize={defaultSize}

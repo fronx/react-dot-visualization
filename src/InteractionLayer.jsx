@@ -267,12 +267,7 @@ const InteractionLayer = React.memo((props) => {
 
   return (
     <g id="interaction-layer" ref={interactionLayerRef} onMouseLeave={handleLayerMouseLeave}>
-      <rect
-        width="100%"
-        height="100%"
-        fill="transparent"
-        onClick={handleBackgroundClick}
-      />
+      {/* Background rect moved to DotVisualization root to avoid zoom transform issues */}
       {data.map((item) => {
         // Get synchronized position to match ColoredDots
         const { x, y } = getSyncedInteractionPosition(item, dotId);
