@@ -30,6 +30,7 @@ const ImagePatterns = ({ data, useImages }) => {
         key={`pattern-${item.id}`}
         id={`image-pattern-${item.id}`}
         patternUnits="objectBoundingBox"
+        patternContentUnits="objectBoundingBox"
         width="1"
         height="1"
       >
@@ -37,9 +38,9 @@ const ImagePatterns = ({ data, useImages }) => {
           href={item.imageUrl}
           x="0"
           y="0"
-          width="100%"
-          height="100%"
-          preserveAspectRatio="xMidYMid slice"
+          width="1"
+          height="1"
+          preserveAspectRatio="xMidYMid meet"
         />
       </pattern>
     );
