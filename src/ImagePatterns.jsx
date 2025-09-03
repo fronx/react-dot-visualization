@@ -1,6 +1,6 @@
 import React from 'react';
 
-const ImagePatterns = ({ data, useImages }) => {
+const ImagePatterns = ({ data, useImages, imageProvider, hoverImageProvider }) => {
   if (!useImages) return null;
 
   const renderSvgPattern = (item) => {
@@ -24,18 +24,18 @@ const ImagePatterns = ({ data, useImages }) => {
     );
   };
 
-  const renderBitmapPattern = (item) => {
+  const renderBitmapPattern = (item, imageUrl, patternId) => {
     return (
       <pattern
-        key={`pattern-${item.id}`}
-        id={`image-pattern-${item.id}`}
+        key={patternId}
+        id={patternId}
         patternUnits="objectBoundingBox"
         patternContentUnits="objectBoundingBox"
         width="1"
         height="1"
       >
         <image
-          href={item.imageUrl}
+          href={imageUrl}
           x="0"
           y="0"
           width="1"
@@ -49,14 +49,32 @@ const ImagePatterns = ({ data, useImages }) => {
   return (
     <defs>
       {data
-        .filter(item => item.svgContent || item.imageUrl)
-        .map((item) => {
+        .filter(item => {
+          // Check if item has SVG content or if any provider has an image for this item
+          const providerImageUrl = imageProvider ? imageProvider(item.id) : undefined;
+          const hoverProviderImageUrl = hoverImageProvider ? hoverImageProvider(item.id) : undefined;
+          return item.svgContent || item.imageUrl || providerImageUrl || hoverProviderImageUrl;
+        })
+        .flatMap((item) => {
+          const patterns = [];
+          
           if (item.svgContent) {
-            return renderSvgPattern(item);
-          } else if (item.imageUrl) {
-            return renderBitmapPattern(item);
+            patterns.push(renderSvgPattern(item));
+          } else {
+            // Regular image pattern
+            const imageUrl = imageProvider ? imageProvider(item.id) : item.imageUrl;
+            if (imageUrl) {
+              patterns.push(renderBitmapPattern(item, imageUrl, `image-pattern-${item.id}`));
+            }
+            
+            // Hover image pattern (if different from regular image)
+            const hoverImageUrl = hoverImageProvider ? hoverImageProvider(item.id) : undefined;
+            if (hoverImageUrl && hoverImageUrl !== imageUrl) {
+              patterns.push(renderBitmapPattern(item, hoverImageUrl, `image-pattern-hover-${item.id}`));
+            }
           }
-          return null;
+          
+          return patterns.filter(Boolean);
         })}
     </defs>
   );

@@ -41,6 +41,8 @@ const DotVisualization = forwardRef((props, ref) => {
     defaultSize = 2,
     dotStyles = new Map(),
     useImages = false,
+    imageProvider,
+    hoverImageProvider,
     edgeOpacity = 0.3,
     edgeColor = "#999",
     className = "",
@@ -584,6 +586,8 @@ const DotVisualization = forwardRef((props, ref) => {
           hoverSizeEnabled={hoverSizeEnabled}
           hoverSizeMultiplier={hoverSizeMultiplier}
           useImages={useImages}
+          imageProvider={imageProvider}
+          hoverImageProvider={hoverImageProvider}
         />
         <ClusterLabels
           data={processedData}

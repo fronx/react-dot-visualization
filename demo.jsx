@@ -17,7 +17,12 @@ const App = () => {
   const [useImages, setUseImages] = useState(false);
   const [patternType, setPatternType] = useState('normal');
   const [imageMode, setImageMode] = useState('identicons'); // 'identicons' or 'bitmaps'
+  const [showHoverImages, setShowHoverImages] = useState(false); // Show hover image switching
   const containerRef = useRef(null);
+  
+  // Cache for image providers
+  const [imageCache, setImageCache] = useState(new Map());
+  const [hoverImageCache, setHoverImageCache] = useState(new Map());
 
   // Measure container size once
   useEffect(() => {
@@ -55,7 +60,7 @@ const App = () => {
 
   useEffect(() => {
     if (containerSize.width > 0) {
-      setData(Array.from({ length: 150 }, (_, i) => ({
+      const newData = Array.from({ length: 150 }, (_, i) => ({
         id: i,
         x: Math.random() * containerSize.width,
         y: Math.random() * containerSize.height,
@@ -64,12 +69,38 @@ const App = () => {
         value: Math.round(Math.random() * 100),
         // Add individual sizes to some dots for testing
         size: i < 10 ? Math.random() * 20 + 5 : undefined, // first 10 dots have random individual sizes
-        // Add both SVG content and bitmap URL based on mode
-        svgContent: imageMode === 'identicons' ? generateSvgContent(i) : undefined,
-        imageUrl: imageMode === 'bitmaps' ? generateBitmapUrl(i) : undefined
-      })));
+      }));
+      
+      setData(newData);
+      
+      // Preload images into cache based on current mode
+      const newImageCache = new Map();
+      const newHoverCache = new Map();
+      
+      newData.forEach(item => {
+        if (imageMode === 'identicons') {
+          // For identicons, we can generate them synchronously
+          newImageCache.set(item.id, `data:image/svg+xml,${encodeURIComponent(generateSvgContent(item.id))}`);
+          if (showHoverImages) {
+            // Use larger identicon for hover
+            const hoverSize = patternType === 'large' ? 128 : 64;
+            const hoverSvg = jdenticon.toSvg(`dot-${item.id}`, hoverSize);
+            newHoverCache.set(item.id, `data:image/svg+xml,${encodeURIComponent(hoverSvg)}`);
+          }
+        } else if (imageMode === 'bitmaps') {
+          // For bitmaps, use sample URLs
+          newImageCache.set(item.id, generateBitmapUrl(item.id));
+          if (showHoverImages) {
+            // Use higher resolution for hover
+            newHoverCache.set(item.id, sampleBitmapUrls[item.id % sampleBitmapUrls.length].replace('64/64', '128/128'));
+          }
+        }
+      });
+      
+      setImageCache(newImageCache);
+      setHoverImageCache(newHoverCache);
     }
-  }, [containerSize, patternType, imageMode]);
+  }, [containerSize, patternType, imageMode, showHoverImages]);
 
   const handleClick = (item) => {
     setClickedDot(item);
@@ -126,31 +157,62 @@ const App = () => {
         color: '#666', // Gray color
         name: `Added Point ${id}`,
         value: Math.round(Math.random() * 100),
-        size: newDotSize, // Use the controlled new dot size
-        // Generate both types for new dots based on mode
-        svgContent: imageMode === 'identicons' ? generateSvgContent(id) : undefined,
-        imageUrl: imageMode === 'bitmaps' ? generateBitmapUrl(id) : undefined
+        size: newDotSize // Use the controlled new dot size
       };
     });
 
     setData(prevData => [...prevData, ...newDots]);
+    
+    // Update image caches for new dots
+    setImageCache(prevCache => {
+      const newCache = new Map(prevCache);
+      newDots.forEach(dot => {
+        if (imageMode === 'identicons') {
+          newCache.set(dot.id, `data:image/svg+xml,${encodeURIComponent(generateSvgContent(dot.id))}`);
+        } else if (imageMode === 'bitmaps') {
+          newCache.set(dot.id, generateBitmapUrl(dot.id));
+        }
+      });
+      return newCache;
+    });
+    
+    if (showHoverImages) {
+      setHoverImageCache(prevCache => {
+        const newCache = new Map(prevCache);
+        newDots.forEach(dot => {
+          if (imageMode === 'identicons') {
+            const hoverSize = patternType === 'large' ? 128 : 64;
+            const hoverSvg = jdenticon.toSvg(`dot-${dot.id}`, hoverSize);
+            newCache.set(dot.id, `data:image/svg+xml,${encodeURIComponent(hoverSvg)}`);
+          } else if (imageMode === 'bitmaps') {
+            newCache.set(dot.id, sampleBitmapUrls[dot.id % sampleBitmapUrls.length].replace('64/64', '128/128'));
+          }
+        });
+        return newCache;
+      });
+    }
+    
     console.log('Added 7 new dots outside current bounds');
   };
+
+  // Image provider functions
+  const imageProvider = (id) => imageCache.get(id);
+  const hoverImageProvider = showHoverImages ? (id) => hoverImageCache.get(id) : undefined;
 
   return (
     <div className="demo">
       <h1>React Dot Visualization Demo</h1>
 
       <div className="instructions">
-        <strong>🎯 Try the new features!</strong><br />
-        • <strong>Images in Dots:</strong> Toggle "Show Images in Dots" and choose between generated identicons or sample photos<br />
+        <strong>🎯 Try the new ImageProvider features!</strong><br />
+        • <strong>Performance-Optimized Images:</strong> Images are loaded once via providers, not on every position update<br />
+        • <strong>Image Types:</strong> Choose between generated identicons or sample photos<br />
+        • <strong>Hover Image Switching:</strong> Enable to show different/higher resolution images on hover<br />
         • <strong>Click a dot:</strong> Desaturates all other dots<br />
         • <strong>Click background:</strong> Resets all styles to original colors<br />
         • <strong>Zoom:</strong> Ctrl/Cmd + mouse wheel (or trackpad pinch)<br />
         • <strong>Pan:</strong> Mouse wheel or trackpad scroll<br />
-        • <strong>Hover:</strong> Move mouse over dots<br />
-        • <strong>Add Dots:</strong> Use the button in the left panel. Set "New Dots Size" slider first (auto-zoom will trigger if enabled)<br />
-        • <strong>Dot Sizes:</strong> "Default Size" affects dots without individual sizes. "New Dots Size" controls size of added dots
+        • <strong>Add Dots:</strong> Use the button in the left panel (images are automatically cached for new dots)
       </div>
 
       <div className="viz" ref={containerRef} style={{ position: 'relative', width: '100%', height: '60vh' }}>
@@ -214,6 +276,16 @@ const App = () => {
                 onChange={(e) => setUseImages(e.target.checked)}
               />
               Show Images in Dots
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input
+                type="checkbox"
+                checked={showHoverImages}
+                onChange={(e) => setShowHoverImages(e.target.checked)}
+                disabled={!useImages}
+              />
+              Hover Image Switching
             </label>
 
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>Image Type:</div>
@@ -302,6 +374,8 @@ const App = () => {
           hoverSizeEnabled={hoverSizeEnabled}
           hoverSizeMultiplier={hoverSizeMultiplier}
           useImages={useImages}
+          imageProvider={imageProvider}
+          hoverImageProvider={hoverImageProvider}
         />
       </div>
 

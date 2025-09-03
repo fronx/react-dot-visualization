@@ -15,7 +15,9 @@ const ColoredDots = React.memo((props) => {
     hoveredDotId = null,
     hoverSizeEnabled = false,
     hoverSizeMultiplier = 1.5,
-    useImages = false
+    useImages = false,
+    imageProvider,
+    hoverImageProvider
   } = props;
   const getColor = (item, index) => {
     if (item.color) return item.color;
@@ -27,9 +29,20 @@ const ColoredDots = React.memo((props) => {
   };
 
   const getFill = (item, index) => {
-    // Support both bitmap images (imageUrl) and SVG content (svgContent)
-    if (useImages && (item.imageUrl || item.svgContent)) {
-      return `url(#image-pattern-${item.id})`;
+    if (useImages) {
+      // Check if we should show hover image (if hoverImageProvider is available and item is hovered)
+      const shouldUseHoverImage = hoverImageProvider && hoveredDotId === item.id;
+      const hoverImageUrl = shouldUseHoverImage ? hoverImageProvider(item.id) : undefined;
+      const regularImageUrl = imageProvider ? imageProvider(item.id) : item.imageUrl;
+      
+      // Determine which pattern to use
+      if (shouldUseHoverImage && hoverImageUrl && hoverImageUrl !== regularImageUrl) {
+        // Use hover pattern if it exists and is different from regular image
+        return `url(#image-pattern-hover-${item.id})`;
+      } else if (regularImageUrl || item.svgContent) {
+        // Use regular pattern
+        return `url(#image-pattern-${item.id})`;
+      }
     }
     return getColor(item, index);
   };
@@ -51,11 +64,16 @@ const ColoredDots = React.memo((props) => {
       
       updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, dotStyles);
     });
-  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier, useImages]);
+  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier, useImages, imageProvider, hoverImageProvider]);
 
   return (
     <g id="colored-dots">
-      <ImagePatterns data={data} useImages={useImages} />
+      <ImagePatterns 
+        data={data} 
+        useImages={useImages} 
+        imageProvider={imageProvider}
+        hoverImageProvider={hoverImageProvider}
+      />
       {data.map((item, index) => (
         <circle
           id={dotId(0, item)}

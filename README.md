@@ -139,6 +139,8 @@ Test the interactions:
 | `defaultColor` | `String` | `null` | Default color for dots without color property |
 | `defaultSize` | `Number` | `2` | Default size for dots without size property |
 | `useImages` | `Boolean` | `false` | Enable image patterns inside dots (requires `imageUrl` or `svgContent` in data) |
+| `imageProvider` | `Function` | - | Function to provide image URLs: `(id) => string \| undefined` |
+| `hoverImageProvider` | `Function` | - | Function to provide hover image URLs: `(id) => string \| undefined` |
 | `className` | `String` | `""` | CSS class name for the SVG element |
 | `style` | `Object` | `{}` | Inline styles for the SVG element |
 
@@ -257,6 +259,169 @@ const AlbumViz = () => {
   );
 };
 ```
+
+## Performance-Optimized Image Loading
+
+For better performance with large datasets or when images need to be loaded asynchronously, use the `imageProvider` and `hoverImageProvider` props instead of adding `imageUrl` to each data point.
+
+### Why Use Image Providers?
+
+The traditional approach of adding `imageUrl` to data objects causes performance issues:
+- ❌ Images are re-fetched every time positions update
+- ❌ Expensive async operations on every render
+- ❌ SVG patterns are recreated unnecessarily
+- ❌ Poor performance during animations and interactions
+
+Image providers solve this by separating image loading from position updates:
+- ✅ Images are loaded once and cached by the parent component
+- ✅ Position updates become pure mathematical operations
+- ✅ SVG patterns are created once and reused
+- ✅ Smooth animations without blocking async calls
+
+### Basic Image Provider Usage
+
+```jsx
+import { DotVisualization } from 'react-dot-visualization';
+
+const MusicVisualization = () => {
+  const tracks = [
+    { id: 'track1', x: 100, y: 150, title: 'Song One' },
+    { id: 'track2', x: 200, y: 100, title: 'Song Two' }
+  ];
+
+  // Cache images in parent component
+  const [artworkCache, setArtworkCache] = useState(new Map());
+
+  // Preload images when tracks change
+  useEffect(() => {
+    const loadArtwork = async () => {
+      const cache = new Map();
+      for (const track of tracks) {
+        try {
+          const imageUrl = await fetchArtworkForTrack(track.id);
+          cache.set(track.id, imageUrl);
+        } catch (error) {
+          // Handle missing artwork gracefully
+          cache.set(track.id, undefined);
+        }
+      }
+      setArtworkCache(cache);
+    };
+    
+    loadArtwork();
+  }, [tracks]);
+
+  // Simple image provider function
+  const imageProvider = (id) => artworkCache.get(id);
+
+  return (
+    <DotVisualization
+      data={tracks}
+      useImages={true}
+      imageProvider={imageProvider}
+      defaultSize={20}
+    />
+  );
+};
+```
+
+### Hover Image Switching
+
+Use `hoverImageProvider` to show different images on hover (e.g., high-resolution versions):
+
+```jsx
+const ImageVisualization = () => {
+  const [thumbnailCache, setThumbnailCache] = useState(new Map());
+  const [fullSizeCache, setFullSizeCache] = useState(new Map());
+
+  const imageProvider = (id) => thumbnailCache.get(id);
+  const hoverImageProvider = (id) => fullSizeCache.get(id);
+
+  return (
+    <DotVisualization
+      data={data}
+      useImages={true}
+      imageProvider={imageProvider}
+      hoverImageProvider={hoverImageProvider}
+      hoverSizeEnabled={true}  // Also increase size on hover
+      hoverSizeMultiplier={1.5}
+    />
+  );
+};
+```
+
+### Advanced Provider Patterns
+
+```jsx
+// Fallback chain provider
+const createFallbackProvider = (...providers) => (id) => {
+  for (const provider of providers) {
+    const result = provider(id);
+    if (result) return result;
+  }
+  return undefined;
+};
+
+// Category-based provider
+const createCategoryProvider = (categoryMap, imageMap) => (id) => {
+  const category = categoryMap.get(id);
+  return imageMap.get(category);
+};
+
+// Composed provider example
+const MyVisualization = () => {
+  const primaryProvider = (id) => primaryCache.get(id);
+  const fallbackProvider = (id) => `/placeholder/${id}.png`;
+  
+  const imageProvider = createFallbackProvider(
+    primaryProvider,
+    fallbackProvider
+  );
+
+  return (
+    <DotVisualization
+      data={data}
+      useImages={true}
+      imageProvider={imageProvider}
+    />
+  );
+};
+```
+
+### Migration from imageUrl Properties
+
+**Old approach** (slower performance):
+```jsx
+const data = [
+  { id: 1, x: 100, y: 150, imageUrl: '/image1.jpg' },
+  { id: 2, x: 200, y: 100, imageUrl: '/image2.jpg' }
+];
+
+<DotVisualization data={data} useImages={true} />
+```
+
+**New approach** (optimized performance):
+```jsx
+const data = [
+  { id: 1, x: 100, y: 150 },
+  { id: 2, x: 200, y: 100 }
+];
+
+const imageMap = new Map([
+  [1, '/image1.jpg'],
+  [2, '/image2.jpg']
+]);
+
+const imageProvider = (id) => imageMap.get(id);
+
+<DotVisualization
+  data={data}
+  useImages={true}
+  imageProvider={imageProvider}
+/>
+```
+
+The component maintains backward compatibility - `imageUrl` properties still work, but `imageProvider` takes precedence when both are present.
 
 ## Advanced Usage
 

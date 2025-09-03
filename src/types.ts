@@ -6,6 +6,8 @@ export interface DotData {
   [key: string]: any;
 }
 
+export type ImageProvider = (id: string | number) => string | undefined;
+
 export interface EdgeData {
   id: string | number;
   source: string | number;
@@ -35,6 +37,9 @@ export interface DotVisualizationProps {
   enablePan?: boolean;
   className?: string;
   style?: React.CSSProperties;
+  imageProvider?: ImageProvider;
+  hoverImageProvider?: ImageProvider;
+  useImages?: boolean;
 }
 
 export interface ColoredDotsProps {
@@ -43,6 +48,9 @@ export interface ColoredDotsProps {
   colorScale?: (cluster: string | number) => string;
   onDotHover?: (dot: DotData | null) => void;
   onDotClick?: (dot: DotData) => void;
+  imageProvider?: ImageProvider;
+  hoverImageProvider?: ImageProvider;
+  useImages?: boolean;
 }
 
 export interface InteractionLayerProps {
