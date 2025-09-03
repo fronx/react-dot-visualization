@@ -91,10 +91,10 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomHandler = useRef(null);
   const baseScaleRef = useRef(null);
   const isDraggingRef = useRef(false);
-  
+
   // Keep refs in sync with state for use in closures
   isDraggingRef.current = isDragging;
-  
+
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
   const previousDataRef = useRef([]);
@@ -337,13 +337,11 @@ const DotVisualization = forwardRef((props, ref) => {
     }
 
     const handleDragStart = (event) => {
-      console.log('🔍 Setting isDragging to true');
       setIsDragging(true);
       if (onZoomStart) onZoomStart(event);
     };
 
     const handleDragEnd = (event) => {
-      console.log('🔍 Setting isDragging to false');
       setIsDragging(false);
       if (onZoomEnd) onZoomEnd(event);
     };
@@ -366,7 +364,6 @@ const DotVisualization = forwardRef((props, ref) => {
     // Add global mouseup listener to ensure drag state is always cleared
     const handleGlobalMouseUp = () => {
       if (isDraggingRef.current) {
-        console.log('🔍 Setting isDragging to false (global mouseup)');
         setIsDragging(false);
       }
     };
