@@ -40,6 +40,7 @@ const DotVisualization = forwardRef((props, ref) => {
     dotStrokeWidth = 0.2,
     defaultColor = null,
     defaultSize = 2,
+    defaultOpacity = 0.7,
     dotStyles = new Map(),
     useImages = false,
     imageProvider,
@@ -630,6 +631,7 @@ const DotVisualization = forwardRef((props, ref) => {
           strokeWidth={dotStrokeWidth}
           defaultColor={defaultColor}
           defaultSize={defaultSize}
+          defaultOpacity={defaultOpacity}
           dotStyles={dotStyles}
           hoveredDotId={hoveredDotId}
           hoverSizeMultiplier={hoverSizeMultiplier}
