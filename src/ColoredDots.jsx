@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
+import { PrioritizedList } from './PrioritizedList.js';
 
 const ColoredDots = React.memo((props) => {
   const {
@@ -66,8 +67,6 @@ const ColoredDots = React.memo((props) => {
     });
   }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier, useImages, imageProvider, hoverImageProvider]);
 
-  let hoveredDotElement = null;
-
   return (
     <g id="colored-dots">
       <ImagePatterns 
@@ -76,8 +75,8 @@ const ColoredDots = React.memo((props) => {
         imageProvider={imageProvider}
         hoverImageProvider={hoverImageProvider}
       />
-      {data.map((item, index) => {
-        const circleElement = (
+      <PrioritizedList data={data} prioritizedId={hoveredDotId}>
+        {(item, index) => (
           <circle
             id={dotId(0, item)}
             key={dotId(0, item)}
@@ -88,18 +87,8 @@ const ColoredDots = React.memo((props) => {
             stroke={stroke}
             strokeWidth={strokeWidth}
           />
-        );
-        
-        // If this is the hovered dot, store it for later rendering
-        if (hoveredDotId === item.id) {
-          hoveredDotElement = circleElement;
-          return null; // Skip rendering now
-        }
-        
-        return circleElement;
-      })}
-      {/* Render the hovered dot last (on top) */}
-      {hoveredDotElement}
+        )}
+      </PrioritizedList>
     </g>
   );
 });

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedInteractionPosition, updateDotAttributes } from './dotUtils.js';
+import { PrioritizedList } from './PrioritizedList.js';
 
 const InteractionLayer = React.memo((props) => {
   const {
@@ -265,42 +266,32 @@ const InteractionLayer = React.memo((props) => {
 
   }, [onDragStart, data, dotId, onClick]);
 
-  let hoveredInteractionElement = null;
-
   return (
     <g id="interaction-layer" ref={interactionLayerRef} onMouseLeave={handleLayerMouseLeave}>
       {/* Background rect moved to DotVisualization root to avoid zoom transform issues */}
-      {data.map((item) => {
-        // Get synchronized position to match ColoredDots
-        const { x, y } = getSyncedInteractionPosition(item, dotId);
-        
-        const circleElement = (
-          <circle
-            id={dotId(1, item)}
-            key={dotId(1, item)}
-            r={getSize(item)}
-            cx={x}
-            cy={y}
-            fill="transparent"
-            style={{ cursor: onDragStart ? 'grab' : (onClick ? 'pointer' : 'default') }}
-            onClick={!onDragStart && onClick ? (e) => onClick(item, e) : undefined}
-            onMouseDown={onDragStart ? (e) => handleMouseDown(e, item) : undefined}
-            onMouseUp={onDragStart ? (e) => handleMouseUp(e, item) : undefined}
-            onMouseEnter={(e) => handleMouseEnter(e, item)}
-            onMouseLeave={(e) => handleMouseLeave(e, item)}
-          />
-        );
-        
-        // If this is the hovered dot, store it for later rendering
-        if (hoveredDotId === item.id) {
-          hoveredInteractionElement = circleElement;
-          return null; // Skip rendering now
-        }
-        
-        return circleElement;
-      })}
-      {/* Render the hovered dot last (on top) */}
-      {hoveredInteractionElement}
+      <PrioritizedList data={data} prioritizedId={hoveredDotId}>
+        {(item) => {
+          // Get synchronized position to match ColoredDots
+          const { x, y } = getSyncedInteractionPosition(item, dotId);
+          
+          return (
+            <circle
+              id={dotId(1, item)}
+              key={dotId(1, item)}
+              r={getSize(item)}
+              cx={x}
+              cy={y}
+              fill="transparent"
+              style={{ cursor: onDragStart ? 'grab' : (onClick ? 'pointer' : 'default') }}
+              onClick={!onDragStart && onClick ? (e) => onClick(item, e) : undefined}
+              onMouseDown={onDragStart ? (e) => handleMouseDown(e, item) : undefined}
+              onMouseUp={onDragStart ? (e) => handleMouseUp(e, item) : undefined}
+              onMouseEnter={(e) => handleMouseEnter(e, item)}
+              onMouseLeave={(e) => handleMouseLeave(e, item)}
+            />
+          );
+        }}
+      </PrioritizedList>
     </g>
   );
 });
