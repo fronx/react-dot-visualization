@@ -66,6 +66,8 @@ const ColoredDots = React.memo((props) => {
     });
   }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier, useImages, imageProvider, hoverImageProvider]);
 
+  let hoveredDotElement = null;
+
   return (
     <g id="colored-dots">
       <ImagePatterns 
@@ -74,18 +76,30 @@ const ColoredDots = React.memo((props) => {
         imageProvider={imageProvider}
         hoverImageProvider={hoverImageProvider}
       />
-      {data.map((item, index) => (
-        <circle
-          id={dotId(0, item)}
-          key={dotId(0, item)}
-          r={getSize(item)}
-          cx={item.x}
-          cy={item.y}
-          fill={getFill(item, index)}
-          stroke={stroke}
-          strokeWidth={strokeWidth}
-        />
-      ))}
+      {data.map((item, index) => {
+        const circleElement = (
+          <circle
+            id={dotId(0, item)}
+            key={dotId(0, item)}
+            r={getSize(item)}
+            cx={item.x}
+            cy={item.y}
+            fill={getFill(item, index)}
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+          />
+        );
+        
+        // If this is the hovered dot, store it for later rendering
+        if (hoveredDotId === item.id) {
+          hoveredDotElement = circleElement;
+          return null; // Skip rendering now
+        }
+        
+        return circleElement;
+      })}
+      {/* Render the hovered dot last (on top) */}
+      {hoveredDotElement}
     </g>
   );
 });

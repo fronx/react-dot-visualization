@@ -265,6 +265,8 @@ const InteractionLayer = React.memo((props) => {
 
   }, [onDragStart, data, dotId, onClick]);
 
+  let hoveredInteractionElement = null;
+
   return (
     <g id="interaction-layer" ref={interactionLayerRef} onMouseLeave={handleLayerMouseLeave}>
       {/* Background rect moved to DotVisualization root to avoid zoom transform issues */}
@@ -272,7 +274,7 @@ const InteractionLayer = React.memo((props) => {
         // Get synchronized position to match ColoredDots
         const { x, y } = getSyncedInteractionPosition(item, dotId);
         
-        return (
+        const circleElement = (
           <circle
             id={dotId(1, item)}
             key={dotId(1, item)}
@@ -288,7 +290,17 @@ const InteractionLayer = React.memo((props) => {
             onMouseLeave={(e) => handleMouseLeave(e, item)}
           />
         );
+        
+        // If this is the hovered dot, store it for later rendering
+        if (hoveredDotId === item.id) {
+          hoveredInteractionElement = circleElement;
+          return null; // Skip rendering now
+        }
+        
+        return circleElement;
       })}
+      {/* Render the hovered dot last (on top) */}
+      {hoveredInteractionElement}
     </g>
   );
 });
