@@ -98,8 +98,9 @@ export function updateDotAttributes(item, elementId, position, size, additionalA
  * @param {number} strokeWidth - Stroke width
  * @param {number} opacity - Opacity value
  * @param {Map} dotStyles - Custom styles map
+ * @param {boolean} isHovered - Whether the dot is hovered (hover opacity takes precedence)
  */
-export function updateColoredDotAttributes(item, elementId, position, size, color, stroke, strokeWidth, opacity, dotStyles) {
+export function updateColoredDotAttributes(item, elementId, position, size, color, stroke, strokeWidth, opacity, dotStyles, isHovered = false) {
   const element = d3.select(`#${elementId}`);
   
   if (!element.empty()) {
@@ -115,7 +116,12 @@ export function updateColoredDotAttributes(item, elementId, position, size, colo
     };
 
     const customAttrs = dotStyles.get(item.id) || {};
-    const mergedAttrs = { ...baseAttrs, ...customAttrs };
+    let mergedAttrs = { ...baseAttrs, ...customAttrs };
+    
+    // Hover opacity always takes precedence over dotStyles
+    if (isHovered) {
+      mergedAttrs.opacity = opacity;
+    }
 
     Object.entries(mergedAttrs).forEach(([attr, value]) => {
       element.attr(attr, value);

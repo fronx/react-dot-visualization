@@ -68,8 +68,9 @@ const ColoredDots = React.memo((props) => {
       const size = getSize(item);
       const fill = getFill(item, index);
       const opacity = getOpacity(item);
+      const isHovered = hoveredDotId === item.id;
 
-      updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, opacity, dotStyles);
+      updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, opacity, dotStyles, isHovered);
     });
   }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider]);
 
