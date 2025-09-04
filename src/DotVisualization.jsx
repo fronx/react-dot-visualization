@@ -468,6 +468,17 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   };
 
+  // Handle background hover to clear stuck hover states
+  const handleBackgroundHover = () => {
+    if (hoveredDotId !== null) {
+      console.log('🔍 Background hover - clearing stuck hover state');
+      setHoveredDotId(null);
+      if (onLeave) {
+        onLeave(null, null);
+      }
+    }
+  };
+
   // Keep extents in sync when zoomExtent prop changes
   useEffect(() => {
     if (!zoomHandler.current) return;
@@ -562,6 +573,7 @@ const DotVisualization = forwardRef((props, ref) => {
         height="100%"
         fill="transparent"
         onClick={onBackgroundClick}
+        onMouseMove={handleBackgroundHover}
         style={{ pointerEvents: 'fill' }}
       />
       <g ref={contentRef}>
