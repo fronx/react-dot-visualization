@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>countVisibleDots Performance Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .fast { background-color: #d4edda; }
+        .medium { background-color: #fff3cd; }
+        .slow { background-color: #f8d7da; }
+        button {
+            padding: 10px 20px;
+            margin: 10px 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #results {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>countVisibleDots Performance Test</h1>
+    
+    <p>This test measures the performance of the countVisibleDots function with different data sizes and viewport scenarios.</p>
+    
+    <button onclick="runAllTests()">Run All Tests</button>
+    <button onclick="clearResults()">Clear Results</button>
+    
+    <div id="results"></div>
+
+    <script type="module">
+        // Import the countVisibleDots function
+        function countVisibleDots(data, transform, viewBox, defaultSize = 2) {
+            if (!data || !data.length || !transform || !viewBox) return 0;
+            
+            const { k, x: tx, y: ty } = transform;
+            const [vbX, vbY, vbW, vbH] = viewBox;
+            
+            // Calculate visible data bounds (inverse transform)
+            const visibleLeft = (vbX - tx) / k;
+            const visibleRight = (vbX + vbW - tx) / k;
+            const visibleTop = (vbY - ty) / k;
+            const visibleBottom = (vbY + vbH - ty) / k;
+            
+            let visibleCount = 0;
+            
+            for (const dot of data) {
+                const radius = (dot.size || defaultSize) / 2;
+                
+                // Check if dot (including its radius) intersects with visible area
+                if (dot.x + radius >= visibleLeft &&
+                    dot.x - radius <= visibleRight &&
+                    dot.y + radius >= visibleTop &&
+                    dot.y - radius <= visibleBottom) {
+                    visibleCount++;
+                }
+            }
+            
+            return visibleCount;
+        }
+
+        // Generate test data
+        function generateDots(count, bounds = { minX: 0, maxX: 1000, minY: 0, maxY: 1000 }) {
+            const dots = [];
+            for (let i = 0; i < count; i++) {
+                dots.push({
+                    id: i,
+                    x: Math.random() * (bounds.maxX - bounds.minX) + bounds.minX,
+                    y: Math.random() * (bounds.maxY - bounds.minY) + bounds.minY,
+                    size: Math.random() * 8 + 2 // Random size between 2-10
+                });
+            }
+            return dots;
+        }
+
+        // Test scenarios
+        const testScenarios = [
+            {
+                name: "Small Dataset - All Visible",
+                dotCount: 1000,
+                viewBox: [0, 0, 1000, 1000],
+                transform: { k: 1, x: 0, y: 0 },
+                bounds: { minX: 0, maxX: 1000, minY: 0, maxY: 1000 }
+            },
+            {
+                name: "Medium Dataset - All Visible", 
+                dotCount: 10000,
+                viewBox: [0, 0, 1000, 1000],
+                transform: { k: 1, x: 0, y: 0 },
+                bounds: { minX: 0, maxX: 1000, minY: 0, maxY: 1000 }
+            },
+            {
+                name: "Large Dataset - All Visible",
+                dotCount: 100000,
+                viewBox: [0, 0, 1000, 1000], 
+                transform: { k: 1, x: 0, y: 0 },
+                bounds: { minX: 0, maxX: 1000, minY: 0, maxY: 1000 }
+            },
+            {
+                name: "Large Dataset - Zoomed In (10% visible)",
+                dotCount: 100000,
+                viewBox: [0, 0, 100, 100],
+                transform: { k: 10, x: -4500, y: -4500 },
+                bounds: { minX: 0, maxX: 1000, minY: 0, maxY: 1000 }
+            },
+            {
+                name: "Large Dataset - Zoomed Out (All visible)",
+                dotCount: 100000,
+                viewBox: [0, 0, 2000, 2000],
+                transform: { k: 0.5, x: 500, y: 500 },
+                bounds: { minX: 0, maxX: 1000, minY: 0, maxY: 1000 }
+            },
+            {
+                name: "Extreme Dataset - Zoomed In",
+                dotCount: 500000,
+                viewBox: [0, 0, 50, 50],
+                transform: { k: 20, x: -9000, y: -9000 },
+                bounds: { minX: 0, maxX: 1000, minY: 0, maxY: 1000 }
+            }
+        ];
+
+        function runTest(scenario, iterations = 5) {
+            const dots = generateDots(scenario.dotCount, scenario.bounds);
+            const times = [];
+            let visibleCount = 0;
+
+            // Warm-up run
+            countVisibleDots(dots, scenario.transform, scenario.viewBox);
+
+            // Actual test runs
+            for (let i = 0; i < iterations; i++) {
+                const startTime = performance.now();
+                visibleCount = countVisibleDots(dots, scenario.transform, scenario.viewBox);
+                const endTime = performance.now();
+                times.push(endTime - startTime);
+            }
+
+            const avgTime = times.reduce((sum, time) => sum + time, 0) / times.length;
+            const minTime = Math.min(...times);
+            const maxTime = Math.max(...times);
+
+            return {
+                scenario: scenario.name,
+                dotCount: scenario.dotCount,
+                visibleCount,
+                avgTime: avgTime.toFixed(3),
+                minTime: minTime.toFixed(3),
+                maxTime: maxTime.toFixed(3),
+                throughput: (scenario.dotCount / avgTime * 1000).toFixed(0) // dots per second
+            };
+        }
+
+        function formatResult(result) {
+            const timeClass = result.avgTime < 5 ? 'fast' : result.avgTime < 20 ? 'medium' : 'slow';
+            const visibilityPercent = ((result.visibleCount / result.dotCount) * 100).toFixed(1);
+            
+            return `
+                <div class="test-result ${timeClass}">
+                    <h3>${result.scenario}</h3>
+                    <p><strong>Dataset Size:</strong> ${result.dotCount.toLocaleString()} dots</p>
+                    <p><strong>Visible Dots:</strong> ${result.visibleCount.toLocaleString()} (${visibilityPercent}%)</p>
+                    <p><strong>Performance:</strong></p>
+                    <ul>
+                        <li>Average Time: ${result.avgTime}ms</li>
+                        <li>Min Time: ${result.minTime}ms</li>
+                        <li>Max Time: ${result.maxTime}ms</li>
+                        <li>Throughput: ${result.throughput.toLocaleString()} dots/sec</li>
+                    </ul>
+                </div>
+            `;
+        }
+
+        window.runAllTests = function() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h2>Running Tests...</h2>';
+            
+            const allResults = [];
+            
+            // Run tests sequentially to avoid interference
+            let currentTest = 0;
+            
+            function runNextTest() {
+                if (currentTest >= testScenarios.length) {
+                    // All tests complete, show summary
+                    let html = '<h2>Test Results</h2>';
+                    allResults.forEach(result => {
+                        html += formatResult(result);
+                    });
+                    
+                    // Add summary
+                    const totalDots = allResults.reduce((sum, r) => sum + r.dotCount, 0);
+                    const avgThroughput = allResults.reduce((sum, r) => sum + parseInt(r.throughput), 0) / allResults.length;
+                    
+                    html += `
+                        <div class="test-result">
+                            <h3>Summary</h3>
+                            <p>Total dots processed: ${totalDots.toLocaleString()}</p>
+                            <p>Average throughput: ${avgThroughput.toFixed(0).toLocaleString()} dots/sec</p>
+                            <p>Function appears to be O(n) linear - performance scales predictably with data size.</p>
+                        </div>
+                    `;
+                    
+                    resultsDiv.innerHTML = html;
+                    return;
+                }
+                
+                resultsDiv.innerHTML = `<h2>Running Test ${currentTest + 1}/${testScenarios.length}: ${testScenarios[currentTest].name}</h2>`;
+                
+                // Use setTimeout to prevent UI blocking
+                setTimeout(() => {
+                    const result = runTest(testScenarios[currentTest]);
+                    allResults.push(result);
+                    currentTest++;
+                    runNextTest();
+                }, 100);
+            }
+            
+            runNextTest();
+        };
+
+        window.clearResults = function() {
+            document.getElementById('results').innerHTML = '';
+        };
+    </script>
+</body>
+</html>

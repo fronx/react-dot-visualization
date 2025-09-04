@@ -307,3 +307,41 @@ export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occ
   return false;
 }
 
+/**
+ * Count dots that are currently visible within the viewport using transform bounds
+ * This is O(n) efficient and uses the current zoom transform for precise calculation
+ * @param {Array} data - Array of data points with x,y coordinates
+ * @param {Object} transform - Current D3 zoom transform {k, x, y}
+ * @param {Array} viewBox - Current viewBox [x, y, width, height]
+ * @param {number} defaultSize - Default dot size for radius calculation
+ * @returns {number} Count of visible dots
+ */
+export function countVisibleDots(data, transform, viewBox, defaultSize = 2) {
+  if (!data || !data.length || !transform || !viewBox) return 0;
+  
+  const { k, x: tx, y: ty } = transform;
+  const [vbX, vbY, vbW, vbH] = viewBox;
+  
+  // Calculate visible data bounds (inverse transform)
+  const visibleLeft = (vbX - tx) / k;
+  const visibleRight = (vbX + vbW - tx) / k;
+  const visibleTop = (vbY - ty) / k;
+  const visibleBottom = (vbY + vbH - ty) / k;
+  
+  let visibleCount = 0;
+  
+  for (const dot of data) {
+    const radius = (dot.size || defaultSize) / 2;
+    
+    // Check if dot (including its radius) intersects with visible area
+    if (dot.x + radius >= visibleLeft &&
+        dot.x - radius <= visibleRight &&
+        dot.y + radius >= visibleTop &&
+        dot.y - radius <= visibleBottom) {
+      visibleCount++;
+    }
+  }
+  
+  return visibleCount;
+}
+

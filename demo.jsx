@@ -18,7 +18,9 @@ const App = () => {
   const [patternType, setPatternType] = useState('normal');
   const [imageMode, setImageMode] = useState('identicons'); // 'identicons' or 'bitmaps'
   const [showHoverImages, setShowHoverImages] = useState(false); // Show hover image switching
+  const [visibleDotCount, setVisibleDotCount] = useState(0);
   const containerRef = useRef(null);
+  const vizRef = useRef(null);
 
   // Cache for image providers
   const [imageCache, setImageCache] = useState(new Map());
@@ -176,6 +178,7 @@ const App = () => {
       return newCache;
     });
 
+
     if (showHoverImages) {
       setHoverImageCache(prevCache => {
         const newCache = new Map(prevCache);
@@ -195,6 +198,15 @@ const App = () => {
     console.log('Added 7 new dots outside current bounds');
   };
 
+  // Function to update visible count
+  const updateVisibleCount = () => {
+    if (vizRef.current) {
+      const count = vizRef.current.getVisibleDotCount();
+      setVisibleDotCount(count);
+    }
+  };
+
+
   // Image provider functions
   const imageProvider = (id) => imageCache.get(id);
   const hoverImageProvider = showHoverImages ? (id) => hoverImageCache.get(id) : undefined;
@@ -202,19 +214,6 @@ const App = () => {
   return (
     <div className="demo">
       <h1>React Dot Visualization Demo</h1>
-
-      <div className="instructions">
-        <strong>🎯 Try the new ImageProvider features!</strong><br />
-        • <strong>Performance-Optimized Images:</strong> Images are loaded once via providers, not on every position update<br />
-        • <strong>Image Types:</strong> Choose between generated identicons or sample photos<br />
-        • <strong>Hover Image Switching:</strong> Enable to show different/higher resolution images on hover<br />
-        • <strong>Click a dot:</strong> Desaturates all other dots<br />
-        • <strong>Click background:</strong> Resets all styles to original colors<br />
-        • <strong>Zoom:</strong> Ctrl/Cmd + mouse wheel (or trackpad pinch)<br />
-        • <strong>Pan:</strong> Mouse wheel or trackpad scroll<br />
-        • <strong>Add Dots:</strong> Use the button in the left panel (images are automatically cached for new dots)
-      </div>
-
       <div className="viz" ref={containerRef} style={{ position: 'relative', width: '100%', height: '60vh' }}>
         <div
           className="demo-left-panel"
@@ -334,6 +333,32 @@ const App = () => {
           </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Performance Info</div>
+            
+            <div style={{ fontSize: '11px', marginBottom: '8px', padding: '6px', backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
+              <strong>Visible Dots:</strong> {visibleDotCount.toLocaleString()} / {data.length.toLocaleString()}
+              <br />
+              <span style={{ color: '#666' }}>
+                ({data.length > 0 ? ((visibleDotCount / data.length) * 100).toFixed(1) : 0}% visible)
+              </span>
+            </div>
+            
+            <button 
+              onClick={updateVisibleCount}
+              style={{ 
+                padding: '4px 8px', 
+                fontSize: '10px', 
+                cursor: 'pointer',
+                backgroundColor: '#f0f0f0',
+                border: '1px solid #ccc',
+                borderRadius: '3px'
+              }}
+            >
+              ↻ Refresh Count
+            </button>
+          </div>
+
+          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
             <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Auto-Zoom Settings</div>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
@@ -358,11 +383,13 @@ const App = () => {
           </div>
         </div>
         <DotVisualization
+          ref={vizRef}
           data={data}
           onHover={setHoveredDot}
           onLeave={() => setHoveredDot(null)}
           onClick={handleClick}
           onBackgroundClick={handleBackgroundClick}
+          onZoomEnd={updateVisibleCount}
           dotStyles={dotStyles}
           defaultSize={dotSize}
           margin={0.05}

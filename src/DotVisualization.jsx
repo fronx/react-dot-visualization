@@ -4,7 +4,7 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, updateZoomExtentForData } from './utils.js';
+import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, updateZoomExtentForData, countVisibleDots } from './utils.js';
 import { useDebug } from './useDebug.js';
 
 
@@ -67,6 +67,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
   const [hoveredDotId, setHoveredDotId] = useState(null);
+  const [visibleDotCount, setVisibleDotCount] = useState(0);
 
   // Block hover only when dragging (not during wheel zoom)
   const isZooming = isDragging;
@@ -99,6 +100,30 @@ const DotVisualization = forwardRef((props, ref) => {
   isDraggingRef.current = isDragging;
 
   const debugLog = useDebug(debug);
+
+  // Function to update visible dot count
+  const updateVisibleDotCount = useCallback(() => {
+    if (!processedData.length || !transform.current || !viewBox) return;
+    
+    const count = countVisibleDots(processedData, transform.current, viewBox, defaultSize);
+    setVisibleDotCount(count);
+    debugLog('Visible dots:', count);
+  }, [processedData, viewBox, defaultSize, debugLog]);
+
+  // Track transform changes to automatically update visible count
+  const prevTransformRef = useRef(null);
+  const updateCountOnTransformChange = useCallback(() => {
+    const current = transform.current;
+    const prev = prevTransformRef.current;
+    
+    if (!current) return;
+    
+    // Check if transform actually changed
+    if (!prev || prev.k !== current.k || prev.x !== current.x || prev.y !== current.y) {
+      prevTransformRef.current = { k: current.k, x: current.x, y: current.y };
+      updateVisibleDotCount();
+    }
+  }, [updateVisibleDotCount]);
 
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
@@ -324,6 +349,9 @@ const DotVisualization = forwardRef((props, ref) => {
       lastDataBoundsRef.current = currentBounds;
     }
 
+    // Update visible dot count when data changes
+    updateVisibleDotCount();
+
   }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration]);
 
   // Initialize zoom handler (browser-only)
@@ -348,6 +376,8 @@ const DotVisualization = forwardRef((props, ref) => {
 
     const handleDragEnd = (event) => {
       setIsDragging(false);
+      // Update visible dot count based on actual transform change
+      updateCountOnTransformChange();
       if (onZoomEnd) onZoomEnd(event);
     };
 
@@ -361,6 +391,8 @@ const DotVisualization = forwardRef((props, ref) => {
         if (contentRef.current) {
           contentRef.current.setAttribute("transform", transform.current.toString());
         }
+        // Update visible count when transform changes (but only on actual changes)
+        updateCountOnTransformChange();
       });
 
     d3.select(zoomRef.current)
@@ -512,7 +544,9 @@ const DotVisualization = forwardRef((props, ref) => {
 
   useImperativeHandle(ref, () => ({
     zoomToVisible,
-  }), [zoomToVisible]);
+    getVisibleDotCount: () => visibleDotCount,
+    updateVisibleDotCount,
+  }), [zoomToVisible, visibleDotCount, updateVisibleDotCount]);
 
   // Auto-fit to visible region
   useEffect(() => {
