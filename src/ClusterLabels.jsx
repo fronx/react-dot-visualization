@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { useDebug } from './useDebug.js';
 
 const ClusterLabels = ({
   data = [],
@@ -8,8 +9,10 @@ const ClusterLabels = ({
   hoveredCluster,
   onClusterHover,
   onClusterLeave,
-  className = ''
+  className = '',
+  debug = false
 }) => {
+  const debugLog = useDebug(debug);
   // Calculate cluster positions based on data point centroids
   const positionedClusters = useMemo(() => {
     if (!data.length || !clusters.length) return [];

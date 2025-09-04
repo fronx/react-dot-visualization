@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedInteractionPosition, updateDotAttributes } from './dotUtils.js';
 import { PrioritizedList } from './PrioritizedList.js';
+import { useDebug } from './useDebug.js';
 
 const InteractionLayer = React.memo((props) => {
   const {
@@ -16,8 +17,11 @@ const InteractionLayer = React.memo((props) => {
     defaultSize = 2,
     dotStyles = new Map(),
     hoveredDotId = null,
-    hoverSizeMultiplier = 1.5
+    hoverSizeMultiplier = 1.5,
+    debug = false
   } = props;
+  
+  const debugLog = useDebug(debug);
   
   const interactionLayerRef = useRef(null);
   const [dragState, setDragState] = useState(null);
@@ -38,7 +42,7 @@ const InteractionLayer = React.memo((props) => {
     if (!isZooming && onHover) {
       onHover(item, e);
     } else if (isZooming) {
-      console.log('❌ Hover blocked - isDragging:', isZooming);
+      debugLog('❌ Hover blocked - isDragging:', isZooming);
     }
   };
 
@@ -149,7 +153,7 @@ const InteractionLayer = React.memo((props) => {
     const drag = d3.drag()
       .clickDistance(DRAG_THRESHOLD) // Only consider it a drag if moved more than threshold
       .on('start', function(event, d) {
-        console.log('🔴 D3 drag start', d);
+        debugLog('🔴 D3 drag start', d);
         
         // Store drag data globally so HTML5 drop targets can access it
         window._currentDragData = {};
@@ -160,7 +164,7 @@ const InteractionLayer = React.memo((props) => {
           dataTransfer: {
             setData: (type, data) => {
               window._currentDragData[type] = data;
-              console.log('🔴 Setting drag data:', type, data);
+              debugLog('🔴 Setting drag data:', type, data);
             },
             getData: (type) => window._currentDragData[type],
             types: Object.keys(window._currentDragData || {}),
@@ -203,7 +207,7 @@ const InteractionLayer = React.memo((props) => {
         }
       })
       .on('end', function(event, d) {
-        console.log('🔴 D3 drag end');
+        debugLog('🔴 D3 drag end');
         
         // Simulate HTML5 drop event if we're over a valid drop target
         const elementUnderMouse = document.elementFromPoint(event.sourceEvent.clientX, event.sourceEvent.clientY);
@@ -223,7 +227,7 @@ const InteractionLayer = React.memo((props) => {
               syntheticDrop.dataTransfer.setData(type, data);
             } catch (e) {
               // Some browsers restrict setData on synthetic events
-              console.warn('Could not set drag data:', e);
+              debugLog('Could not set drag data:', e);
             }
           });
           

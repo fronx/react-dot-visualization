@@ -3,6 +3,7 @@ import * as d3 from 'd3';
 import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
 import { PrioritizedList } from './PrioritizedList.js';
+import { useDebug } from './useDebug.js';
 
 const ColoredDots = React.memo((props) => {
   const {
@@ -18,8 +19,11 @@ const ColoredDots = React.memo((props) => {
     hoverOpacity = 1.0,
     useImages = false,
     imageProvider,
-    hoverImageProvider
+    hoverImageProvider,
+    debug = false
   } = props;
+  
+  const debugLog = useDebug(debug);
   const getColor = (item, index) => {
     if (item.color) return item.color;
     if (defaultColor) return defaultColor;

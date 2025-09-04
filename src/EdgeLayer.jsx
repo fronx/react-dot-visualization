@@ -1,10 +1,14 @@
+import { useDebug } from './useDebug.js';
+
 const EdgeLayer = ({
   edges = [],
   data,
   edgeOpacity = 0.3,
   edgeColor = '#999',
-  strokeWidth = 1
+  strokeWidth = 1,
+  debug = false
 }) => {
+  const debugLog = useDebug(debug);
   // Create a map of node positions by ID for quick lookup
   const nodeMap = new Map();
   data.forEach(node => {

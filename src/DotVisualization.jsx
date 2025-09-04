@@ -5,6 +5,7 @@ import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
 import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, updateZoomExtentForData } from './utils.js';
+import { useDebug } from './useDebug.js';
 
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
@@ -57,6 +58,7 @@ const DotVisualization = forwardRef((props, ref) => {
     autoZoomDuration = 200,
     hoverSizeMultiplier = 1.5,
     hoverOpacity = 1.0,
+    debug = false,
     ...otherProps
   } = props;
 
@@ -95,6 +97,8 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Keep refs in sync with state for use in closures
   isDraggingRef.current = isDragging;
+
+  const debugLog = useDebug(debug);
 
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
@@ -280,7 +284,7 @@ const DotVisualization = forwardRef((props, ref) => {
         const vb = computeOcclusionAwareViewBox(bounds, { width: rect.width, height: rect.height }, {
           left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
         }, margin);
-        console.log('Initialized viewBox:', vb);
+        debugLog('Initialized viewBox:', vb);
         if (vb) setViewBox(vb);
       }
     }
@@ -371,7 +375,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
     // Add global blur event listener to clear hover states when window loses focus
     const handleWindowBlur = () => {
-      console.log('🔍 Window blur - resetting all states');
+      debugLog('🔍 Window blur - resetting all states');
       setHoveredDotId(null);
       setIsDragging(false);
       if (onLeave) {
@@ -443,7 +447,7 @@ const DotVisualization = forwardRef((props, ref) => {
           .attr('cx', d => d.x)
           .attr('cy', d => d.y);
 
-        console.log('Decollided dots:', memoizedPositions.current.size);
+        debugLog('Decollided dots:', memoizedPositions.current.size);
         if (onDecollisionComplete) {
           onDecollisionComplete();
         }
@@ -457,7 +461,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Handle mouse leave to reset interaction states
   const handleMouseLeave = () => {
-    console.log('🔍 Mouse leave - resetting interaction states');
+    debugLog('🔍 Mouse leave - resetting interaction states');
     setIsDragging(false);
     setHoveredDotId(null); // Clear hover state when mouse leaves container
     // Also call the original onLeave callback to notify parent
@@ -469,7 +473,7 @@ const DotVisualization = forwardRef((props, ref) => {
   // Handle background hover to clear stuck hover states
   const handleBackgroundHover = () => {
     if (hoveredDotId !== null) {
-      console.log('🔍 Background hover - clearing stuck hover state');
+      debugLog('🔍 Background hover - clearing stuck hover state');
       setHoveredDotId(null);
       if (onLeave) {
         onLeave(null, null);
@@ -522,7 +526,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Defer to next microtask to ensure DOM/layout is up to date
     Promise.resolve().then(() => {
       const ok = zoomToVisible();
-      console.log('zoomed to visible, ok: ', ok);
+      debugLog('zoomed to visible, ok: ', ok);
       if (ok) {
         didInitialAutoFitRef.current = true;
       }
@@ -582,6 +586,7 @@ const DotVisualization = forwardRef((props, ref) => {
             edgeOpacity={edgeOpacity}
             edgeColor={edgeColor}
             strokeWidth={dotStrokeWidth}
+            debug={debug}
           />
         )}
         <ColoredDots
@@ -598,6 +603,7 @@ const DotVisualization = forwardRef((props, ref) => {
           useImages={useImages}
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}
+          debug={debug}
         />
         <ClusterLabels
           data={processedData}
@@ -607,6 +613,7 @@ const DotVisualization = forwardRef((props, ref) => {
           hoveredCluster={hoveredCluster}
           onClusterHover={onClusterHover}
           onClusterLeave={onClusterLeave}
+          debug={debug}
         />
         <InteractionLayer
           data={processedData}
@@ -621,6 +628,7 @@ const DotVisualization = forwardRef((props, ref) => {
           dotStyles={dotStyles}
           hoveredDotId={hoveredDotId}
           hoverSizeMultiplier={hoverSizeMultiplier}
+          debug={debug}
         />
       </g>
     </svg>
