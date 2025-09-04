@@ -55,7 +55,6 @@ const DotVisualization = forwardRef((props, ref) => {
     fitMargin = 0.9,
     autoZoomToNewContent = false,
     autoZoomDuration = 200,
-    hoverSizeEnabled = false,
     hoverSizeMultiplier = 1.5,
     hoverOpacity = 1.0,
     ...otherProps
@@ -70,24 +69,22 @@ const DotVisualization = forwardRef((props, ref) => {
   // Block hover only when dragging (not during wheel zoom)
   const isZooming = isDragging;
 
-  // Wrapper functions to track hovered dot for size effects
+  // Wrapper functions to track hovered dot for hover effects
   const handleDotHover = useCallback((item, event) => {
-    if (hoverSizeEnabled && item) {
+    if (item) {
       setHoveredDotId(item.id);
     }
     if (onHover) {
       onHover(item, event);
     }
-  }, [hoverSizeEnabled, onHover]);
+  }, [onHover]);
 
   const handleDotLeave = useCallback((item, event) => {
-    if (hoverSizeEnabled) {
-      setHoveredDotId(null);
-    }
+    setHoveredDotId(null);
     if (onLeave) {
       onLeave(item, event);
     }
-  }, [hoverSizeEnabled, onLeave]);
+  }, [onLeave]);
 
   const zoomRef = useRef(null);
   const contentRef = useRef(null);
@@ -596,7 +593,6 @@ const DotVisualization = forwardRef((props, ref) => {
           defaultSize={defaultSize}
           dotStyles={dotStyles}
           hoveredDotId={hoveredDotId}
-          hoverSizeEnabled={hoverSizeEnabled}
           hoverSizeMultiplier={hoverSizeMultiplier}
           hoverOpacity={hoverOpacity}
           useImages={useImages}
@@ -624,7 +620,6 @@ const DotVisualization = forwardRef((props, ref) => {
           defaultSize={defaultSize}
           dotStyles={dotStyles}
           hoveredDotId={hoveredDotId}
-          hoverSizeEnabled={hoverSizeEnabled}
           hoverSizeMultiplier={hoverSizeMultiplier}
         />
       </g>

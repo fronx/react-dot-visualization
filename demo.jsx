@@ -12,7 +12,6 @@ const App = () => {
   const [autoZoomDuration, setAutoZoomDuration] = useState(200);
   const [dotSize, setDotSize] = useState(10);
   const [newDotSize, setNewDotSize] = useState(100);
-  const [hoverSizeEnabled, setHoverSizeEnabled] = useState(true);
   const [hoverSizeMultiplier, setHoverSizeMultiplier] = useState(1.5);
   const [hoverOpacity, setHoverOpacity] = useState(1.0);
   const [useImages, setUseImages] = useState(false);
@@ -20,7 +19,7 @@ const App = () => {
   const [imageMode, setImageMode] = useState('identicons'); // 'identicons' or 'bitmaps'
   const [showHoverImages, setShowHoverImages] = useState(false); // Show hover image switching
   const containerRef = useRef(null);
-  
+
   // Cache for image providers
   const [imageCache, setImageCache] = useState(new Map());
   const [hoverImageCache, setHoverImageCache] = useState(new Map());
@@ -42,7 +41,7 @@ const App = () => {
   // Sample bitmap image URLs for demo (in real apps, these would be actual album covers)
   const sampleBitmapUrls = [
     'https://picsum.photos/64/64?random=1',
-    'https://picsum.photos/64/64?random=2', 
+    'https://picsum.photos/64/64?random=2',
     'https://picsum.photos/64/64?random=3',
     'https://picsum.photos/64/64?random=4',
     'https://picsum.photos/64/64?random=5',
@@ -71,13 +70,13 @@ const App = () => {
         // Add individual sizes to some dots for testing
         size: i < 10 ? Math.random() * 20 + 5 : undefined, // first 10 dots have random individual sizes
       }));
-      
+
       setData(newData);
-      
+
       // Preload images into cache based on current mode
       const newImageCache = new Map();
       const newHoverCache = new Map();
-      
+
       newData.forEach(item => {
         if (imageMode === 'identicons') {
           // For identicons, we can generate them synchronously
@@ -97,7 +96,7 @@ const App = () => {
           }
         }
       });
-      
+
       setImageCache(newImageCache);
       setHoverImageCache(newHoverCache);
     }
@@ -163,7 +162,7 @@ const App = () => {
     });
 
     setData(prevData => [...prevData, ...newDots]);
-    
+
     // Update image caches for new dots
     setImageCache(prevCache => {
       const newCache = new Map(prevCache);
@@ -176,7 +175,7 @@ const App = () => {
       });
       return newCache;
     });
-    
+
     if (showHoverImages) {
       setHoverImageCache(prevCache => {
         const newCache = new Map(prevCache);
@@ -192,7 +191,7 @@ const App = () => {
         return newCache;
       });
     }
-    
+
     console.log('Added 7 new dots outside current bounds');
   };
 
@@ -254,7 +253,7 @@ const App = () => {
               step="1"
               style={{ width: '100%', marginBottom: '8px' }}
             />
-            
+
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>New Dots Size: {newDotSize}</div>
             <input
               type="range"
@@ -290,8 +289,8 @@ const App = () => {
             </label>
 
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>Image Type:</div>
-            <select 
-              value={imageMode} 
+            <select
+              value={imageMode}
               onChange={(e) => setImageMode(e.target.value)}
               style={{ width: '100%', padding: '4px', fontSize: '11px', marginBottom: '8px' }}
               disabled={!useImages}
@@ -301,8 +300,8 @@ const App = () => {
             </select>
 
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>Identicon Size:</div>
-            <select 
-              value={patternType} 
+            <select
+              value={patternType}
               onChange={(e) => setPatternType(e.target.value)}
               style={{ width: '100%', padding: '4px', fontSize: '11px', marginBottom: '8px' }}
               disabled={!useImages || imageMode !== 'identicons'}
@@ -310,15 +309,6 @@ const App = () => {
               <option value="normal">Normal Size (32px)</option>
               <option value="large">Large Size (64px)</option>
             </select>
-
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
-              <input
-                type="checkbox"
-                checked={hoverSizeEnabled}
-                onChange={(e) => setHoverSizeEnabled(e.target.checked)}
-              />
-              Enable Hover Size
-            </label>
 
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>Size Multiplier: {hoverSizeMultiplier}x</div>
             <input
@@ -329,7 +319,6 @@ const App = () => {
               max="3"
               step="0.25"
               style={{ width: '100%', marginBottom: '12px' }}
-              disabled={!hoverSizeEnabled}
             />
 
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>Hover Opacity: {hoverOpacity}</div>
@@ -383,7 +372,6 @@ const App = () => {
           fitMargin={0.92}
           autoZoomToNewContent={autoZoomEnabled}
           autoZoomDuration={autoZoomDuration}
-          hoverSizeEnabled={hoverSizeEnabled}
           hoverSizeMultiplier={hoverSizeMultiplier}
           hoverOpacity={hoverOpacity}
           useImages={useImages}

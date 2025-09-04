@@ -16,7 +16,6 @@ const InteractionLayer = React.memo((props) => {
     defaultSize = 2,
     dotStyles = new Map(),
     hoveredDotId = null,
-    hoverSizeEnabled = false,
     hoverSizeMultiplier = 1.5
   } = props;
   
@@ -29,7 +28,7 @@ const InteractionLayer = React.memo((props) => {
 
   const getSize = (item) => {
     const baseSize = getDotSize(item, dotStyles, defaultSize);
-    if (hoverSizeEnabled && hoveredDotId === item.id) {
+    if (hoveredDotId === item.id) {
       return baseSize * hoverSizeMultiplier;
     }
     return baseSize;
@@ -125,7 +124,7 @@ const InteractionLayer = React.memo((props) => {
       
       updateDotAttributes(item, elementId, position, size);
     });
-  }, [data, dotStyles, dotId, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier]);
+  }, [data, dotStyles, dotId, hoveredDotId, hoverSizeMultiplier]);
 
   // Global mouse event listeners for drag detection
   useEffect(() => {

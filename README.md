@@ -343,7 +343,6 @@ const ImageVisualization = () => {
       useImages={true}
       imageProvider={imageProvider}
       hoverImageProvider={hoverImageProvider}
-      hoverSizeEnabled={true}  // Also increase size on hover
       hoverSizeMultiplier={1.5}
     />
   );
