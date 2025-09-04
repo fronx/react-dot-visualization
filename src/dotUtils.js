@@ -96,9 +96,10 @@ export function updateDotAttributes(item, elementId, position, size, additionalA
  * @param {string} color - Fill color
  * @param {string} stroke - Stroke color
  * @param {number} strokeWidth - Stroke width
+ * @param {number} opacity - Opacity value
  * @param {Map} dotStyles - Custom styles map
  */
-export function updateColoredDotAttributes(item, elementId, position, size, color, stroke, strokeWidth, dotStyles) {
+export function updateColoredDotAttributes(item, elementId, position, size, color, stroke, strokeWidth, opacity, dotStyles) {
   const element = d3.select(`#${elementId}`);
   
   if (!element.empty()) {
@@ -110,7 +111,7 @@ export function updateColoredDotAttributes(item, elementId, position, size, colo
       stroke: stroke,
       strokeWidth: strokeWidth,
       filter: '',
-      opacity: 0.7,
+      opacity: opacity,
     };
 
     const customAttrs = dotStyles.get(item.id) || {};

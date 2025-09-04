@@ -14,6 +14,7 @@ const App = () => {
   const [newDotSize, setNewDotSize] = useState(100);
   const [hoverSizeEnabled, setHoverSizeEnabled] = useState(true);
   const [hoverSizeMultiplier, setHoverSizeMultiplier] = useState(1.5);
+  const [hoverOpacity, setHoverOpacity] = useState(1.0);
   const [useImages, setUseImages] = useState(false);
   const [patternType, setPatternType] = useState('normal');
   const [imageMode, setImageMode] = useState('identicons'); // 'identicons' or 'bitmaps'
@@ -330,6 +331,17 @@ const App = () => {
               style={{ width: '100%', marginBottom: '12px' }}
               disabled={!hoverSizeEnabled}
             />
+
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Hover Opacity: {hoverOpacity}</div>
+            <input
+              type="range"
+              value={hoverOpacity}
+              onChange={(e) => setHoverOpacity(Number(e.target.value))}
+              min="0.1"
+              max="1.0"
+              step="0.1"
+              style={{ width: '100%', marginBottom: '12px' }}
+            />
           </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
@@ -373,6 +385,7 @@ const App = () => {
           autoZoomDuration={autoZoomDuration}
           hoverSizeEnabled={hoverSizeEnabled}
           hoverSizeMultiplier={hoverSizeMultiplier}
+          hoverOpacity={hoverOpacity}
           useImages={useImages}
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}

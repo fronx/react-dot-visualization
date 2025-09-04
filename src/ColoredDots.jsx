@@ -16,6 +16,7 @@ const ColoredDots = React.memo((props) => {
     hoveredDotId = null,
     hoverSizeEnabled = false,
     hoverSizeMultiplier = 1.5,
+    hoverOpacity = 1.0,
     useImages = false,
     imageProvider,
     hoverImageProvider
@@ -35,7 +36,7 @@ const ColoredDots = React.memo((props) => {
       const shouldUseHoverImage = hoverImageProvider && hoveredDotId === item.id;
       const hoverImageUrl = shouldUseHoverImage ? hoverImageProvider(item.id) : undefined;
       const regularImageUrl = imageProvider ? imageProvider(item.id) : item.imageUrl;
-      
+
       // Determine which pattern to use
       if (shouldUseHoverImage && hoverImageUrl && hoverImageUrl !== regularImageUrl) {
         // Use hover pattern if it exists and is different from regular image
@@ -56,22 +57,27 @@ const ColoredDots = React.memo((props) => {
     return baseSize;
   };
 
+  const getOpacity = (item) => {
+    return hoveredDotId === item.id ? hoverOpacity : 0.7;
+  };
+
   useEffect(() => {
     data.forEach((item, index) => {
       const elementId = dotId(0, item);
       const position = getSyncedPosition(item, elementId);
       const size = getSize(item);
       const fill = getFill(item, index);
-      
-      updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, dotStyles);
+      const opacity = getOpacity(item);
+
+      updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, opacity, dotStyles);
     });
-  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier, useImages, imageProvider, hoverImageProvider]);
+  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, hoveredDotId, hoverSizeEnabled, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider]);
 
   return (
     <g id="colored-dots">
-      <ImagePatterns 
-        data={data} 
-        useImages={useImages} 
+      <ImagePatterns
+        data={data}
+        useImages={useImages}
         imageProvider={imageProvider}
         hoverImageProvider={hoverImageProvider}
       />

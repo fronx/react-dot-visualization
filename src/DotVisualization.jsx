@@ -57,6 +57,7 @@ const DotVisualization = forwardRef((props, ref) => {
     autoZoomDuration = 200,
     hoverSizeEnabled = false,
     hoverSizeMultiplier = 1.5,
+    hoverOpacity = 1.0,
     ...otherProps
   } = props;
 
@@ -597,6 +598,7 @@ const DotVisualization = forwardRef((props, ref) => {
           hoveredDotId={hoveredDotId}
           hoverSizeEnabled={hoverSizeEnabled}
           hoverSizeMultiplier={hoverSizeMultiplier}
+          hoverOpacity={hoverOpacity}
           useImages={useImages}
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}
