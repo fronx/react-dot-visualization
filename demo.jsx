@@ -207,9 +207,17 @@ const App = () => {
   };
 
 
-  // Image provider functions
-  const imageProvider = (id) => imageCache.get(id);
-  const hoverImageProvider = showHoverImages ? (id) => hoverImageCache.get(id) : undefined;
+  // Image provider functions with performance-based selection
+  const imageProvider = (id, visibleDotCount) => {
+    // You can now make decisions based on visible dot count!
+    // For now, just return the cached image, but this is where you'd
+    // switch between high/medium/low res based on performance
+    return imageCache.get(id);
+  };
+  
+  const hoverImageProvider = showHoverImages ? (id, visibleDotCount) => {
+    return hoverImageCache.get(id);
+  } : undefined;
 
   return (
     <div className="demo">
@@ -340,6 +348,10 @@ const App = () => {
               <br />
               <span style={{ color: '#666' }}>
                 ({data.length > 0 ? ((visibleDotCount / data.length) * 100).toFixed(1) : 0}% visible)
+              </span>
+              <br />
+              <span style={{ fontSize: '10px', color: '#888' }}>
+                Image providers now receive visibleDotCount parameter
               </span>
             </div>
             

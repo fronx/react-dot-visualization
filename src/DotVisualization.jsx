@@ -637,6 +637,7 @@ const DotVisualization = forwardRef((props, ref) => {
           useImages={useImages}
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}
+          visibleDotCount={visibleDotCount}
           debug={debug}
         />
         <ClusterLabels

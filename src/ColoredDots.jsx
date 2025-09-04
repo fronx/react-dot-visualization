@@ -20,6 +20,7 @@ const ColoredDots = React.memo((props) => {
     useImages = false,
     imageProvider,
     hoverImageProvider,
+    visibleDotCount = null,
     debug = false
   } = props;
   
@@ -37,8 +38,8 @@ const ColoredDots = React.memo((props) => {
     if (useImages) {
       // Check if we should show hover image (if hoverImageProvider is available and item is hovered)
       const shouldUseHoverImage = hoverImageProvider && hoveredDotId === item.id;
-      const hoverImageUrl = shouldUseHoverImage ? hoverImageProvider(item.id) : undefined;
-      const regularImageUrl = imageProvider ? imageProvider(item.id) : item.imageUrl;
+      const hoverImageUrl = shouldUseHoverImage ? hoverImageProvider(item.id, visibleDotCount) : undefined;
+      const regularImageUrl = imageProvider ? imageProvider(item.id, visibleDotCount) : item.imageUrl;
 
       // Determine which pattern to use
       if (shouldUseHoverImage && hoverImageUrl && hoverImageUrl !== regularImageUrl) {
@@ -84,6 +85,7 @@ const ColoredDots = React.memo((props) => {
         useImages={useImages}
         imageProvider={imageProvider}
         hoverImageProvider={hoverImageProvider}
+        visibleDotCount={visibleDotCount}
       />
       <PrioritizedList data={data} prioritizedId={hoveredDotId}>
         {(item, index) => (

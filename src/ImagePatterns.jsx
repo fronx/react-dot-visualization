@@ -1,6 +1,6 @@
 import React from 'react';
 
-const ImagePatterns = ({ data, useImages, imageProvider, hoverImageProvider }) => {
+const ImagePatterns = ({ data, useImages, imageProvider, hoverImageProvider, visibleDotCount }) => {
   if (!useImages) return null;
 
   const renderSvgPattern = (item) => {
@@ -51,8 +51,8 @@ const ImagePatterns = ({ data, useImages, imageProvider, hoverImageProvider }) =
       {data
         .filter(item => {
           // Check if item has SVG content or if any provider has an image for this item
-          const providerImageUrl = imageProvider ? imageProvider(item.id) : undefined;
-          const hoverProviderImageUrl = hoverImageProvider ? hoverImageProvider(item.id) : undefined;
+          const providerImageUrl = imageProvider ? imageProvider(item.id, visibleDotCount) : undefined;
+          const hoverProviderImageUrl = hoverImageProvider ? hoverImageProvider(item.id, visibleDotCount) : undefined;
           return item.svgContent || item.imageUrl || providerImageUrl || hoverProviderImageUrl;
         })
         .flatMap((item) => {
@@ -62,13 +62,13 @@ const ImagePatterns = ({ data, useImages, imageProvider, hoverImageProvider }) =
             patterns.push(renderSvgPattern(item));
           } else {
             // Regular image pattern
-            const imageUrl = imageProvider ? imageProvider(item.id) : item.imageUrl;
+            const imageUrl = imageProvider ? imageProvider(item.id, visibleDotCount) : item.imageUrl;
             if (imageUrl) {
               patterns.push(renderBitmapPattern(item, imageUrl, `image-pattern-${item.id}`));
             }
             
             // Hover image pattern (if different from regular image)
-            const hoverImageUrl = hoverImageProvider ? hoverImageProvider(item.id) : undefined;
+            const hoverImageUrl = hoverImageProvider ? hoverImageProvider(item.id, visibleDotCount) : undefined;
             if (hoverImageUrl && hoverImageUrl !== imageUrl) {
               patterns.push(renderBitmapPattern(item, hoverImageUrl, `image-pattern-hover-${item.id}`));
             }
