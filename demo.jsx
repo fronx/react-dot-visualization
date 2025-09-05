@@ -18,6 +18,7 @@ const App = () => {
   const [patternType, setPatternType] = useState('normal');
   const [imageMode, setImageMode] = useState('identicons'); // 'identicons' or 'bitmaps'
   const [showHoverImages, setShowHoverImages] = useState(false); // Show hover image switching
+  const [debug, setDebug] = useState(false); // Debug mode to show background click area
   const [visibleDotCount, setVisibleDotCount] = useState(0);
   const containerRef = useRef(null);
   const vizRef = useRef(null);
@@ -295,6 +296,15 @@ const App = () => {
               Hover Image Switching
             </label>
 
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input
+                type="checkbox"
+                checked={debug}
+                onChange={(e) => setDebug(e.target.checked)}
+              />
+              Debug Mode (Show Background Click Area)
+            </label>
+
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>Image Type:</div>
             <select
               value={imageMode}
@@ -416,6 +426,7 @@ const App = () => {
           useImages={useImages}
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}
+          debug={debug}
         />
       </div>
 
