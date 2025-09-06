@@ -191,10 +191,11 @@ const DotVisualization = forwardRef((props, ref) => {
       setAbsoluteExtent(zoomHandler.current, widenedExtent);
 
       const currentTransform = transform.current || d3.zoomIdentity;
-      const interpolator = d3.interpolateZoom(
-        [currentTransform.x, currentTransform.y, viewBox[2] / currentTransform.k],
-        [next.x, next.y, viewBox[2] / next.k]
-      );
+      
+      // Use direct linear interpolation instead of d3.interpolateZoom to avoid swooping
+      const xInterpolator = d3.interpolate(currentTransform.x, next.x);
+      const yInterpolator = d3.interpolate(currentTransform.y, next.y);
+      const kInterpolator = d3.interpolate(currentTransform.k, next.k);
 
       d3.select(zoomRef.current)
         .transition()
@@ -202,9 +203,9 @@ const DotVisualization = forwardRef((props, ref) => {
         .ease(easing)
         .tween('zoom', () => {
           return (t) => {
-            const [x, y, scale] = interpolator(t);
-            const k = viewBox[2] / scale;
-            const interpolatedTransform = d3.zoomIdentity.translate(x, y).scale(k);
+            const interpolatedTransform = d3.zoomIdentity
+              .translate(xInterpolator(t), yInterpolator(t))
+              .scale(kInterpolator(t));
             d3.select(zoomRef.current).property('__zoom', interpolatedTransform);
             transform.current = interpolatedTransform;
             if (contentRef.current) {
