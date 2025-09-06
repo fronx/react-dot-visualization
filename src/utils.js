@@ -209,37 +209,63 @@ export function computeOcclusionAwareViewBox(bounds, container, occlusion = {}, 
 }
 
 /**
- * Check if new data extends beyond the currently visible area
+ * Check if new data should trigger auto-zoom based on content fit percentage
  * @param {Array} newData - Array of data points with x,y coordinates
  * @param {Object} previousBounds - Previous data bounds {minX, maxX, minY, maxY}
  * @param {Array} viewBox - Current viewBox [x, y, width, height]
  * @param {Object} transform - Current zoom transform {k, x, y}
- * @returns {boolean} True if new content extends beyond visible area
+ * @param {number} dotSize - Default dot size for bounds calculation
+ * @returns {boolean} True if auto-zoom should be triggered
  */
 export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform, dotSize) {
   if (!newData.length || !viewBox || !transform || !previousBounds) return false;
 
   const newBounds = boundsForData(newData, dotSize);
-  
-  // Check if bounds have changed beyond a small tolerance (2%)
+
+  // First check if bounds have changed beyond a small tolerance (2%)
   const tolerance = 0.02;
-  
+
   const prevWidth = previousBounds.maxX - previousBounds.minX;
   const prevHeight = previousBounds.maxY - previousBounds.minY;
   const newWidth = newBounds.maxX - newBounds.minX;
   const newHeight = newBounds.maxY - newBounds.minY;
-  
+
   const widthChanged = Math.abs(newWidth - prevWidth) / prevWidth > tolerance;
   const heightChanged = Math.abs(newHeight - prevHeight) / prevHeight > tolerance;
-  
-  const boundsChanged = 
+
+  const boundsChanged =
     Math.abs(newBounds.minX - previousBounds.minX) / prevWidth > tolerance ||
     Math.abs(newBounds.maxX - previousBounds.maxX) / prevWidth > tolerance ||
     Math.abs(newBounds.minY - previousBounds.minY) / prevHeight > tolerance ||
     Math.abs(newBounds.maxY - previousBounds.maxY) / prevHeight > tolerance ||
     widthChanged || heightChanged;
 
-  return boundsChanged;
+  // If bounds haven't changed significantly, don't auto-zoom
+  if (!boundsChanged) return false;
+
+  // Calculate how much of the current view the content occupies
+  const { k, x: tx, y: ty } = transform;
+  const [vbX, vbY, vbW, vbH] = viewBox;
+
+  // Current visible area in data coordinates (inverse transform)
+  const visibleDataWidth = vbW / k;
+  const visibleDataHeight = vbH / k;
+
+  // Content size in data coordinates
+  const contentWidth = newBounds.maxX - newBounds.minX;
+  const contentHeight = newBounds.maxY - newBounds.minY;
+
+  // Calculate what percentage of the view the content occupies
+  const widthFitPercentage = contentWidth / visibleDataWidth;
+  const heightFitPercentage = contentHeight / visibleDataHeight;
+
+  // Use the larger percentage (limiting factor)
+  const contentFitPercentage = Math.max(widthFitPercentage, heightFitPercentage);
+
+  // Only auto-zoom if content is too small (< 50%) or too large (> 80%)
+  const shouldZoom = contentFitPercentage < 0.5 || contentFitPercentage > 0.9;
+
+  return shouldZoom;
 }
 
 // --- Zoom extent helpers (absolute-extent management) ---
@@ -318,30 +344,30 @@ export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occ
  */
 export function countVisibleDots(data, transform, viewBox, defaultSize = 2) {
   if (!data || !data.length || !transform || !viewBox) return 0;
-  
+
   const { k, x: tx, y: ty } = transform;
   const [vbX, vbY, vbW, vbH] = viewBox;
-  
+
   // Calculate visible data bounds (inverse transform)
   const visibleLeft = (vbX - tx) / k;
   const visibleRight = (vbX + vbW - tx) / k;
   const visibleTop = (vbY - ty) / k;
   const visibleBottom = (vbY + vbH - ty) / k;
-  
+
   let visibleCount = 0;
-  
+
   for (const dot of data) {
     const radius = (dot.size || defaultSize) / 2;
-    
+
     // Check if dot (including its radius) intersects with visible area
     if (dot.x + radius >= visibleLeft &&
-        dot.x - radius <= visibleRight &&
-        dot.y + radius >= visibleTop &&
-        dot.y - radius <= visibleBottom) {
+      dot.x - radius <= visibleRight &&
+      dot.y + radius >= visibleTop &&
+      dot.y - radius <= visibleBottom) {
       visibleCount++;
     }
   }
-  
+
   return visibleCount;
 }
 
