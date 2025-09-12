@@ -4,7 +4,8 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { boundsForData, computeOcclusionAwareViewBox, computeFitTransformToVisible, shouldAutoZoomToNewContent, computeAbsoluteExtent, unionExtent, setAbsoluteExtent, updateZoomExtentForData, countVisibleDots } from './utils.js';
+import { boundsForData, computeOcclusionAwareViewBox, countVisibleDots } from './utils.js';
+import { ZoomManager } from './ZoomManager.js';
 import { useDebug } from './useDebug.js';
 
 
@@ -97,12 +98,9 @@ const DotVisualization = forwardRef((props, ref) => {
 
   const zoomRef = useRef(null);
   const contentRef = useRef(null);
-  const transform = useRef(null);
-  const zoomHandler = useRef(null);
-  const baseScaleRef = useRef(null);
-  const isDraggingRef = useRef(false);
-  const rafState = useRef({ pending: false, lastT: d3.zoomIdentity });
   const coloredDotsRef = useRef(null);
+  const zoomManager = useRef(null);
+  const isDraggingRef = useRef(false);
 
   // Keep refs in sync with state for use in closures
   isDraggingRef.current = isDragging;
@@ -111,17 +109,22 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Function to update visible dot count
   const updateVisibleDotCount = useCallback(() => {
-    if (!processedData.length || !transform.current || !viewBox) return;
+    if (!processedData.length || !viewBox || !zoomManager.current) return;
 
-    const count = countVisibleDots(processedData, transform.current, viewBox, defaultSize);
+    const currentTransform = zoomManager.current.getCurrentTransform();
+    if (!currentTransform) return;
+
+    const count = countVisibleDots(processedData, currentTransform, viewBox, defaultSize);
     setVisibleDotCount(count);
     debugLog('Visible dots:', count);
   }, [processedData, viewBox, defaultSize, debugLog]);
 
-  // Track transform changes to automatically update visible count
+  // Track transform changes to automatically update visible count  
   const prevTransformRef = useRef(null);
   const updateCountOnTransformChange = useCallback(() => {
-    const current = transform.current;
+    if (!zoomManager.current) return;
+    
+    const current = zoomManager.current.getCurrentTransform();
     const prev = prevTransformRef.current;
 
     if (!current) return;
@@ -160,92 +163,12 @@ const DotVisualization = forwardRef((props, ref) => {
     return false;
   }, [defaultSize]);
 
-  // Apply zoom/pan transform to both d3 zoom handler and content
-  const applyTransform = useCallback((newTransform) => {
-    if (!zoomHandler.current || !zoomRef.current) return;
 
-    d3.select(zoomRef.current).call(zoomHandler.current.transform, newTransform);
-    transform.current = newTransform;
-    if (contentRef.current) {
-      contentRef.current.setAttribute("transform", newTransform.toString());
-    }
-  }, []);
-
-  const zoomToVisible = useCallback((duration = 0, easing = d3.easeCubicInOut, dataOverride = null) => {
+  const zoomToVisible = useCallback(async (duration = 0, easing = d3.easeCubicInOut, dataOverride = null) => {
+    if (!zoomManager.current) return false;
     const dataToUse = dataOverride || processedData;
-    if (!zoomRef.current || !zoomHandler.current || !viewBox || !dataToUse.length) return false;
-    const rect = zoomRef.current.getBoundingClientRect();
-    const bounds = boundsForData(dataToUse, defaultSize);
-    const fit = computeFitTransformToVisible(bounds, viewBox, rect, {
-      left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
-    }, fitMargin);
-    if (!fit) return false;
-    const next = d3.zoomIdentity.translate(fit.x, fit.y).scale(fit.k);
-
-    // --- NEW: compute next absolute extent from proposed baseScale = fit.k
-    const newAbsExtent = computeAbsoluteExtent(zoomExtent, fit.k);
-    const oldAbsExtent = zoomHandler.current ? zoomHandler.current.scaleExtent() : null;
-    const widenedExtent = unionExtent(oldAbsExtent, newAbsExtent);
-
-    // Helper to finalize base and extent
-    const finalizeBaseAndExtent = () => {
-      baseScaleRef.current = fit.k;
-      setAbsoluteExtent(zoomHandler.current, newAbsExtent);
-    };
-
-    if (duration > 0) {
-      // --- NEW: widen before the animation so it can't be clamped mid-flight
-      setAbsoluteExtent(zoomHandler.current, widenedExtent);
-
-      const currentTransform = transform.current || d3.zoomIdentity;
-
-      // Use direct linear interpolation instead of d3.interpolateZoom to avoid swooping
-      const xInterpolator = d3.interpolate(currentTransform.x, next.x);
-      const yInterpolator = d3.interpolate(currentTransform.y, next.y);
-      const kInterpolator = d3.interpolate(currentTransform.k, next.k);
-
-      d3.select(zoomRef.current)
-        .transition()
-        .duration(duration)
-        .ease(easing)
-        .tween('zoom', () => {
-          return (t) => {
-            const interpolatedTransform = d3.zoomIdentity
-              .translate(xInterpolator(t), yInterpolator(t))
-              .scale(kInterpolator(t));
-            // During transition, directly set properties to avoid triggering zoom handler
-            d3.select(zoomRef.current).property('__zoom', interpolatedTransform);
-            transform.current = interpolatedTransform;
-            if (contentRef.current) {
-              contentRef.current.setAttribute('transform', interpolatedTransform.toString());
-            }
-            // Also update canvas during transition
-            if (useCanvas && coloredDotsRef.current) {
-              coloredDotsRef.current.renderCanvasWithTransform(interpolatedTransform);
-            }
-          };
-        })
-        .on('end', () => {
-          // Ensure final state + finalize extents
-          d3.select(zoomRef.current).call(zoomHandler.current.transform, next);
-          finalizeBaseAndExtent();  // --- NEW
-        })
-        .on('interrupt', () => {
-          // On interrupt, derive base from current transform, not target
-          const sel = d3.select(zoomRef.current);
-          const cur = sel.property('__zoom') || transform.current || d3.zoomIdentity;
-          baseScaleRef.current = cur.k;
-          const abs = computeAbsoluteExtent(zoomExtent, baseScaleRef.current);
-          setAbsoluteExtent(zoomHandler.current, abs);
-        });
-    } else {
-      // Immediate transform path
-      setAbsoluteExtent(zoomHandler.current, widenedExtent);
-      applyTransform(next);
-      finalizeBaseAndExtent(); // --- NEW
-    }
-    return true;
-  }, [processedData, viewBox, occludeLeft, occludeRight, occludeTop, occludeBottom, fitMargin, applyTransform, zoomExtent]);
+    return await zoomManager.current.zoomToVisible(dataToUse, { duration, easing });
+  }, [processedData]);
 
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
@@ -339,25 +262,15 @@ const DotVisualization = forwardRef((props, ref) => {
     // Calculate current data bounds
     const currentBounds = validData.length > 0 ? boundsForData(validData, defaultSize) : null;
 
-    // Auto-zoom to new content if enabled
-    if (autoZoomToNewContent && currentBounds && viewBox && lastDataBoundsRef.current) {
-      const shouldAutoZoom = shouldAutoZoomToNewContent(
-        validData,
-        lastDataBoundsRef.current,
-        viewBox,
-        transform.current || d3.zoomIdentity,
-        defaultSize
-      );
-
-      if (shouldAutoZoom) {
-        zoomToVisible(autoZoomDuration, d3.easeCubicInOut, validData);
-      }
-    } else if (!autoZoomToNewContent) {
-      // When auto-zoom is disabled, still update zoom extents to allow manual zoom out
-      // to see all data when new content is added outside current bounds
-      const rect = zoomRef.current?.getBoundingClientRect();
-      const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
-      updateZoomExtentForData(zoomHandler.current, validData, viewBox, rect, occlusion, zoomExtent, fitMargin, defaultSize);
+    // Auto-zoom to new content if enabled (using ZoomManager)
+    if (autoZoomToNewContent && zoomManager.current) {
+      zoomManager.current.checkAutoZoom(validData, {
+        autoZoomToNewContent,
+        autoZoomDuration
+      });
+    } else if (!autoZoomToNewContent && zoomManager.current) {
+      // When auto-zoom is disabled, still update zoom extents
+      zoomManager.current.updateZoomExtentsForData(validData);
     }
 
     // Store original input data for future comparisons
@@ -366,9 +279,9 @@ const DotVisualization = forwardRef((props, ref) => {
     dataRef.current = processedValidData;
     setProcessedData(processedValidData);
 
-    // Update last data bounds for auto-zoom detection
-    if (currentBounds) {
-      lastDataBoundsRef.current = currentBounds;
+    // Update data bounds in ZoomManager for auto-zoom detection
+    if (zoomManager.current && currentBounds) {
+      zoomManager.current.updateDataBounds(validData);
     }
 
     // Update visible dot count when data changes
@@ -376,69 +289,73 @@ const DotVisualization = forwardRef((props, ref) => {
 
   }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration]);
 
-  // Initialize zoom handler (browser-only)
+  // Initialize and set up zoom behavior with ZoomManager
   useEffect(() => {
-    if (typeof window !== 'undefined' && !zoomHandler.current) {
-      zoomHandler.current = d3.zoom();
-      // Don't set a safety net extent here - let it be set properly based on actual data
-      // The initial extent will be set when data is processed
-    }
-  }, []);
-
-  // Set up zoom behavior
-  useEffect(() => {
-    if (!processedData.length || !zoomRef.current || typeof window === 'undefined' || !zoomHandler.current) {
+    if (!processedData.length || !zoomRef.current || typeof window === 'undefined') {
       return;
     }
 
-    const handleDragStart = (event) => {
-      setIsDragging(true);
-      if (onZoomStart) onZoomStart(event);
+    // Create canvas renderer function
+    const canvasRenderer = (transform) => {
+      if (useCanvas && coloredDotsRef.current) {
+        coloredDotsRef.current.renderCanvasWithTransform(transform);
+      }
     };
 
-    const handleDragEnd = (event) => {
-      setIsDragging(false);
-      // Update visible dot count based on actual transform change
-      updateCountOnTransformChange();
-      if (onZoomEnd) onZoomEnd(event);
-    };
-
-
-
-    zoomHandler.current
-      .on("start", handleDragStart)
-      .on("end", handleDragEnd)
-      .on("zoom", (event) => {
-        rafState.current.lastT = event.transform;
-        if (rafState.current.pending) return;
-        rafState.current.pending = true;
-        requestAnimationFrame(() => {
-          rafState.current.pending = false;
-          const t = rafState.current.lastT;
-          transform.current = t;
-          // 1) SVG layer
-          if (contentRef.current) {
-            contentRef.current.setAttribute("transform", t.toString());
-          }
-          // 2) Canvas layer: draw at SAME transform in SAME frame
-          if (useCanvas && coloredDotsRef.current) {
-            coloredDotsRef.current.renderCanvasWithTransform(t);
-          }
+    // Initialize ZoomManager
+    if (!zoomManager.current) {
+      zoomManager.current = new ZoomManager({
+        zoomRef,
+        contentRef,
+        canvasRenderer,
+        zoomExtent,
+        defaultSize,
+        fitMargin,
+        occludeLeft,
+        occludeRight,
+        occludeTop,
+        occludeBottom,
+        useCanvas,
+        onZoomStart: (event) => {
+          setIsDragging(true);
+          if (onZoomStart) onZoomStart(event);
+        },
+        onZoomEnd: (event) => {
+          setIsDragging(false);
           updateCountOnTransformChange();
-        });
+          if (onZoomEnd) onZoomEnd(event);
+        },
+        onTransformChange: updateCountOnTransformChange
       });
+    } else {
+      // Update config when props change
+      zoomManager.current.updateConfig({
+        zoomExtent,
+        defaultSize,
+        fitMargin,
+        occludeLeft,
+        occludeRight,
+        occludeTop,
+        occludeBottom,
+        useCanvas
+      });
+    }
 
-    d3.select(zoomRef.current)
-      .call(zoomHandler.current);
+    // Set viewBox if available
+    if (viewBox) {
+      zoomManager.current.setViewBox(viewBox);
+    }
 
-    // Add global mouseup listener to ensure drag state is always cleared
+    // Initialize zoom behavior
+    zoomManager.current.initialize();
+
+    // Add global event listeners
     const handleGlobalMouseUp = () => {
       if (isDraggingRef.current) {
         setIsDragging(false);
       }
     };
 
-    // Add global blur event listener to clear hover states when window loses focus
     const handleWindowBlur = () => {
       debugLog('🔍 Window blur - resetting all states');
       setHoveredDotId(null);
@@ -456,9 +373,12 @@ const DotVisualization = forwardRef((props, ref) => {
     return () => {
       document.removeEventListener('mouseup', handleGlobalMouseUp);
       window.removeEventListener('blur', handleWindowBlur);
+      if (zoomManager.current) {
+        zoomManager.current.destroy();
+      }
       setIsZoomSetupComplete(false);
     };
-  }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox, useCanvas]);
+  }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
 
   // Decolliding dots
@@ -581,22 +501,10 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   };
 
-  // Keep extents in sync when zoomExtent prop changes
+  // Keep extents in sync when zoomExtent prop changes (handled by ZoomManager)
   useEffect(() => {
-    if (!zoomHandler.current) return;
-    if (baseScaleRef.current == null) return; // wait for first fit
-
-    const newExtentFromBase = computeAbsoluteExtent(zoomExtent, baseScaleRef.current);
-    const currentExtent = zoomHandler.current.scaleExtent();
-
-    // Only update if there's no current extent, or if the new extent is more permissive
-    // (allows more zoom out) than the current one. This prevents overriding extents
-    // that were carefully calculated for larger data ranges.
-    const hasNoExtent = !currentExtent || currentExtent[0] === 0 && currentExtent[1] === Infinity;
-    const isMorePermissive = !hasNoExtent && newExtentFromBase[0] < currentExtent[0];
-
-    if (hasNoExtent || isMorePermissive) {
-      setAbsoluteExtent(zoomHandler.current, newExtentFromBase);
+    if (zoomManager.current) {
+      zoomManager.current.updateConfig({ zoomExtent });
     }
   }, [zoomExtent]);
 
@@ -614,6 +522,7 @@ const DotVisualization = forwardRef((props, ref) => {
     zoomToVisible,
     getVisibleDotCount: () => visibleDotCount,
     updateVisibleDotCount,
+    getZoomTransform: () => zoomManager.current?.getCurrentTransform(),
   }), [zoomToVisible, visibleDotCount, updateVisibleDotCount]);
 
   // Auto-fit to visible region
@@ -621,7 +530,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Only run once; do not auto-fit again after first successful fit
     if (didInitialAutoFitRef.current) return;
     if (!autoFitToVisible) return;
-    if (!viewBox || !zoomRef.current || !zoomHandler.current) return;
+    if (!viewBox || !zoomRef.current || !zoomManager.current) return;
     if (!processedData.length) return; // wait until data and zoom binding are ready
     if (!isZoomSetupComplete) return; // wait until zoom behavior is fully set up
 
@@ -709,7 +618,7 @@ const DotVisualization = forwardRef((props, ref) => {
             hoverImageProvider={hoverImageProvider}
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
-            zoomTransform={transform.current}
+            zoomTransform={zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
             debug={debug}
             effectiveViewBox={effectiveViewBox}
           />
@@ -747,7 +656,7 @@ const DotVisualization = forwardRef((props, ref) => {
             hoverImageProvider={hoverImageProvider}
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
-            zoomTransform={transform.current}
+            zoomTransform={zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
             debug={debug}
           />
         )}
