@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import * as jdenticon from 'jdenticon';
 import DotVisualization from './src/DotVisualization.jsx';
@@ -21,6 +21,7 @@ const App = () => {
   const [visibleDotCount, setVisibleDotCount] = useState(0);
   const [totalDotCount, setTotalDotCount] = useState(1000); // Start with 1,000 dots
   const [enableDecollision, setEnableDecollision] = useState(false); // Default off
+  const [enablePositionTransitions, setEnablePositionTransitions] = useState(false); // Default off
   const containerRef = useRef(null);
   const vizRef = useRef(null);
 
@@ -62,18 +63,25 @@ const App = () => {
   const [data, setData] = useState([]);
   const panelWidth = 220;
 
+  // Reusable function to generate dots
+  const generateDots = useCallback((count) => {
+    if (containerSize.width === 0) return [];
+
+    return Array.from({ length: count }, (_, i) => ({
+      id: i,
+      x: Math.random() * containerSize.width,
+      y: Math.random() * containerSize.height,
+      color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+      name: `Point ${i}`,
+      value: Math.round(Math.random() * 100),
+      // Add individual sizes to some dots for testing
+      size: i < 10 ? Math.random() * 20 + 5 : undefined, // first 10 dots have random individual sizes
+    }));
+  }, [containerSize]);
+
   useEffect(() => {
     if (containerSize.width > 0) {
-      const newData = Array.from({ length: totalDotCount }, (_, i) => ({
-        id: i,
-        x: Math.random() * containerSize.width,
-        y: Math.random() * containerSize.height,
-        color: `hsl(${Math.random() * 360}, 70%, 50%)`,
-        name: `Point ${i}`,
-        value: Math.round(Math.random() * 100),
-        // Add individual sizes to some dots for testing
-        size: i < 10 ? Math.random() * 20 + 5 : undefined, // first 10 dots have random individual sizes
-      }));
+      const newData = generateDots(totalDotCount);
 
       setData(newData);
 
@@ -104,7 +112,7 @@ const App = () => {
       setImageCache(newImageCache);
       setHoverImageCache(newHoverCache);
     }
-  }, [containerSize, patternType, imageMode, showHoverImages, totalDotCount]);
+  }, [containerSize, patternType, imageMode, showHoverImages, totalDotCount, generateDots]);
 
   const handleClick = (item) => {
     setClickedDot(item);
@@ -224,7 +232,7 @@ const App = () => {
     // switch between high/medium/low res based on performance
     return imageCache.get(id);
   };
-  
+
   const hoverImageProvider = showHoverImages ? (id, visibleDotCount) => {
     return hoverImageCache.get(id);
   } : undefined;
@@ -268,6 +276,22 @@ const App = () => {
                 onChange={(e) => setEnableDecollision(e.target.checked)}
               />
               Enable Decollision Algorithm
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input
+                type="checkbox"
+                checked={enablePositionTransitions}
+                onChange={(e) => {
+                  setEnablePositionTransitions(e.target.checked);
+                  // Force data refresh to apply new setting immediately
+                  const newData = generateDots(totalDotCount);
+                  if (newData.length > 0) {
+                    setData(newData);
+                  }
+                }}
+              />
+              Enable Position Transitions
             </label>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
@@ -366,7 +390,7 @@ const App = () => {
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
             <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Performance Test</div>
-            
+
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>
               Total Dots: {totalDotCount.toLocaleString()}
               <br />
@@ -394,7 +418,7 @@ const App = () => {
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
             <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Performance Info</div>
-            
+
             <div style={{ fontSize: '11px', marginBottom: '8px', padding: '6px', backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: '4px' }}>
               <strong>Visible Dots:</strong> {visibleDotCount.toLocaleString()} / {data.length.toLocaleString()}
               <br />
@@ -406,12 +430,12 @@ const App = () => {
                 Image providers now receive visibleDotCount parameter
               </span>
             </div>
-            
-            <button 
+
+            <button
               onClick={updateVisibleCount}
-              style={{ 
-                padding: '4px 8px', 
-                fontSize: '10px', 
+              style={{
+                padding: '4px 8px',
+                fontSize: '10px',
                 cursor: 'pointer',
                 backgroundColor: '#f0f0f0',
                 border: '1px solid #ccc',
@@ -446,6 +470,7 @@ const App = () => {
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}
           enableDecollisioning={enableDecollision}
+          enablePositionTransitions={enablePositionTransitions}
           debug={debug}
         />
       </div>
