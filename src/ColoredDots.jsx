@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
 import { PrioritizedList } from './PrioritizedList.js';
 import { useDebug } from './useDebug.js';
 
-const ColoredDots = React.memo((props) => {
+const ColoredDots = React.memo(forwardRef((props, ref) => {
   const {
     data = [],
     dotId,
@@ -75,13 +75,30 @@ const ColoredDots = React.memo((props) => {
 
 
   // Render all dots using shared drawing function
-  const renderDots = (canvasContext = null) => {
+  const renderDots = (canvasContext = null, tOverride = null) => {
     if (useCanvas && canvasContext) {
-      const t = zoomTransform || { k: 1, x: 0, y: 0 };
+      const t = tOverride || zoomTransform || { k: 1, x: 0, y: 0 };
       
-      // Apply zoom transform on top of the base DPR scaling
-      // This should now match SVG zoom behavior exactly
+      // Reset to identity
+      canvasContext.setTransform(1, 0, 0, 1, 0, 0);
+      // Re-apply base viewBox transform
+      if (effectiveViewBox && canvasDimensionsRef.current) {
+        const { width, height } = canvasDimensionsRef.current;
+        const dpr = (window.devicePixelRatio || 1) * 2;
+        const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+        const scaleX = (width / vbW) * dpr;
+        const scaleY = (height / vbH) * dpr;
+        const translateX = -vbX * scaleX;
+        const translateY = -vbY * scaleY;
+        canvasContext.setTransform(scaleX, 0, 0, scaleY, translateX, translateY);
+      }
+      // Now apply zoom
       canvasContext.transform(t.k, 0, 0, t.k, t.x, t.y);
+      // Clear in viewBox coords after full transform reset
+      if (effectiveViewBox) {
+        const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+        canvasContext.clearRect(vbX, vbY, vbW, vbH);
+      }
       
       // Canvas rendering: use raw positions with transform applied
       data.forEach((item, index) => {
@@ -188,64 +205,27 @@ const ColoredDots = React.memo((props) => {
     return ratio > 1.2; // 20% threshold
   };
 
-  /**
-   * Debounce canvas re-renders during zoom operations (150ms delay)
-   * 
-   * Why: Zoom events fire rapidly (10-60+/sec), causing performance issues
-   * and stuttering when re-rendering high-resolution canvas on every event
-   * 
-   * Remove if: Canvas rendering becomes much faster, users need immediate
-   * feedback, or 150ms delay feels laggy for precision work
-   */
-  const scheduleZoomRender = useCallback(() => {
-    if (!useCanvas) return;
-    
-    // Clear any pending render to reset debounce timer
-    if (renderTimeoutRef.current) {
-      clearTimeout(renderTimeoutRef.current);
-    }
-    
-    // Schedule new render with debounce delay
-    renderTimeoutRef.current = setTimeout(() => {
-      debugLog('Zoom-triggered canvas render:', { zoomK: zoomTransform?.k, dataLength: data.length });
-      // Use requestAnimationFrame to defer heavy canvas operations
-      requestAnimationFrame(() => {
-        const context = setupCanvas();
-        if (context) {
-          renderDots(context);
-        }
-      });
-    }, 150); // 150ms debounce - balance between responsiveness and performance
-  }, [useCanvas, data, zoomTransform, setupCanvas, renderDots]);
 
-  // Canvas rendering for data/style changes (immediate)
+  // Canvas rendering for data/style changes (NOT zoom)
   useEffect(() => {
-    if (useCanvas) {
-      debugLog('Immediate canvas render:', { dataLength: data.length });
-      const context = setupCanvas();
-      if (context) {
-        renderDots(context);
-      }
-    } else {
-      // Reset canvas dimensions when switching away from canvas mode
-      canvasDimensionsRef.current = null;
-    }
-    // Canvas re-renders immediately on data/style changes
-  }, [data, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas, zoomTransform]);
+    if (!useCanvas) { canvasDimensionsRef.current = null; return; }
+    debugLog('Immediate canvas render:', { dataLength: data.length });
+    const ctx = setupCanvas();
+    if (ctx) renderDots(ctx);
+  }, [data, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas]);
 
-  // Canvas rendering for zoom changes (debounced)
-  useEffect(() => {
-    if (useCanvas && zoomTransform) {
-      const currentZoom = zoomTransform.k;
-      
-      // Re-render if zoom changed significantly
-      if (hasSignificantZoomChange(lastZoomLevel.current, currentZoom)) {
-        scheduleZoomRender();
-        lastZoomLevel.current = currentZoom;
+
+
+  // Expose canvas rendering function to parent
+  useImperativeHandle(ref, () => ({
+    renderCanvasWithTransform: (transform) => {
+      if (!useCanvas) return;
+      const ctx = setupCanvas();
+      if (ctx) {
+        renderDots(ctx, transform);
       }
     }
-  }, [zoomTransform?.k, useCanvas, scheduleZoomRender]);
-
+  }), [useCanvas, setupCanvas, renderDots]);
 
   // Cleanup: Clear any pending debounced renders when component unmounts
   // This prevents memory leaks and "setState on unmounted component" warnings
@@ -316,6 +296,6 @@ const ColoredDots = React.memo((props) => {
       </PrioritizedList>
     </g>
   );
-});
+}));
 
 export default ColoredDots;

@@ -101,6 +101,8 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomHandler = useRef(null);
   const baseScaleRef = useRef(null);
   const isDraggingRef = useRef(false);
+  const rafState = useRef({ pending: false, lastT: d3.zoomIdentity });
+  const coloredDotsRef = useRef(null);
 
   // Keep refs in sync with state for use in closures
   isDraggingRef.current = isDragging;
@@ -211,20 +213,12 @@ const DotVisualization = forwardRef((props, ref) => {
             const interpolatedTransform = d3.zoomIdentity
               .translate(xInterpolator(t), yInterpolator(t))
               .scale(kInterpolator(t));
-            d3.select(zoomRef.current).property('__zoom', interpolatedTransform);
-            transform.current = interpolatedTransform;
-            if (contentRef.current) {
-              contentRef.current.setAttribute('transform', interpolatedTransform.toString());
-            }
+            d3.select(zoomRef.current).call(zoomHandler.current.transform, interpolatedTransform);
           };
         })
         .on('end', () => {
           // Ensure final state + finalize extents
-          transform.current = next;
-          d3.select(zoomRef.current).property('__zoom', next);
-          if (contentRef.current) {
-            contentRef.current.setAttribute('transform', next.toString());
-          }
+          d3.select(zoomRef.current).call(zoomHandler.current.transform, next);
           finalizeBaseAndExtent();  // --- NEW
         })
         .on('interrupt', () => {
@@ -406,19 +400,23 @@ const DotVisualization = forwardRef((props, ref) => {
       .on("start", handleDragStart)
       .on("end", handleDragEnd)
       .on("zoom", (event) => {
-        const t = event.transform;
-        transform.current = t;
-        
-        // Apply transform to vector layer
-        if (contentRef.current) {
-          contentRef.current.setAttribute("transform", t.toString());
-        }
-        
-        // Canvas layer stays untransformed - it will handle zoom internally
-        // The canvas will always cover the full viewport
-        
-        // Update visible count when transform changes (but only on actual changes)
-        updateCountOnTransformChange();
+        rafState.current.lastT = event.transform;
+        if (rafState.current.pending) return;
+        rafState.current.pending = true;
+        requestAnimationFrame(() => {
+          rafState.current.pending = false;
+          const t = rafState.current.lastT;
+          transform.current = t;
+          // 1) SVG layer
+          if (contentRef.current) {
+            contentRef.current.setAttribute("transform", t.toString());
+          }
+          // 2) Canvas layer: draw at SAME transform in SAME frame
+          if (useCanvas && coloredDotsRef.current) {
+            coloredDotsRef.current.renderCanvasWithTransform(t);
+          }
+          updateCountOnTransformChange();
+        });
       });
 
     d3.select(zoomRef.current)
@@ -451,7 +449,7 @@ const DotVisualization = forwardRef((props, ref) => {
       window.removeEventListener('blur', handleWindowBlur);
       setIsZoomSetupComplete(false);
     };
-  }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox]);
+  }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox, useCanvas]);
 
 
   // Decolliding dots
@@ -685,6 +683,7 @@ const DotVisualization = forwardRef((props, ref) => {
       {useCanvas && (
         <g id="canvas-layer">
           <ColoredDots
+            ref={coloredDotsRef}
             data={processedData}
             dotId={dotId}
             stroke={dotStroke}
