@@ -213,7 +213,16 @@ const DotVisualization = forwardRef((props, ref) => {
             const interpolatedTransform = d3.zoomIdentity
               .translate(xInterpolator(t), yInterpolator(t))
               .scale(kInterpolator(t));
-            d3.select(zoomRef.current).call(zoomHandler.current.transform, interpolatedTransform);
+            // During transition, directly set properties to avoid triggering zoom handler
+            d3.select(zoomRef.current).property('__zoom', interpolatedTransform);
+            transform.current = interpolatedTransform;
+            if (contentRef.current) {
+              contentRef.current.setAttribute('transform', interpolatedTransform.toString());
+            }
+            // Also update canvas during transition
+            if (useCanvas && coloredDotsRef.current) {
+              coloredDotsRef.current.renderCanvasWithTransform(interpolatedTransform);
+            }
           };
         })
         .on('end', () => {
