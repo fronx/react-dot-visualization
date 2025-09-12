@@ -1,9 +1,10 @@
-import React, { useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
 import { PrioritizedList } from './PrioritizedList.js';
 import { useDebug } from './useDebug.js';
+import { buildSpatialIndex, findDotAtPosition, useCanvasInteractions } from './canvasInteractions.js';
 
 const ColoredDots = React.memo(forwardRef((props, ref) => {
   const {
@@ -25,12 +26,17 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     useCanvas = false,
     zoomTransform = null,
     effectiveViewBox = null,
-    debug = false
+    debug = false,
+    onHover,
+    onLeave,
+    onClick,
+    isZooming = false
   } = props;
-  
+
   const debugLog = useDebug(debug);
   const canvasRef = useRef(null);
   const canvasDimensionsRef = useRef(null);
+
   const getColor = (item, index) => {
     if (item.color) return item.color;
     if (defaultColor) return defaultColor;
@@ -76,7 +82,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const renderDots = (canvasContext = null, tOverride = null) => {
     if (useCanvas && canvasContext) {
       const t = tOverride || zoomTransform || { k: 1, x: 0, y: 0 };
-      
+
       // Reset to identity
       canvasContext.setTransform(1, 0, 0, 1, 0, 0);
       // Re-apply base viewBox transform
@@ -97,19 +103,44 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         const [vbX, vbY, vbW, vbH] = effectiveViewBox;
         canvasContext.clearRect(vbX, vbY, vbW, vbH);
       }
-      
+
+      // Build spatial index for mouse interaction in CSS pixel space
+      // Mouse events give us CSS coordinates, so we need to convert dots to CSS space
+      const cssTransform = { ...t };
+      if (effectiveViewBox && canvasDimensionsRef.current) {
+        const { width, height } = canvasDimensionsRef.current; // CSS pixels
+        const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+
+        // Scale from viewBox coordinates to CSS pixels (no DPR here)
+        const scaleX = width / vbW;
+        const scaleY = height / vbH;
+        const translateX = -vbX * scaleX;
+        const translateY = -vbY * scaleY;
+
+        // Combine viewBox transform with zoom transform to get CSS pixel positions
+        cssTransform.k = t.k * scaleX;
+        cssTransform.x = (t.x * scaleX) + translateX;
+        cssTransform.y = (t.y * scaleY) + translateY;
+      }
+
+      const spatialIndex = buildSpatialIndex(data, getSize, cssTransform);
+      if (spatialIndex) {
+        canvasRef.current._spatialIndex = spatialIndex;
+        canvasRef.current._spatialIndexTransform = cssTransform; // Store for debugging
+      }
+
       // Canvas rendering: use raw positions with transform applied
       data.forEach((item, index) => {
         const opacity = getOpacity(item);
         const fill = getColor(item, index); // Canvas uses solid colors only
         const size = getSize(item);
         const radius = size / 2;
-        
+
         canvasContext.globalAlpha = opacity;
         canvasContext.fillStyle = fill;
         canvasContext.strokeStyle = stroke;
         canvasContext.lineWidth = strokeWidth;
-        
+
         canvasContext.beginPath();
         canvasContext.arc(item.x, item.y, radius, 0, 2 * Math.PI);
         canvasContext.fill();
@@ -126,7 +157,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         const fill = getFill(item, index);
         const opacity = getOpacity(item);
         const isHovered = hoveredDotId === item.id;
-        
+
         updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, opacity, dotStyles, isHovered);
       });
     }
@@ -134,10 +165,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   const setupCanvas = () => {
     if (!useCanvas || !canvasRef.current) return null;
-    
+
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
-    
+
     // Use cached dimensions or initialize them once to avoid getBoundingClientRect() shifts
     if (!canvasDimensionsRef.current) {
       const rect = canvas.getBoundingClientRect();
@@ -147,37 +178,37 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       };
       debugLog('Canvas dimensions initialized:', canvasDimensionsRef.current);
     }
-    
+
     const { width, height } = canvasDimensionsRef.current;
     const dpr = window.devicePixelRatio || 1;
-    
+
     // Keep canvas resolution capped at 2x screen to avoid memory issues
     const MAX_MULT = 2;
     const effectiveDpr = dpr * MAX_MULT;
-    
+
     // Set canvas internal size 
     canvas.width = width * effectiveDpr;
     canvas.height = height * effectiveDpr;
-    
+
     // Set up coordinate system to match the viewBox
     // Canvas pixels should map 1:1 to viewBox units, scaled by DPR for crisp rendering
     if (effectiveViewBox) {
       const [vbX, vbY, vbW, vbH] = effectiveViewBox;
-      
+
       // Scale from canvas pixels to viewBox coordinates
       const scaleX = (width / vbW) * effectiveDpr;
       const scaleY = (height / vbH) * effectiveDpr;
-      
+
       // Translate to account for viewBox origin
       const translateX = -vbX * scaleX;
       const translateY = -vbY * scaleY;
-      
+
       context.setTransform(scaleX, 0, 0, scaleY, translateX, translateY);
     } else {
       // Fallback: just apply DPR scaling
       context.setTransform(effectiveDpr, 0, 0, effectiveDpr, 0, 0);
     }
-    
+
     // Clear canvas in viewBox coordinates
     if (effectiveViewBox) {
       const [vbX, vbY, vbW, vbH] = effectiveViewBox;
@@ -185,10 +216,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     } else {
       context.clearRect(0, 0, width, height);
     }
-    
-    debugLog('Canvas setup:', { 
-      width, 
-      height, 
+
+    debugLog('Canvas setup:', {
+      width,
+      height,
       effectiveDpr,
       canvasSize: `${canvas.width}x${canvas.height}`,
       memoryMB: ((canvas.width * canvas.height * 4) / (1024 * 1024)).toFixed(1)
@@ -208,7 +239,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
 
 
-  // Expose canvas rendering function to parent
+  // Expose canvas rendering function and interaction methods to parent
   useImperativeHandle(ref, () => ({
     renderCanvasWithTransform: (transform) => {
       if (!useCanvas) return;
@@ -216,8 +247,12 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       if (ctx) {
         renderDots(ctx, transform);
       }
+    },
+    findDotAtPosition: (mouseX, mouseY) => {
+      if (!useCanvas || !canvasRef.current?._spatialIndex) return null;
+      return findDotAtPosition(mouseX, mouseY, canvasRef.current._spatialIndex);
     }
-  }), [useCanvas, setupCanvas, renderDots]);
+  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition]);
 
 
   useEffect(() => {
@@ -228,6 +263,16 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     // SVG needs all dependencies including dotStyles for positioning
   }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider, useCanvas]);
 
+  // Canvas interaction handlers using utility hook
+  const canvasInteractionHandlers = useCanvasInteractions({
+    enabled: useCanvas,
+    isZooming,
+    getSpatialIndex: () => canvasRef.current?._spatialIndex,
+    onHover,
+    onLeave,
+    onClick
+  });
+
   if (useCanvas) {
     // Position foreignObject at origin, but make it large enough to cover viewBox area
     // This way the canvas coordinate system matches the D3 zoom coordinate system
@@ -235,17 +280,18 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     const viewBoxY = effectiveViewBox ? effectiveViewBox[1] : 0;
     const viewBoxW = effectiveViewBox ? effectiveViewBox[2] : 1000;
     const viewBoxH = effectiveViewBox ? effectiveViewBox[3] : 1000;
-    
+
     // Canvas should start at viewBox origin and span the viewBox dimensions
     return (
       <foreignObject x={viewBoxX} y={viewBoxY} width={viewBoxW} height={viewBoxH}>
         <canvas
           ref={canvasRef}
-          style={{ 
-            width: '100%', 
+          {...canvasInteractionHandlers}
+          style={{
+            width: '100%',
             height: '100%',
             display: 'block',
-            pointerEvents: 'none' // Let SVG handle interactions
+            pointerEvents: useCanvas ? 'auto' : 'none' // Enable interactions for canvas mode
           }}
         />
       </foreignObject>

@@ -621,6 +621,10 @@ const DotVisualization = forwardRef((props, ref) => {
             zoomTransform={zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
             debug={debug}
             effectiveViewBox={effectiveViewBox}
+            onHover={handleDotHover}
+            onLeave={handleDotLeave}
+            onClick={onClick}
+            isZooming={isZooming}
           />
         </g>
       )}
