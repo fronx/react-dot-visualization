@@ -16,6 +16,10 @@ describe('ZoomManager - Complete Zoom Functionality Tests', () => {
     global.document = document;
     global.window = dom.window;
     global.requestAnimationFrame = (callback) => setTimeout(callback, 16);
+    
+    // Ensure SVGElement is available from JSDOM window for D3 zoom behavior
+    // D3 uses instanceof SVGElement to determine how to calculate extent
+    global.SVGElement = dom.window.SVGElement;
 
     // Import ZoomManager
     const module = await import('../src/ZoomManager.js');
@@ -77,6 +81,7 @@ describe('ZoomManager - Complete Zoom Functionality Tests', () => {
     delete global.document;
     delete global.window;
     delete global.requestAnimationFrame;
+    delete global.SVGElement;
   });
 
   test('FLICKER FIX: Canvas and SVG render synchronously with same transform', async () => {
