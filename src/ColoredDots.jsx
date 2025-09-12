@@ -30,8 +30,6 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   
   const debugLog = useDebug(debug);
   const canvasRef = useRef(null);
-  const lastZoomLevel = useRef(1);
-  const renderTimeoutRef = useRef(null);
   const canvasDimensionsRef = useRef(null);
   const getColor = (item, index) => {
     if (item.color) return item.color;
@@ -198,12 +196,6 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     return context;
   };
 
-  // Only re-render canvas if zoom changed by more than 20% to avoid excessive renders
-  const hasSignificantZoomChange = (oldZoom, newZoom) => {
-    if (!oldZoom || !newZoom) return true;
-    const ratio = Math.max(oldZoom, newZoom) / Math.min(oldZoom, newZoom);
-    return ratio > 1.2; // 20% threshold
-  };
 
 
   // Canvas rendering for data/style changes (NOT zoom)
@@ -227,16 +219,6 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     }
   }), [useCanvas, setupCanvas, renderDots]);
 
-  // Cleanup: Clear any pending debounced renders when component unmounts
-  // This prevents memory leaks and "setState on unmounted component" warnings
-  useEffect(() => {
-    return () => {
-      if (renderTimeoutRef.current) {
-        clearTimeout(renderTimeoutRef.current);
-        renderTimeoutRef.current = null;
-      }
-    };
-  }, []);
 
   useEffect(() => {
     if (!useCanvas) {
