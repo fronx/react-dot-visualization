@@ -256,24 +256,6 @@ const App = () => {
             + Add 7 Gray Dots
           </button>
 
-          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Dot Sizes</div>
-
-            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Default Size: {dotSize}</div>
-            <input
-              type="range"
-              value={dotSize}
-              onChange={(e) => setDotSize(Number(e.target.value))}
-              min="1"
-              max="200"
-              step="1"
-              style={{ width: '100%', marginBottom: '8px' }}
-            />
-
-            <div style={{ fontSize: '11px', marginBottom: '6px', color: '#666' }}>
-              New Dots Size: Auto-scaled ({getScaledDotSize().toFixed(1)}px)
-            </div>
-          </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
             <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Visual Settings</div>
