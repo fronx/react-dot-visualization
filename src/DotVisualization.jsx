@@ -406,10 +406,17 @@ const DotVisualization = forwardRef((props, ref) => {
       .on("start", handleDragStart)
       .on("end", handleDragEnd)
       .on("zoom", (event) => {
-        transform.current = event.transform;
+        const t = event.transform;
+        transform.current = t;
+        
+        // Apply transform to vector layer
         if (contentRef.current) {
-          contentRef.current.setAttribute("transform", transform.current.toString());
+          contentRef.current.setAttribute("transform", t.toString());
         }
+        
+        // Canvas layer stays untransformed - it will handle zoom internally
+        // The canvas will always cover the full viewport
+        
         // Update visible count when transform changes (but only on actual changes)
         updateCountOnTransformChange();
       });
@@ -674,7 +681,35 @@ const DotVisualization = forwardRef((props, ref) => {
           strokeDasharray: debug ? '5,5' : 'none'
         }}
       />
-      <g ref={contentRef}>
+      {/* Canvas layer as a sibling, not inside the transformed group */}
+      {useCanvas && (
+        <g id="canvas-layer">
+          <ColoredDots
+            data={processedData}
+            dotId={dotId}
+            stroke={dotStroke}
+            strokeWidth={dotStrokeWidth}
+            defaultColor={defaultColor}
+            defaultSize={defaultSize}
+            defaultOpacity={defaultOpacity}
+            dotStyles={dotStyles}
+            hoveredDotId={hoveredDotId}
+            hoverSizeMultiplier={hoverSizeMultiplier}
+            hoverOpacity={hoverOpacity}
+            useImages={useImages}
+            imageProvider={imageProvider}
+            hoverImageProvider={hoverImageProvider}
+            visibleDotCount={visibleDotCount}
+            useCanvas={useCanvas}
+            zoomTransform={transform.current}
+            debug={debug}
+            effectiveViewBox={effectiveViewBox}
+          />
+        </g>
+      )}
+
+      {/* Vector layer that gets the full d3 zoom transform */}
+      <g ref={contentRef} id="vector-layer">
         {(edges && edges.length > 0) && (
           <EdgeLayer
             edges={edges}
@@ -685,26 +720,29 @@ const DotVisualization = forwardRef((props, ref) => {
             debug={debug}
           />
         )}
-        <ColoredDots
-          data={processedData}
-          dotId={dotId}
-          stroke={dotStroke}
-          strokeWidth={dotStrokeWidth}
-          defaultColor={defaultColor}
-          defaultSize={defaultSize}
-          defaultOpacity={defaultOpacity}
-          dotStyles={dotStyles}
-          hoveredDotId={hoveredDotId}
-          hoverSizeMultiplier={hoverSizeMultiplier}
-          hoverOpacity={hoverOpacity}
-          useImages={useImages}
-          imageProvider={imageProvider}
-          hoverImageProvider={hoverImageProvider}
-          visibleDotCount={visibleDotCount}
-          useCanvas={useCanvas}
-          zoomTransform={transform.current}
-          debug={debug}
-        />
+        {/* SVG mode dots stay in the vector layer */}
+        {!useCanvas && (
+          <ColoredDots
+            data={processedData}
+            dotId={dotId}
+            stroke={dotStroke}
+            strokeWidth={dotStrokeWidth}
+            defaultColor={defaultColor}
+            defaultSize={defaultSize}
+            defaultOpacity={defaultOpacity}
+            dotStyles={dotStyles}
+            hoveredDotId={hoveredDotId}
+            hoverSizeMultiplier={hoverSizeMultiplier}
+            hoverOpacity={hoverOpacity}
+            useImages={useImages}
+            imageProvider={imageProvider}
+            hoverImageProvider={hoverImageProvider}
+            visibleDotCount={visibleDotCount}
+            useCanvas={useCanvas}
+            zoomTransform={transform.current}
+            debug={debug}
+          />
+        )}
         <ClusterLabels
           data={processedData}
           clusters={clusters}
@@ -732,6 +770,16 @@ const DotVisualization = forwardRef((props, ref) => {
             debug={debug}
           />
         )}
+
+        {/* Invisible cushion so the group has a sensible bbox */}
+        <rect
+          x={effectiveViewBox[0] - effectiveViewBox[2]}
+          y={effectiveViewBox[1] - effectiveViewBox[3]}
+          width={effectiveViewBox[2] * 3}
+          height={effectiveViewBox[3] * 3}
+          fill="none"
+          pointerEvents="none"
+        />
       </g>
     </svg>
   );
