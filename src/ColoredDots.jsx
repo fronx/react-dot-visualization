@@ -5,6 +5,7 @@ import ImagePatterns from './ImagePatterns.jsx';
 import { PrioritizedList } from './PrioritizedList.js';
 import { useDebug } from './useDebug.js';
 import { buildSpatialIndex, findDotAtPosition, useCanvasInteractions } from './canvasInteractions.js';
+import { transformToCSSPixels } from './utils.js';
 
 const ColoredDots = React.memo(forwardRef((props, ref) => {
   const {
@@ -106,27 +107,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
       // Build spatial index for mouse interaction in CSS pixel space
       // Mouse events give us CSS coordinates, so we need to convert dots to CSS space
-      const cssTransform = { ...t };
-      if (effectiveViewBox && canvasDimensionsRef.current) {
-        const { width, height } = canvasDimensionsRef.current; // CSS pixels
-        const [vbX, vbY, vbW, vbH] = effectiveViewBox;
-
-        // Scale from viewBox coordinates to CSS pixels (no DPR here)
-        const scaleX = width / vbW;
-        const scaleY = height / vbH;
-        const translateX = -vbX * scaleX;
-        const translateY = -vbY * scaleY;
-
-        // Combine viewBox transform with zoom transform to get CSS pixel positions
-        cssTransform.k = t.k * scaleX;
-        cssTransform.x = (t.x * scaleX) + translateX;
-        cssTransform.y = (t.y * scaleY) + translateY;
-      }
-
+      const cssTransform = transformToCSSPixels(t, effectiveViewBox, canvasDimensionsRef.current);
       const spatialIndex = buildSpatialIndex(data, getSize, cssTransform);
       if (spatialIndex) {
         canvasRef.current._spatialIndex = spatialIndex;
-        canvasRef.current._spatialIndexTransform = cssTransform; // Store for debugging
       }
 
       // Canvas rendering: use raw positions with transform applied

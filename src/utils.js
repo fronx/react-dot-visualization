@@ -342,6 +342,38 @@ export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occ
  * @param {number} defaultSize - Default dot size for radius calculation
  * @returns {number} Count of visible dots
  */
+/**
+ * Convert zoom transform from viewBox coordinates to CSS pixel coordinates
+ * This is needed for canvas interactions where mouse events are in CSS pixels
+ * but the zoom transform is in viewBox coordinates
+ * 
+ * @param {Object} zoomTransform - D3 zoom transform {k, x, y} in viewBox space
+ * @param {Array} effectiveViewBox - ViewBox [x, y, width, height]
+ * @param {Object} canvasDimensions - Canvas CSS dimensions {width, height}
+ * @returns {Object} Transform {k, x, y} in CSS pixel space
+ */
+export function transformToCSSPixels(zoomTransform, effectiveViewBox, canvasDimensions) {
+  const cssTransform = { ...zoomTransform };
+  
+  if (effectiveViewBox && canvasDimensions) {
+    const { width, height } = canvasDimensions; // CSS pixels
+    const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+
+    // Scale from viewBox coordinates to CSS pixels (no DPR here)
+    const scaleX = width / vbW;
+    const scaleY = height / vbH;
+    const translateX = -vbX * scaleX;
+    const translateY = -vbY * scaleY;
+
+    // Combine viewBox transform with zoom transform to get CSS pixel positions
+    cssTransform.k = zoomTransform.k * scaleX;
+    cssTransform.x = (zoomTransform.x * scaleX) + translateX;
+    cssTransform.y = (zoomTransform.y * scaleY) + translateY;
+  }
+  
+  return cssTransform;
+}
+
 export function countVisibleDots(data, transform, viewBox, defaultSize = 2) {
   if (!data || !data.length || !transform || !viewBox) return 0;
 
