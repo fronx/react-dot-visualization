@@ -193,11 +193,14 @@ const ColoredDots = React.memo((props) => {
     // Schedule new render with debounce delay
     renderTimeoutRef.current = setTimeout(() => {
       debugLog('Zoom-triggered canvas render:', { zoomScale, dataLength: data.length });
-      const context = setupCanvas(zoomScale);
-      if (context) {
-        renderDots(context);
-        lastZoomLevel.current = zoomScale;
-      }
+      // Use requestAnimationFrame to defer heavy canvas operations
+      requestAnimationFrame(() => {
+        const context = setupCanvas(zoomScale);
+        if (context) {
+          renderDots(context);
+          lastZoomLevel.current = zoomScale;
+        }
+      });
     }, 150); // 150ms debounce - balance between responsiveness and performance
   }, [useCanvas, data, setupCanvas, renderDots]);
 
