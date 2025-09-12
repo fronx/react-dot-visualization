@@ -203,7 +203,102 @@ test('shouldAutoZoomToNewContent: data extends in multiple directions', () => {
   const transform = { k: 1, x: 25, y: 25 }; // visible area is -25 to 75
   
   const result = shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform);
-  assert.strictEqual(result, true, 'should auto-zoom when bounds have changed significantly');
+  // Content size 70x75 in viewport 100x100 gives contentFitPercentage = 0.75
+  // This is between 0.5 and 0.9, so should NOT auto-zoom (content fits reasonably well)
+  assert.strictEqual(result, false, 'should not auto-zoom when content fits reasonably well (75% of view)');
+});
+
+test('shouldAutoZoomToNewContent: content too small - should auto-zoom', () => {
+  const newData = [
+    { x: 45, y: 45 },  
+    { x: 55, y: 55 }   // 10x10 content
+  ];
+  const previousBounds = { minX: 0, maxX: 50, minY: 0, maxY: 50 };
+  const viewBox = [0, 0, 100, 100];
+  const transform = { k: 0.5, x: 0, y: 0 }; // visible area is 200x200, content 10x10 = 5% of view
+  
+  const result = shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform);
+  assert.strictEqual(result, true, 'should auto-zoom when content is too small (< 50% of view)');
+});
+
+test('shouldAutoZoomToNewContent: content too large - should auto-zoom', () => {
+  const newData = [
+    { x: -50, y: -50 },  
+    { x: 150, y: 150 }   // 200x200 content
+  ];
+  const previousBounds = { minX: 0, maxX: 50, minY: 0, maxY: 50 };
+  const viewBox = [0, 0, 100, 100]; 
+  const transform = { k: 2, x: 0, y: 0 }; // visible area is 50x50, content 200x200 = 400% of view
+  
+  const result = shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform);
+  assert.strictEqual(result, true, 'should auto-zoom when content is too large (> 90% of view)');
+});
+
+test('shouldAutoZoomToNewContent: bounds unchanged - no auto-zoom', () => {
+  const dotSize = 2;
+  const newData = [
+    { x: 10, y: 10 },  
+    { x: 40, y: 40 }   
+  ];
+  // previousBounds should match what boundsForData would compute (including dotSize padding)
+  const previousBounds = { minX: 8, maxX: 42, minY: 8, maxY: 42 }; // 10-2 to 40+2
+  const viewBox = [0, 0, 100, 100];
+  const transform = { k: 1, x: 0, y: 0 }; 
+  
+  const result = shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform, dotSize);
+  assert.strictEqual(result, false, 'should not auto-zoom when bounds have not changed significantly');
+});
+
+test('shouldAutoZoomToNewContent: fixed point property - no oscillation', () => {
+  // Test that when auto-zoom is not needed, running it again gives the same result
+  const dotSize = 3;
+  const newData = [
+    { x: 20, y: 20 },
+    { x: 80, y: 80 }
+  ];
+  
+  // Set up scenario where content fits well (shouldn't auto-zoom)
+  const bounds = { minX: 17, maxX: 83, minY: 17, maxY: 83 }; // 20±3, 80±3 with dotSize=3
+  const viewBox = [0, 0, 100, 100];
+  const transform = { k: 1, x: 0, y: 0 }; // 66x66 content in 100x100 view = 66% fit
+  
+  // First call - should return false (no auto-zoom needed)
+  const result1 = shouldAutoZoomToNewContent(newData, bounds, viewBox, transform, dotSize);
+  assert.strictEqual(result1, false, 'should not auto-zoom when content fits well');
+  
+  // Second call with same parameters - should still return false (fixed point)
+  const result2 = shouldAutoZoomToNewContent(newData, bounds, viewBox, transform, dotSize);
+  assert.strictEqual(result2, false, 'should remain stable on repeated calls (fixed point)');
+  
+  // The bounds calculation should be idempotent
+  assert.strictEqual(result1, result2, 'repeated calls should give identical results');
+});
+
+test('shouldAutoZoomToNewContent: no oscillation after zoom operation', () => {
+  // Simulate what happens after a zoom operation completes
+  const dotSize = 2;
+  const data = [{ x: 10, y: 10 }, { x: 90, y: 90 }];
+  
+  // Initial state: previous bounds were smaller, new data extends them
+  const previousBounds = { minX: 20, maxX: 80, minY: 20, maxY: 80 }; // 60x60 old bounds
+  const newBounds = { minX: 8, maxX: 92, minY: 8, maxY: 92 }; // 84x84 new bounds (40% larger)
+  const viewBox = [0, 0, 400, 400]; // Large viewport  
+  const initialTransform = { k: 1, x: 0, y: 0 }; // 84/400 = 21% fit - too small!
+  
+  // Should trigger auto-zoom initially (bounds changed + content too small)
+  const shouldZoomInitially = shouldAutoZoomToNewContent(data, previousBounds, viewBox, initialTransform, dotSize);
+  assert.strictEqual(shouldZoomInitially, true, 'should initially trigger auto-zoom for small content');
+  
+  // After zoom: simulate new transform that fits content properly (say ~60% of view)  
+  const postZoomTransform = { k: 2.4, x: -60, y: -60 }; // zoomed to fit: 84*2.4/400 = 50.4% fit
+  
+  // Should NOT trigger auto-zoom after the adjustment (bounds same, content fits well)
+  const shouldZoomAfter = shouldAutoZoomToNewContent(data, newBounds, viewBox, postZoomTransform, dotSize);
+  assert.strictEqual(shouldZoomAfter, false, 'should not trigger auto-zoom after proper fit achieved');
+  
+  // Running again should still be stable
+  const shouldZoomAgain = shouldAutoZoomToNewContent(data, newBounds, viewBox, postZoomTransform, dotSize);
+  assert.strictEqual(shouldZoomAgain, false, 'should remain stable after zoom operation');
 });
 
 test('shouldAutoZoomToNewContent: handles edge cases', () => {
