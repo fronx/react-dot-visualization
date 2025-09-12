@@ -8,7 +8,7 @@ const App = () => {
   const [clickedDot, setClickedDot] = useState(null);
   const [dotStyles, setDotStyles] = useState(new Map());
   const [containerSize, setContainerSize] = useState({ width: 640, height: 400 });
-  const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
+  const [autoZoomEnabled, setAutoZoomEnabled] = useState(false);
   const [autoZoomDuration, setAutoZoomDuration] = useState(200);
   const [dotSize, setDotSize] = useState(10);
   const [hoverSizeMultiplier, setHoverSizeMultiplier] = useState(1.5);
@@ -22,6 +22,7 @@ const App = () => {
   const [totalDotCount, setTotalDotCount] = useState(1000); // Start with 1,000 dots
   const [enableDecollision, setEnableDecollision] = useState(false); // Default off
   const [enablePositionTransitions, setEnablePositionTransitions] = useState(false); // Default off
+  const [useCanvasRendering, setUseCanvasRendering] = useState(true); // Default off - canvas immediate mode
   const containerRef = useRef(null);
   const vizRef = useRef(null);
 
@@ -297,6 +298,15 @@ const App = () => {
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
               <input
                 type="checkbox"
+                checked={useCanvasRendering}
+                onChange={(e) => setUseCanvasRendering(e.target.checked)}
+              />
+              Canvas Rendering (Immediate Mode)
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input
+                type="checkbox"
                 checked={autoZoomEnabled}
                 onChange={(e) => setAutoZoomEnabled(e.target.checked)}
               />
@@ -471,6 +481,7 @@ const App = () => {
           hoverImageProvider={hoverImageProvider}
           enableDecollisioning={enableDecollision}
           enablePositionTransitions={enablePositionTransitions}
+          useCanvas={useCanvasRendering}
           debug={debug}
         />
       </div>

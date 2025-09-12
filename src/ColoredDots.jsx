@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
@@ -22,10 +22,12 @@ const ColoredDots = React.memo((props) => {
     imageProvider,
     hoverImageProvider,
     visibleDotCount = null,
+    useCanvas = false,
     debug = false
   } = props;
   
   const debugLog = useDebug(debug);
+  const canvasRef = useRef(null);
   const getColor = (item, index) => {
     if (item.color) return item.color;
     if (defaultColor) return defaultColor;
@@ -66,21 +68,115 @@ const ColoredDots = React.memo((props) => {
     return hoveredDotId === item.id ? hoverOpacity : defaultOpacity;
   };
 
-  useEffect(() => {
-    data.forEach((item, index) => {
-      const elementId = dotId(0, item);
-      const position = getSyncedPosition(item, elementId);
-      const size = getSize(item);
-      const fill = getFill(item, index);
-      const opacity = getOpacity(item);
-      const isHovered = hoveredDotId === item.id;
+  // Shared drawing function using d3.path pattern - works with both Canvas and SVG
+  const drawDot = (context, item, index, useRawPosition = false) => {
+    // For canvas, use raw data positions; for SVG, use synced positions
+    const position = useRawPosition ? { x: item.x, y: item.y } : getSyncedPosition(item, dotId(0, item));
+    const size = getSize(item);
+    const radius = size / 2;
+    
+    // Use d3.path pattern: create path commands that work for both contexts
+    context.moveTo(position.x + radius, position.y);
+    context.arc(position.x, position.y, radius, 0, 2 * Math.PI);
+    return context;
+  };
 
-      updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, opacity, dotStyles, isHovered);
-    });
-  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider]);
+  // Render all dots using shared drawing function
+  const renderDots = (canvasContext = null) => {
+    if (useCanvas && canvasContext) {
+      // Canvas rendering: use raw positions, let CSS transforms handle zoom/pan
+      data.forEach((item, index) => {
+        const opacity = getOpacity(item);
+        const fill = getColor(item, index); // Canvas uses solid colors only
+        
+        canvasContext.globalAlpha = opacity;
+        canvasContext.fillStyle = fill;
+        canvasContext.strokeStyle = stroke;
+        canvasContext.lineWidth = strokeWidth;
+        
+        canvasContext.beginPath();
+        drawDot(canvasContext, item, index, true); // useRawPosition = true
+        canvasContext.fill();
+        if (strokeWidth > 0) {
+          canvasContext.stroke();
+        }
+      });
+    } else {
+      // SVG rendering: use existing system with synced positions
+      data.forEach((item, index) => {
+        const elementId = dotId(0, item);
+        const position = getSyncedPosition(item, elementId);
+        const size = getSize(item);
+        const fill = getFill(item, index);
+        const opacity = getOpacity(item);
+        const isHovered = hoveredDotId === item.id;
+        
+        updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, opacity, dotStyles, isHovered);
+      });
+    }
+  };
+
+  const setupCanvas = () => {
+    if (!useCanvas || !canvasRef.current) return null;
+    
+    const canvas = canvasRef.current;
+    const context = canvas.getContext('2d');
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    
+    // Set canvas size to match container, accounting for device pixel ratio
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    
+    // Scale context to account for device pixel ratio
+    context.scale(dpr, dpr);
+    
+    // Clear canvas
+    context.clearRect(0, 0, rect.width, rect.height);
+    
+    debugLog('Canvas setup:', { width: rect.width, height: rect.height, dpr });
+    return context;
+  };
+
+  // Separate effects for canvas vs SVG to optimize re-rendering
+  useEffect(() => {
+    if (useCanvas) {
+      debugLog('Canvas render:', { dataLength: data.length });
+      const context = setupCanvas();
+      if (context) {
+        renderDots(context);
+      }
+    }
+    // Canvas only re-renders on data/style changes, not zoom operations
+  }, [data, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas]);
+
+  useEffect(() => {
+    if (!useCanvas) {
+      debugLog('SVG render:', { dataLength: data.length });
+      renderDots();
+    }
+    // SVG needs all dependencies including dotStyles for positioning
+  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider, useCanvas]);
+
+  if (useCanvas) {
+    return (
+      <foreignObject x="0" y="0" width="100%" height="100%">
+        <canvas
+          ref={canvasRef}
+          style={{ 
+            width: '100%', 
+            height: '100%',
+            display: 'block',
+            pointerEvents: 'none' // Let SVG handle interactions
+          }}
+        />
+      </foreignObject>
+    );
+  }
 
   return (
     <g id="colored-dots">
+      {/* Image patterns are only supported in SVG mode */}
       <ImagePatterns
         data={data}
         useImages={useImages}

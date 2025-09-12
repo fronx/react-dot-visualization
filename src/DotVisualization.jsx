@@ -62,6 +62,7 @@ const DotVisualization = forwardRef((props, ref) => {
     autoZoomDuration = 200,
     hoverSizeMultiplier = 1.5,
     hoverOpacity = 1.0,
+    useCanvas = false,
     debug = false,
     ...otherProps
   } = props;
@@ -700,6 +701,7 @@ const DotVisualization = forwardRef((props, ref) => {
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}
           visibleDotCount={visibleDotCount}
+          useCanvas={useCanvas}
           debug={debug}
         />
         <ClusterLabels
@@ -712,21 +714,23 @@ const DotVisualization = forwardRef((props, ref) => {
           onClusterLeave={onClusterLeave}
           debug={debug}
         />
-        <InteractionLayer
-          data={processedData}
-          dotId={dotId}
-          onHover={handleDotHover}
-          onLeave={handleDotLeave}
-          onClick={onClick}
-          onBackgroundClick={onBackgroundClick}
-          onDragStart={onDragStart}
-          isZooming={isZooming}
-          defaultSize={defaultSize}
-          dotStyles={dotStyles}
-          hoveredDotId={hoveredDotId}
-          hoverSizeMultiplier={hoverSizeMultiplier}
-          debug={debug}
-        />
+        {!useCanvas && (
+          <InteractionLayer
+            data={processedData}
+            dotId={dotId}
+            onHover={handleDotHover}
+            onLeave={handleDotLeave}
+            onClick={onClick}
+            onBackgroundClick={onBackgroundClick}
+            onDragStart={onDragStart}
+            isZooming={isZooming}
+            defaultSize={defaultSize}
+            dotStyles={dotStyles}
+            hoveredDotId={hoveredDotId}
+            hoverSizeMultiplier={hoverSizeMultiplier}
+            debug={debug}
+          />
+        )}
       </g>
     </svg>
   );
