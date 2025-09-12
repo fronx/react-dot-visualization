@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import * as d3 from 'd3';
 import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
@@ -23,11 +23,15 @@ const ColoredDots = React.memo((props) => {
     hoverImageProvider,
     visibleDotCount = null,
     useCanvas = false,
+    zoomTransform = null,
     debug = false
   } = props;
   
   const debugLog = useDebug(debug);
   const canvasRef = useRef(null);
+  const lastZoomLevel = useRef(1);
+  const renderTimeoutRef = useRef(null);
+  const canvasDimensionsRef = useRef(null);
   const getColor = (item, index) => {
     if (item.color) return item.color;
     if (defaultColor) return defaultColor;
@@ -116,39 +120,127 @@ const ColoredDots = React.memo((props) => {
     }
   };
 
-  const setupCanvas = () => {
+  const setupCanvas = (zoomScale = 1) => {
     if (!useCanvas || !canvasRef.current) return null;
     
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
-    const rect = canvas.getBoundingClientRect();
+    
+    // Use cached dimensions or initialize them once to avoid getBoundingClientRect() shifts
+    if (!canvasDimensionsRef.current) {
+      const rect = canvas.getBoundingClientRect();
+      canvasDimensionsRef.current = {
+        width: rect.width,
+        height: rect.height
+      };
+      debugLog('Canvas dimensions initialized:', canvasDimensionsRef.current);
+    }
+    
+    const { width, height } = canvasDimensionsRef.current;
     const dpr = window.devicePixelRatio || 1;
     
-    // Set canvas size to match container, accounting for device pixel ratio
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
+    // Calculate adaptive resolution multiplier based on zoom level
+    // No upper limit - truly adaptive to any zoom level
+    const minResolutionMultiplier = 1; // Min 1x resolution to avoid sub-pixel rendering
+    const adaptiveMultiplier = Math.max(zoomScale, minResolutionMultiplier);
+    const effectiveDpr = dpr * adaptiveMultiplier;
     
-    // Scale context to account for device pixel ratio
-    context.scale(dpr, dpr);
+    // Set canvas internal size 
+    canvas.width = width * effectiveDpr;
+    canvas.height = height * effectiveDpr;
+    
+    // Scale context to maintain consistent logical coordinate system
+    context.scale(effectiveDpr, effectiveDpr);
     
     // Clear canvas
-    context.clearRect(0, 0, rect.width, rect.height);
+    context.clearRect(0, 0, width, height);
     
-    debugLog('Canvas setup:', { width: rect.width, height: rect.height, dpr });
+    debugLog('Canvas setup:', { 
+      width, 
+      height, 
+      zoomScale,
+      adaptiveMultiplier, 
+      canvasSize: `${canvas.width}x${canvas.height}`,
+      memoryMB: ((canvas.width * canvas.height * 4) / (1024 * 1024)).toFixed(1)
+    });
     return context;
   };
 
-  // Separate effects for canvas vs SVG to optimize re-rendering
-  useEffect(() => {
-    if (useCanvas) {
-      debugLog('Canvas render:', { dataLength: data.length });
-      const context = setupCanvas();
+  // Only re-render canvas if zoom changed by more than 20% to avoid excessive renders
+  const hasSignificantZoomChange = (oldZoom, newZoom) => {
+    if (!oldZoom || !newZoom) return true;
+    const ratio = Math.max(oldZoom, newZoom) / Math.min(oldZoom, newZoom);
+    return ratio > 1.2; // 20% threshold
+  };
+
+  /**
+   * Debounce canvas re-renders during zoom operations (150ms delay)
+   * 
+   * Why: Zoom events fire rapidly (10-60+/sec), causing performance issues
+   * and stuttering when re-rendering high-resolution canvas on every event
+   * 
+   * Remove if: Canvas rendering becomes much faster, users need immediate
+   * feedback, or 150ms delay feels laggy for precision work
+   */
+  const scheduleZoomRender = useCallback((zoomScale) => {
+    if (!useCanvas) return;
+    
+    // Clear any pending render to reset debounce timer
+    if (renderTimeoutRef.current) {
+      clearTimeout(renderTimeoutRef.current);
+    }
+    
+    // Schedule new render with debounce delay
+    renderTimeoutRef.current = setTimeout(() => {
+      debugLog('Zoom-triggered canvas render:', { zoomScale, dataLength: data.length });
+      const context = setupCanvas(zoomScale);
       if (context) {
         renderDots(context);
+        lastZoomLevel.current = zoomScale;
+      }
+    }, 150); // 150ms debounce - balance between responsiveness and performance
+  }, [useCanvas, data, setupCanvas, renderDots]);
+
+  // Canvas rendering for data/style changes (immediate)
+  useEffect(() => {
+    if (useCanvas) {
+      debugLog('Immediate canvas render:', { dataLength: data.length });
+      const currentZoom = zoomTransform?.k || 1;
+      const context = setupCanvas(currentZoom);
+      if (context) {
+        renderDots(context);
+        lastZoomLevel.current = currentZoom;
+      }
+    } else {
+      // Reset canvas dimensions when switching away from canvas mode
+      canvasDimensionsRef.current = null;
+    }
+    // Canvas re-renders immediately on data/style changes
+  }, [data, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas]);
+
+  // Canvas rendering for zoom changes (debounced)
+  useEffect(() => {
+    if (useCanvas && zoomTransform) {
+      const currentZoom = zoomTransform.k;
+      
+      // Re-render if zoom changed significantly (now truly adaptive)
+      if (hasSignificantZoomChange(lastZoomLevel.current, currentZoom)) {
+        scheduleZoomRender(currentZoom);
       }
     }
-    // Canvas only re-renders on data/style changes, not zoom operations
-  }, [data, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas]);
+  }, [zoomTransform?.k, useCanvas, scheduleZoomRender]);
+
+
+  // Cleanup: Clear any pending debounced renders when component unmounts
+  // This prevents memory leaks and "setState on unmounted component" warnings
+  useEffect(() => {
+    return () => {
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+        renderTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!useCanvas) {
