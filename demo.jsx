@@ -20,6 +20,7 @@ const App = () => {
   const [debug, setDebug] = useState(false); // Debug mode to show background click area
   const [visibleDotCount, setVisibleDotCount] = useState(0);
   const [totalDotCount, setTotalDotCount] = useState(1000); // Start with 1,000 dots
+  const [enableDecollision, setEnableDecollision] = useState(false); // Default off
   const containerRef = useRef(null);
   const vizRef = useRef(null);
 
@@ -258,7 +259,25 @@ const App = () => {
 
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Visual Settings</div>
+            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Options</div>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input
+                type="checkbox"
+                checked={enableDecollision}
+                onChange={(e) => setEnableDecollision(e.target.checked)}
+              />
+              Enable Decollision Algorithm
+            </label>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
+              <input
+                type="checkbox"
+                checked={autoZoomEnabled}
+                onChange={(e) => setAutoZoomEnabled(e.target.checked)}
+              />
+              Enable Auto-Zoom
+            </label>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
               <input
@@ -331,6 +350,18 @@ const App = () => {
               step="0.1"
               style={{ width: '100%', marginBottom: '12px' }}
             />
+
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Auto-Zoom Duration (ms):</div>
+            <input
+              type="number"
+              value={autoZoomDuration}
+              onChange={(e) => setAutoZoomDuration(Number(e.target.value))}
+              min="0"
+              max="2000"
+              step="50"
+              style={{ width: '80px', padding: '4px', fontSize: '11px', marginBottom: '12px' }}
+              disabled={!autoZoomEnabled}
+            />
           </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
@@ -391,29 +422,6 @@ const App = () => {
             </button>
           </div>
 
-          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Auto-Zoom Settings</div>
-
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
-              <input
-                type="checkbox"
-                checked={autoZoomEnabled}
-                onChange={(e) => setAutoZoomEnabled(e.target.checked)}
-              />
-              Enable Auto-Zoom
-            </label>
-
-            <div style={{ fontSize: '11px', marginBottom: '6px' }}>Duration (ms):</div>
-            <input
-              type="number"
-              value={autoZoomDuration}
-              onChange={(e) => setAutoZoomDuration(Number(e.target.value))}
-              min="0"
-              max="2000"
-              step="50"
-              style={{ width: '80px', padding: '4px', fontSize: '11px' }}
-            />
-          </div>
         </div>
         <DotVisualization
           ref={vizRef}
@@ -437,6 +445,7 @@ const App = () => {
           useImages={useImages}
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}
+          enableDecollisioning={enableDecollision}
           debug={debug}
         />
       </div>
