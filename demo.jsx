@@ -225,6 +225,13 @@ const App = () => {
     return Math.max(1, dotSize * scaleFactor); // Ensure minimum size of 1
   };
 
+  // Calculate adaptive stroke width - one-tenth of the radius
+  const getAdaptiveStrokeWidth = () => {
+    const currentDotSize = getScaledDotSize();
+    const radius = currentDotSize / 2;
+    return radius * 0.1;
+  };
+
 
   // Image provider functions with performance-based selection
   const imageProvider = (id, visibleDotCount) => {
@@ -467,6 +474,7 @@ const App = () => {
           onZoomEnd={updateVisibleCount}
           dotStyles={dotStyles}
           defaultSize={getScaledDotSize()}
+          strokeWidth={getAdaptiveStrokeWidth()}
           margin={0.05}
           style={{ position: 'absolute', inset: 0 }}
           occludeLeft={panelWidth}
