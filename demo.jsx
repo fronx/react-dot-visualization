@@ -11,7 +11,6 @@ const App = () => {
   const [autoZoomEnabled, setAutoZoomEnabled] = useState(true);
   const [autoZoomDuration, setAutoZoomDuration] = useState(200);
   const [dotSize, setDotSize] = useState(10);
-  const [newDotSize, setNewDotSize] = useState(100);
   const [hoverSizeMultiplier, setHoverSizeMultiplier] = useState(1.5);
   const [hoverOpacity, setHoverOpacity] = useState(1.0);
   const [useImages, setUseImages] = useState(false);
@@ -161,7 +160,7 @@ const App = () => {
         color: '#666', // Gray color
         name: `Added Point ${id}`,
         value: Math.round(Math.random() * 100),
-        size: newDotSize // Use the controlled new dot size
+        size: getScaledDotSize() // Use the scaled dot size for consistency
       };
     });
 
@@ -206,6 +205,14 @@ const App = () => {
       const count = vizRef.current.getVisibleDotCount();
       setVisibleDotCount(count);
     }
+  };
+
+  // Calculate scaled dot size based on total dot count
+  // Uses inverse square root scaling to maintain reasonable density in 2D space
+  const getScaledDotSize = () => {
+    const baselineCount = 1000; // Our minimum dot count
+    const scaleFactor = Math.sqrt(baselineCount / totalDotCount);
+    return Math.max(1, dotSize * scaleFactor); // Ensure minimum size of 1
   };
 
 
@@ -263,16 +270,9 @@ const App = () => {
               style={{ width: '100%', marginBottom: '8px' }}
             />
 
-            <div style={{ fontSize: '11px', marginBottom: '6px' }}>New Dots Size: {newDotSize}</div>
-            <input
-              type="range"
-              value={newDotSize}
-              onChange={(e) => setNewDotSize(Number(e.target.value))}
-              min="1"
-              max="200"
-              step="1"
-              style={{ width: '100%', marginBottom: '12px' }}
-            />
+            <div style={{ fontSize: '11px', marginBottom: '6px', color: '#666' }}>
+              New Dots Size: Auto-scaled ({getScaledDotSize().toFixed(1)}px)
+            </div>
           </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
@@ -356,6 +356,10 @@ const App = () => {
             
             <div style={{ fontSize: '11px', marginBottom: '6px' }}>
               Total Dots: {totalDotCount.toLocaleString()}
+              <br />
+              <span style={{ color: '#666' }}>
+                Scaled Size: {getScaledDotSize().toFixed(1)}px (base: {dotSize}px)
+              </span>
             </div>
             <input
               type="range"
@@ -438,7 +442,7 @@ const App = () => {
           onBackgroundClick={handleBackgroundClick}
           onZoomEnd={updateVisibleCount}
           dotStyles={dotStyles}
-          defaultSize={dotSize}
+          defaultSize={getScaledDotSize()}
           margin={0.05}
           style={{ position: 'absolute', inset: 0 }}
           occludeLeft={panelWidth}
