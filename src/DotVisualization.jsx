@@ -624,6 +624,8 @@ const DotVisualization = forwardRef((props, ref) => {
             onHover={handleDotHover}
             onLeave={handleDotLeave}
             onClick={onClick}
+            onBackgroundClick={onBackgroundClick}
+            onDragStart={onDragStart}
             isZooming={isZooming}
           />
         </g>

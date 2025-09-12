@@ -88,6 +88,12 @@ export const findDotAtPosition = (mouseX, mouseY, spatialIndex) => {
  * @param {Function} config.onHover - Hover callback
  * @param {Function} config.onLeave - Leave callback  
  * @param {Function} config.onClick - Click callback
+ * @param {Function} config.onBackgroundClick - Background click callback
+ * @param {Function} config.onMouseDown - Mouse down callback
+ * @param {Function} config.onMouseUp - Mouse up callback
+ * @param {Function} config.onDoubleClick - Double click callback
+ * @param {Function} config.onContextMenu - Context menu (right click) callback
+ * @param {Function} config.onDragStart - Drag start callback
  * @returns {Object} Event handlers for canvas element
  */
 export const useCanvasInteractions = (config) => {
@@ -97,39 +103,53 @@ export const useCanvasInteractions = (config) => {
     getSpatialIndex,
     onHover,
     onLeave,
-    onClick
+    onClick,
+    onBackgroundClick,
+    onMouseDown,
+    onMouseUp,
+    onDoubleClick,
+    onContextMenu,
+    onDragStart
   } = config;
 
   const currentHoveredDot = { current: null };
+  const dragState = { current: null };
 
-  const handleMouseMove = (event) => {
-    if (!enabled || isZooming) return;
+  // Constants for drag detection (from InteractionLayer.jsx)
+  const DRAG_THRESHOLD = 5; // pixels
+  const CLICK_TIME_THRESHOLD = 300; // milliseconds
+
+  // Helper function to get mouse position and hit dot
+  const getMousePositionAndHit = (event) => {
+    if (!enabled || isZooming) return { cssX: null, cssY: null, hitDot: null };
 
     const spatialIndex = getSpatialIndex?.();
-    if (!spatialIndex) return;
+    if (!spatialIndex) return { cssX: null, cssY: null, hitDot: null };
 
     const canvas = event.currentTarget;
     const rect = canvas.getBoundingClientRect();
-
-    // Get mouse position in CSS pixels (this should match the canvas display size)
     const cssX = event.clientX - rect.left;
     const cssY = event.clientY - rect.top;
-
-    // Debug: log coordinates to understand the offset
-    if (Math.random() < 0.02) { // Log occasionally to avoid spam
-      const firstDot = spatialIndex.spatialGrid.values().next().value?.[0];
-      // console.log('Canvas interaction debug:', {
-      //   mouseCSS: { x: cssX, y: cssY },
-      //   canvasDisplay: { width: rect.width, height: rect.height },
-      //   canvasInternal: { width: canvas.width, height: canvas.height },
-      //   firstDotScreen: firstDot ? { x: firstDot.screenX, y: firstDot.screenY } : null,
-      //   transform: canvas._spatialIndexTransform
-      // });
-    }
-
-    // Use CSS coordinates directly - the spatial index should be in screen pixel space
     const hitDot = findDotAtPosition(cssX, cssY, spatialIndex);
 
+    return { cssX, cssY, hitDot };
+  };
+
+  const handleMouseMove = (event) => {
+    const { hitDot } = getMousePositionAndHit(event);
+
+    // Handle drag state if we're currently dragging
+    if (dragState.current) {
+      const deltaX = Math.abs(event.clientX - dragState.current.startX);
+      const deltaY = Math.abs(event.clientY - dragState.current.startY);
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      
+      if (distance > DRAG_THRESHOLD) {
+        dragState.current.hasMoved = true;
+      }
+    }
+
+    // Handle hover state
     if (hitDot !== currentHoveredDot.current) {
       if (currentHoveredDot.current && onLeave) {
         onLeave(currentHoveredDot.current, event);
@@ -150,29 +170,91 @@ export const useCanvasInteractions = (config) => {
   };
 
   const handleClick = (event) => {
-    if (!enabled || isZooming) return;
-
-    const spatialIndex = getSpatialIndex?.();
-    if (!spatialIndex) return;
-
-    const canvas = event.currentTarget;
-    const rect = canvas.getBoundingClientRect();
-
-    // Get mouse position in CSS pixels
-    const cssX = event.clientX - rect.left;
-    const cssY = event.clientY - rect.top;
-
-    // Use CSS coordinates directly
-    const hitDot = findDotAtPosition(cssX, cssY, spatialIndex);
-
+    const { hitDot } = getMousePositionAndHit(event);
+    
     if (hitDot && onClick) {
       onClick(hitDot, event);
+    } else if (!hitDot && onBackgroundClick) {
+      onBackgroundClick(event);
+    }
+  };
+
+  const handleMouseDown = (event) => {
+    const { hitDot } = getMousePositionAndHit(event);
+    
+    if (hitDot) {
+      const startTime = Date.now();
+      const startX = event.clientX;
+      const startY = event.clientY;
+      
+      dragState.current = {
+        item: hitDot,
+        startTime,
+        startX,
+        startY,
+        hasMoved: false
+      };
+
+      if (onMouseDown) {
+        onMouseDown(hitDot, event);
+      }
+    }
+  };
+
+  const handleMouseUp = (event) => {
+    const { hitDot } = getMousePositionAndHit(event);
+    
+    if (hitDot && onMouseUp) {
+      onMouseUp(hitDot, event);
+    }
+
+    // Handle drag end logic
+    if (dragState.current) {
+      const timeDelta = Date.now() - dragState.current.startTime;
+      const deltaX = Math.abs(event.clientX - dragState.current.startX);
+      const deltaY = Math.abs(event.clientY - dragState.current.startY);
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      
+      // If it was a drag and we have a drag start handler, simulate drag end
+      if (dragState.current.hasMoved && distance > DRAG_THRESHOLD && onDragStart) {
+        // Create synthetic drag end event for compatibility with SVG drag system
+        const syntheticEvent = {
+          ...event,
+          type: 'dragend',
+          target: event.currentTarget,
+          currentTarget: event.currentTarget
+        };
+        // Note: onDragStart handles the full drag lifecycle in the SVG version
+      }
+      
+      dragState.current = null;
+    }
+  };
+
+  const handleDoubleClick = (event) => {
+    const { hitDot } = getMousePositionAndHit(event);
+    
+    if (hitDot && onDoubleClick) {
+      onDoubleClick(hitDot, event);
+    }
+  };
+
+  const handleContextMenu = (event) => {
+    const { hitDot } = getMousePositionAndHit(event);
+    
+    if (hitDot && onContextMenu) {
+      event.preventDefault(); // Prevent browser context menu
+      onContextMenu(hitDot, event);
     }
   };
 
   return {
     onMouseMove: handleMouseMove,
     onMouseLeave: handleMouseLeave,
-    onClick: handleClick
+    onClick: handleClick,
+    onMouseDown: handleMouseDown,
+    onMouseUp: handleMouseUp,
+    onDoubleClick: handleDoubleClick,
+    onContextMenu: handleContextMenu
   };
 };

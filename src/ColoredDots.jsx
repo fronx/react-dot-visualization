@@ -31,6 +31,12 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     onHover,
     onLeave,
     onClick,
+    onBackgroundClick,
+    onMouseDown,
+    onMouseUp,
+    onDoubleClick,
+    onContextMenu,
+    onDragStart,
     isZooming = false
   } = props;
 
@@ -78,6 +84,34 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     return hoveredDotId === item.id ? hoverOpacity : defaultOpacity;
   };
 
+  // Unified function to compute final styles for both SVG and Canvas
+  const computeFinalStyles = (item, index, isCanvas = false) => {
+    const baseStyles = {
+      fill: isCanvas ? getColor(item, index) : getFill(item, index), // Canvas can't use SVG patterns
+      stroke: stroke,
+      strokeWidth: strokeWidth,
+      opacity: getOpacity(item),
+      size: getSize(item)
+    };
+
+    // Apply custom dotStyles (same logic as updateColoredDotAttributes)
+    const customStyles = dotStyles.get(item.id) || {};
+    const mergedStyles = { ...baseStyles, ...customStyles };
+    
+    // Handle stroke-width vs strokeWidth property name differences
+    if (customStyles['stroke-width'] !== undefined) {
+      mergedStyles.strokeWidth = customStyles['stroke-width'];
+    }
+
+    // Hover opacity always takes precedence (same as updateColoredDotAttributes)
+    const isHovered = hoveredDotId === item.id;
+    if (isHovered) {
+      mergedStyles.opacity = getOpacity(item); // This already handles hover opacity
+    }
+
+    return mergedStyles;
+  };
+
 
   // Render all dots using shared drawing function
   const renderDots = (canvasContext = null, tOverride = null) => {
@@ -113,36 +147,33 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         canvasRef.current._spatialIndex = spatialIndex;
       }
 
-      // Canvas rendering: use raw positions with transform applied
+      // Canvas rendering: use unified styling logic
       data.forEach((item, index) => {
-        const opacity = getOpacity(item);
-        const fill = getColor(item, index); // Canvas uses solid colors only
-        const size = getSize(item);
-        const radius = size / 2;
+        const styles = computeFinalStyles(item, index, true);
+        const radius = styles.size / 2;
 
-        canvasContext.globalAlpha = opacity;
-        canvasContext.fillStyle = fill;
-        canvasContext.strokeStyle = stroke;
-        canvasContext.lineWidth = strokeWidth;
+        canvasContext.globalAlpha = styles.opacity;
+        canvasContext.fillStyle = styles.fill;
+        canvasContext.strokeStyle = styles.stroke;
+        canvasContext.lineWidth = styles.strokeWidth;
 
         canvasContext.beginPath();
         canvasContext.arc(item.x, item.y, radius, 0, 2 * Math.PI);
         canvasContext.fill();
-        if (strokeWidth > 0) {
+        if (styles.strokeWidth > 0) {
           canvasContext.stroke();
         }
       });
     } else {
-      // SVG rendering: use existing system with synced positions
+      // SVG rendering: use unified styling logic
       data.forEach((item, index) => {
         const elementId = dotId(0, item);
         const position = getSyncedPosition(item, elementId);
-        const size = getSize(item);
-        const fill = getFill(item, index);
-        const opacity = getOpacity(item);
+        const styles = computeFinalStyles(item, index, false);
         const isHovered = hoveredDotId === item.id;
 
-        updateColoredDotAttributes(item, elementId, position, size, fill, stroke, strokeWidth, opacity, dotStyles, isHovered);
+        // Use the unified styles but still call updateColoredDotAttributes for DOM manipulation
+        updateColoredDotAttributes(item, elementId, position, styles.size, styles.fill, styles.stroke, styles.strokeWidth, styles.opacity, new Map(), isHovered);
       });
     }
   };
@@ -219,7 +250,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx);
-  }, [data, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas]);
+  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas]);
 
 
 
@@ -254,7 +285,13 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     getSpatialIndex: () => canvasRef.current?._spatialIndex,
     onHover,
     onLeave,
-    onClick
+    onClick,
+    onBackgroundClick,
+    onMouseDown,
+    onMouseUp,
+    onDoubleClick,
+    onContextMenu,
+    onDragStart
   });
 
   if (useCanvas) {
