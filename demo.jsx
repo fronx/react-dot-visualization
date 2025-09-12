@@ -20,6 +20,7 @@ const App = () => {
   const [showHoverImages, setShowHoverImages] = useState(false); // Show hover image switching
   const [debug, setDebug] = useState(false); // Debug mode to show background click area
   const [visibleDotCount, setVisibleDotCount] = useState(0);
+  const [totalDotCount, setTotalDotCount] = useState(1000); // Start with 1,000 dots
   const containerRef = useRef(null);
   const vizRef = useRef(null);
 
@@ -63,7 +64,7 @@ const App = () => {
 
   useEffect(() => {
     if (containerSize.width > 0) {
-      const newData = Array.from({ length: 150 }, (_, i) => ({
+      const newData = Array.from({ length: totalDotCount }, (_, i) => ({
         id: i,
         x: Math.random() * containerSize.width,
         y: Math.random() * containerSize.height,
@@ -103,7 +104,7 @@ const App = () => {
       setImageCache(newImageCache);
       setHoverImageCache(newHoverCache);
     }
-  }, [containerSize, patternType, imageMode, showHoverImages]);
+  }, [containerSize, patternType, imageMode, showHoverImages, totalDotCount]);
 
   const handleClick = (item) => {
     setClickedDot(item);
@@ -348,6 +349,30 @@ const App = () => {
               step="0.1"
               style={{ width: '100%', marginBottom: '12px' }}
             />
+          </div>
+
+          <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
+            <div style={{ fontSize: '12px', fontWeight: 'bold', marginBottom: '8px' }}>Performance Test</div>
+            
+            <div style={{ fontSize: '11px', marginBottom: '6px' }}>
+              Total Dots: {totalDotCount.toLocaleString()}
+            </div>
+            <input
+              type="range"
+              value={Math.log10(totalDotCount)}
+              onChange={(e) => {
+                const logValue = Number(e.target.value);
+                const dotCount = Math.round(Math.pow(10, logValue));
+                setTotalDotCount(dotCount);
+              }}
+              min="3"
+              max="5"
+              step="0.1"
+              style={{ width: '100%', marginBottom: '8px' }}
+            />
+            <div style={{ fontSize: '10px', color: '#666', marginBottom: '12px' }}>
+              1K ← → 100K (logarithmic scale)
+            </div>
           </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>
