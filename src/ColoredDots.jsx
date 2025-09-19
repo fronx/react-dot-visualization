@@ -97,7 +97,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     // Apply custom dotStyles (same logic as updateColoredDotAttributes)
     const customStyles = dotStyles.get(item.id) || {};
     const mergedStyles = { ...baseStyles, ...customStyles };
-    
+
     // Handle stroke-width vs strokeWidth property name differences
     if (customStyles['stroke-width'] !== undefined) {
       mergedStyles.strokeWidth = customStyles['stroke-width'];
@@ -150,7 +150,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       // Canvas rendering: use unified styling logic
       data.forEach((item, index) => {
         const styles = computeFinalStyles(item, index, true);
-        const radius = styles.size / 2;
+        const radius = styles.size;
 
         canvasContext.globalAlpha = styles.opacity;
         canvasContext.fillStyle = styles.fill;
