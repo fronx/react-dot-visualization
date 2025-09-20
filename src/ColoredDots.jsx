@@ -116,6 +116,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Render all dots using shared drawing function
   const renderDots = (canvasContext = null, tOverride = null) => {
     if (useCanvas && canvasContext) {
+      console.log("renderDots");
       const t = tOverride || zoomTransform || { k: 1, x: 0, y: 0 };
 
       // Reset to identity
@@ -256,6 +257,13 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   // Expose canvas rendering function and interaction methods to parent
   useImperativeHandle(ref, () => ({
+    renderCanvas: () => {
+      if (!useCanvas) return;
+      const ctx = setupCanvas();
+      if (ctx) {
+        renderDots(ctx);
+      }
+    },
     renderCanvasWithTransform: (transform) => {
       if (!useCanvas) return;
       const ctx = setupCanvas();

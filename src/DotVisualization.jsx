@@ -7,7 +7,8 @@ import EdgeLayer from './EdgeLayer.jsx';
 import { boundsForData, computeOcclusionAwareViewBox, countVisibleDots } from './utils.js';
 import { ZoomManager } from './ZoomManager.js';
 import { useDebug } from './useDebug.js';
-
+import { decollisioning } from './decollisioning.js';
+import { getDotSize } from './dotUtils.js'
 
 // Helper function to check if two numbers are equal after rounding to 2 decimal places
 const isWithinTolerance = (a, b) => {
@@ -123,7 +124,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const prevTransformRef = useRef(null);
   const updateCountOnTransformChange = useCallback(() => {
     if (!zoomManager.current) return;
-    
+
     const current = zoomManager.current.getCurrentTransform();
     const prev = prevTransformRef.current;
 
@@ -383,65 +384,36 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Decolliding dots
   useEffect(() => {
-    // console.log('Decolliding Dots:', {
-    //   enableDecollisioning,
-    //   processedDataLength: processedData.length,
-    //   willRunCollision: enableDecollisioning && processedData.length > 0
-    // });
-
     if (!enableDecollisioning || !processedData.length || typeof window === 'undefined' || isTransitioning) {
       return; // Don't run decollision while transitioning
     }
 
-    // console.log('Decolliding dots');
+    console.log(processedData.slice(0, 4));
 
-    let tick = 0;
-    const simulationData = processedData.map(d => ({ ...d }));
-    const dots0 = d3.selectAll('#colored-dots circle').data(simulationData);
-    const dots1 = d3.selectAll('#interaction-layer circle').data(simulationData);
+    const onUpdateNodes = (nodes) => {
+      // memoizedPositions.current.set(id, position);
+      if (useCanvas) {
+        // nodes.forEach(n => {
+        //   memoizedPositions.current.set(n.id, { x: n.x, y: n.y });
+        // });
+        setProcessedData(nodes);
+      } else {
+        // const dots0 = d3.selectAll('#colored-dots circle').data(simulationData);
+        // const dots1 = d3.selectAll('#interaction-layer circle').data(simulationData);
+        // move dots?
+      }
+    }
 
-    const simulation = d3.forceSimulation(simulationData)
-      .alpha(1)
-      .alphaMin(0.01)
-      .alphaDecay(0.01)
-      .force('collide', d3.forceCollide().radius(item => (item.size || defaultSize)))
-      .on('tick', () => {
-        tick += 1;
-        const updateFrequency = Math.min(10, Math.ceil(tick / 10));
+    const fnDotSize = (item) => {
+      return getDotSize(item, dotStyles, defaultSize);
+    }
 
-        if (tick % updateFrequency === 0) {
-          dots0
-            .attr('cx', d => d.x)
-            .attr('cy', d => d.y)
-            .each(d => {
-              memoizedPositions.current.set(d.id, { x: d.x, y: d.y });
-            });
-          dots1
-            .attr('cx', d => d.x)
-            .attr('cy', d => d.y);
-        }
-      })
-      .on('end', () => {
-        dots0
-          .attr('cx', d => d.x)
-          .attr('cy', d => d.y)
-          .each(d => {
-            memoizedPositions.current.set(d.id, { x: d.x, y: d.y });
-          });
-        dots1
-          .attr('cx', d => d.x)
-          .attr('cy', d => d.y);
-
-        debugLog('Decollided dots:', memoizedPositions.current.size);
-        if (onDecollisionComplete) {
-          onDecollisionComplete();
-        }
-      });
+    const simulation = decollisioning(data, onUpdateNodes, fnDotSize, onDecollisionComplete);
 
     return () => {
       simulation.stop();
     };
-  }, [processedData, enableDecollisioning, defaultSize, isTransitioning]);
+  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas]);
 
   // Position transitions
   useEffect(() => {
@@ -450,7 +422,7 @@ const DotVisualization = forwardRef((props, ref) => {
     console.log('Starting position transition for', processedData.length, 'dots');
 
     const simulationData = processedData.map(d => ({ ...d }));
-    const [dots0, dots1] = ['#colored-dots circle', '#interaction-layer circle'].map(sel => 
+    const [dots0, dots1] = ['#colored-dots circle', '#interaction-layer circle'].map(sel =>
       d3.selectAll(sel).data(simulationData)
     );
 
