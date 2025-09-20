@@ -15,7 +15,7 @@ export const buildSpatialIndex = (data, getSizeFunc, transform, cellSize = 20) =
 
   data.forEach((item) => {
     const size = getSizeFunc(item);
-    const radius = size / 2;
+    const radius = size;
 
     // Transform to screen coordinates (same as rendering)
     const screenX = (item.x * transform.k) + transform.x;
@@ -143,7 +143,7 @@ export const useCanvasInteractions = (config) => {
       const deltaX = Math.abs(event.clientX - dragState.current.startX);
       const deltaY = Math.abs(event.clientY - dragState.current.startY);
       const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-      
+
       if (distance > DRAG_THRESHOLD) {
         dragState.current.hasMoved = true;
       }
@@ -171,7 +171,7 @@ export const useCanvasInteractions = (config) => {
 
   const handleClick = (event) => {
     const { hitDot } = getMousePositionAndHit(event);
-    
+
     if (hitDot && onClick) {
       onClick(hitDot, event);
     } else if (!hitDot && onBackgroundClick) {
@@ -181,12 +181,12 @@ export const useCanvasInteractions = (config) => {
 
   const handleMouseDown = (event) => {
     const { hitDot } = getMousePositionAndHit(event);
-    
+
     if (hitDot) {
       const startTime = Date.now();
       const startX = event.clientX;
       const startY = event.clientY;
-      
+
       dragState.current = {
         item: hitDot,
         startTime,
@@ -203,7 +203,7 @@ export const useCanvasInteractions = (config) => {
 
   const handleMouseUp = (event) => {
     const { hitDot } = getMousePositionAndHit(event);
-    
+
     if (hitDot && onMouseUp) {
       onMouseUp(hitDot, event);
     }
@@ -214,7 +214,7 @@ export const useCanvasInteractions = (config) => {
       const deltaX = Math.abs(event.clientX - dragState.current.startX);
       const deltaY = Math.abs(event.clientY - dragState.current.startY);
       const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-      
+
       // If it was a drag and we have a drag start handler, simulate drag end
       if (dragState.current.hasMoved && distance > DRAG_THRESHOLD && onDragStart) {
         // Create synthetic drag end event for compatibility with SVG drag system
@@ -226,14 +226,14 @@ export const useCanvasInteractions = (config) => {
         };
         // Note: onDragStart handles the full drag lifecycle in the SVG version
       }
-      
+
       dragState.current = null;
     }
   };
 
   const handleDoubleClick = (event) => {
     const { hitDot } = getMousePositionAndHit(event);
-    
+
     if (hitDot && onDoubleClick) {
       onDoubleClick(hitDot, event);
     }
@@ -241,7 +241,7 @@ export const useCanvasInteractions = (config) => {
 
   const handleContextMenu = (event) => {
     const { hitDot } = getMousePositionAndHit(event);
-    
+
     if (hitDot && onContextMenu) {
       event.preventDefault(); // Prevent browser context menu
       onContextMenu(hitDot, event);
