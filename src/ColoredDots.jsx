@@ -248,6 +248,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Canvas rendering for data/style changes (NOT zoom)
   useEffect(() => {
     if (!useCanvas) { canvasDimensionsRef.current = null; return; }
+    console.log('🟣 ColoredDots canvas useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2), 'data ref:', data);
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx);
@@ -280,6 +281,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   useEffect(() => {
     if (!useCanvas) {
+      console.log('🟣 ColoredDots SVG useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2));
       debugLog('SVG render:', { dataLength: data.length });
       renderDots();
     }
