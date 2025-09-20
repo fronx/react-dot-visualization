@@ -388,16 +388,8 @@ const DotVisualization = forwardRef((props, ref) => {
       return; // Don't run decollision while transitioning
     }
 
-    console.log(processedData.slice(0, 4));
-
     const onUpdateNodes = (nodes) => {
-      console.log('🔵 onUpdateNodes called with', nodes.length, 'nodes, first node:', nodes[0]?.x?.toFixed(2), nodes[0]?.y?.toFixed(2));
-      // memoizedPositions.current.set(id, position);
       if (useCanvas) {
-        // nodes.forEach(n => {
-        //   memoizedPositions.current.set(n.id, { x: n.x, y: n.y });
-        // });
-        console.log('🔵 Calling setProcessedData...');
         setProcessedData(nodes);
       } else {
         // const dots0 = d3.selectAll('#colored-dots circle').data(simulationData);
