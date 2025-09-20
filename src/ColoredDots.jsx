@@ -116,7 +116,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Render all dots using shared drawing function
   const renderDots = (canvasContext = null, tOverride = null) => {
     if (useCanvas && canvasContext) {
-      console.log("renderDots");
+      // console.log("renderDots");
       const t = tOverride || zoomTransform || { k: 1, x: 0, y: 0 };
 
       // Reset to identity
@@ -248,7 +248,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Canvas rendering for data/style changes (NOT zoom)
   useEffect(() => {
     if (!useCanvas) { canvasDimensionsRef.current = null; return; }
-    console.log('🟣 ColoredDots canvas useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2), 'data ref:', data);
+    // console.log('🟣 ColoredDots canvas useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2), 'data ref:', data);
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx);
@@ -281,7 +281,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   useEffect(() => {
     if (!useCanvas) {
-      console.log('🟣 ColoredDots SVG useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2));
+      // console.log('🟣 ColoredDots SVG useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2));
       debugLog('SVG render:', { dataLength: data.length });
       renderDots();
     }
