@@ -149,7 +149,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       }
 
       // Canvas rendering: use unified styling logic
-      data.forEach((item, index) => {
+      const drawDot = (item, index) => {
         const styles = computeFinalStyles(item, index, true);
         const radius = styles.size;
 
@@ -164,7 +164,25 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         if (styles.strokeWidth > 0) {
           canvasContext.stroke();
         }
+      };
+
+      // Draw all non-hovered dots first, then hovered dot last (on top)
+      let hoveredItem = null;
+      let hoveredIndex = -1;
+
+      data.forEach((item, index) => {
+        if (hoveredDotId === item.id) {
+          hoveredItem = item;
+          hoveredIndex = index;
+        } else {
+          drawDot(item, index);
+        }
       });
+
+      // Draw hovered dot last
+      if (hoveredItem) {
+        drawDot(hoveredItem, hoveredIndex);
+      }
     } else {
       // SVG rendering: use unified styling logic
       data.forEach((item, index) => {
