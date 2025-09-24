@@ -137,6 +137,10 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [updateVisibleDotCount]);
 
+  // Keep a ref to the latest updateCountOnTransformChange to avoid dependency issues
+  const updateCountOnTransformChangeRef = useRef(updateCountOnTransformChange);
+  updateCountOnTransformChangeRef.current = updateCountOnTransformChange;
+
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
   const previousDataRef = useRef([]);
@@ -323,10 +327,10 @@ const DotVisualization = forwardRef((props, ref) => {
         },
         onZoomEnd: (event) => {
           setIsDragging(false);
-          updateCountOnTransformChange();
+          updateCountOnTransformChangeRef.current();
           if (onZoomEnd) onZoomEnd(event);
         },
-        onTransformChange: updateCountOnTransformChange
+        onTransformChange: () => updateCountOnTransformChangeRef.current()
       });
     } else {
       // Update config when props change
