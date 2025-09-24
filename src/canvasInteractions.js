@@ -1,6 +1,7 @@
 /**
  * Canvas interaction utilities for efficient mouse-to-dot collision detection
  */
+import { useRef } from 'react';
 
 /**
  * Build a spatial hash grid for fast collision detection
@@ -86,7 +87,7 @@ export const findDotAtPosition = (mouseX, mouseY, spatialIndex) => {
  * @param {boolean} config.isZooming - Whether currently zooming (blocks interactions)
  * @param {Function} config.getSpatialIndex - Function to get current spatial index
  * @param {Function} config.onHover - Hover callback
- * @param {Function} config.onLeave - Leave callback  
+ * @param {Function} config.onLeave - Leave callback
  * @param {Function} config.onClick - Click callback
  * @param {Function} config.onBackgroundClick - Background click callback
  * @param {Function} config.onMouseDown - Mouse down callback
@@ -112,8 +113,8 @@ export const useCanvasInteractions = (config) => {
     onDragStart
   } = config;
 
-  const currentHoveredDot = { current: null };
-  const dragState = { current: null };
+  const currentHoveredDot = useRef(null);
+  const dragState = useRef(null);
 
   // Constants for drag detection (from InteractionLayer.jsx)
   const DRAG_THRESHOLD = 5; // pixels
@@ -121,10 +122,20 @@ export const useCanvasInteractions = (config) => {
 
   // Helper function to get mouse position and hit dot
   const getMousePositionAndHit = (event) => {
-    if (!enabled || isZooming) return { cssX: null, cssY: null, hitDot: null };
+    if (!enabled) {
+      console.log('🔍 getMousePositionAndHit: not enabled');
+      return { cssX: null, cssY: null, hitDot: null };
+    }
+    if (isZooming) {
+      console.log('🔍 getMousePositionAndHit: isZooming=true, blocking');
+      return { cssX: null, cssY: null, hitDot: null };
+    }
 
     const spatialIndex = getSpatialIndex?.();
-    if (!spatialIndex) return { cssX: null, cssY: null, hitDot: null };
+    if (!spatialIndex) {
+      console.log('🔍 getMousePositionAndHit: no spatialIndex available');
+      return { cssX: null, cssY: null, hitDot: null };
+    }
 
     const canvas = event.currentTarget;
     const rect = canvas.getBoundingClientRect();
