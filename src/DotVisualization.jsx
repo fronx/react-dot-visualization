@@ -153,7 +153,6 @@ const DotVisualization = forwardRef((props, ref) => {
   const previousDataRef = useRef([]);
   const didInitialAutoFitRef = useRef(false);
   const autoZoomTimeoutRef = useRef(null);
-  const lastDataBoundsRef = useRef(null);
 
   // Check if only non-positional properties have changed
   const hasPositionsChanged = useCallback((newData, oldData) => {
@@ -419,8 +418,8 @@ const DotVisualization = forwardRef((props, ref) => {
             // Use ref to get current viewBox to avoid dependency issues
             const currentViewBox = viewBoxRef.current;
             if (vb && (!currentViewBox ||
-                vb[0] !== currentViewBox[0] || vb[1] !== currentViewBox[1] ||
-                vb[2] !== currentViewBox[2] || vb[3] !== currentViewBox[3])) {
+              vb[0] !== currentViewBox[0] || vb[1] !== currentViewBox[1] ||
+              vb[2] !== currentViewBox[2] || vb[3] !== currentViewBox[3])) {
               debugLog('Updated viewBox for new container size:', vb);
               setViewBox(vb);
             }

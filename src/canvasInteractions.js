@@ -118,7 +118,6 @@ export const useCanvasInteractions = (config) => {
 
   // Constants for drag detection (from InteractionLayer.jsx)
   const DRAG_THRESHOLD = 5; // pixels
-  const CLICK_TIME_THRESHOLD = 300; // milliseconds
 
   // Helper function to get mouse position and hit dot
   const getMousePositionAndHit = (event) => {
