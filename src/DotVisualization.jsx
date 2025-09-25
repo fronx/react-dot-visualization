@@ -104,9 +104,13 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomManager = useRef(null);
   const isDraggingRef = useRef(false);
   const viewBoxRef = useRef(null);
+  const onZoomStartRef = useRef(onZoomStart);
+  const onZoomEndRef = useRef(onZoomEnd);
 
-  // Keep refs in sync with state for use in closures
+  // Keep refs in sync with state and props for use in closures
   isDraggingRef.current = isDragging;
+  onZoomStartRef.current = onZoomStart;
+  onZoomEndRef.current = onZoomEnd;
   viewBoxRef.current = viewBox;
 
   const debugLog = useDebug(debug);
@@ -323,12 +327,12 @@ const DotVisualization = forwardRef((props, ref) => {
         useCanvas,
         onZoomStart: (event) => {
           setIsDragging(true);
-          if (onZoomStart) onZoomStart(event);
+          if (onZoomStartRef.current) onZoomStartRef.current(event);
         },
         onZoomEnd: (event) => {
           setIsDragging(false);
           updateCountOnTransformChangeRef.current();
-          if (onZoomEnd) onZoomEnd(event);
+          if (onZoomEndRef.current) onZoomEndRef.current(event);
         },
         onTransformChange: () => updateCountOnTransformChangeRef.current()
       });
@@ -383,7 +387,7 @@ const DotVisualization = forwardRef((props, ref) => {
       }
       setIsZoomSetupComplete(false);
     };
-  }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
+  }, [processedData, zoomExtent, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
   // Handle container resize - update container dimensions and viewBox when window resizes
   useEffect(() => {
