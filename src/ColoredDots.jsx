@@ -263,6 +263,15 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
 
 
+  // Reset canvas dimensions cache when viewBox changes (for resize handling)
+  useEffect(() => {
+    if (useCanvas && effectiveViewBox) {
+      // Clear cached dimensions so they get recalculated with new container size
+      canvasDimensionsRef.current = null;
+      debugLog('Canvas dimensions cache cleared for viewBox change');
+    }
+  }, [effectiveViewBox, useCanvas]);
+
   // Canvas rendering for data/style changes (NOT zoom)
   useEffect(() => {
     if (!useCanvas) { canvasDimensionsRef.current = null; return; }

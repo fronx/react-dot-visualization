@@ -71,6 +71,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
   const [processedData, setProcessedData] = useState([]);
   const [viewBox, setViewBox] = useState(null);
+  const [containerDimensions, setContainerDimensions] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
   const [hoveredDotId, setHoveredDotId] = useState(null);
@@ -102,9 +103,11 @@ const DotVisualization = forwardRef((props, ref) => {
   const coloredDotsRef = useRef(null);
   const zoomManager = useRef(null);
   const isDraggingRef = useRef(false);
+  const viewBoxRef = useRef(null);
 
   // Keep refs in sync with state for use in closures
   isDraggingRef.current = isDragging;
+  viewBoxRef.current = viewBox;
 
   const debugLog = useDebug(debug);
 
@@ -251,17 +254,14 @@ const DotVisualization = forwardRef((props, ref) => {
       }
     }
 
-    // Initialize viewBox once (occlusion-aware; then freeze)
-    if (!viewBox) {
-      const rect = zoomRef.current?.getBoundingClientRect?.();
-      if (rect && rect.width > 0 && rect.height > 0) {
-        const bounds = boundsForData(validData, defaultSize);
-        const vb = computeOcclusionAwareViewBox(bounds, { width: rect.width, height: rect.height }, {
-          left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
-        }, margin);
-        debugLog('Initialized viewBox:', vb);
-        if (vb) setViewBox(vb);
-      }
+    // Initialize viewBox using container dimensions
+    if (!viewBox && containerDimensions) {
+      const bounds = boundsForData(validData, defaultSize);
+      const vb = computeOcclusionAwareViewBox(bounds, containerDimensions, {
+        left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
+      }, margin);
+      debugLog('Initialized viewBox:', vb);
+      if (vb) setViewBox(vb);
     }
 
     // Calculate current data bounds
@@ -385,21 +385,82 @@ const DotVisualization = forwardRef((props, ref) => {
     };
   }, [processedData, zoomExtent, onZoomStart, onZoomEnd, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
+  // Handle container resize - update container dimensions and viewBox when window resizes
+  useEffect(() => {
+    if (!zoomRef.current || typeof window === 'undefined') {
+      return;
+    }
+
+    const updateContainerDimensions = () => {
+      const rect = zoomRef.current?.getBoundingClientRect?.();
+      if (rect && rect.width > 0 && rect.height > 0) {
+        const newDimensions = { width: rect.width, height: rect.height };
+
+        // Only update if dimensions actually changed
+        const dimensionsChanged = !containerDimensions ||
+          containerDimensions.width !== newDimensions.width ||
+          containerDimensions.height !== newDimensions.height;
+
+        if (dimensionsChanged) {
+          setContainerDimensions(newDimensions);
+
+          // If we have data, recalculate viewBox for the new container size
+          if (processedData.length > 0) {
+            const bounds = boundsForData(processedData, defaultSize);
+            const vb = computeOcclusionAwareViewBox(bounds, newDimensions, {
+              left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
+            }, margin);
+
+            // Only update viewBox if it actually changed
+            // Use ref to get current viewBox to avoid dependency issues
+            const currentViewBox = viewBoxRef.current;
+            if (vb && (!currentViewBox ||
+                vb[0] !== currentViewBox[0] || vb[1] !== currentViewBox[1] ||
+                vb[2] !== currentViewBox[2] || vb[3] !== currentViewBox[3])) {
+              debugLog('Updated viewBox for new container size:', vb);
+              setViewBox(vb);
+            }
+          }
+        }
+      }
+    };
+
+    // Initial measurement
+    updateContainerDimensions();
+
+    // Listen for window resize
+    window.addEventListener('resize', updateContainerDimensions);
+
+    return () => {
+      window.removeEventListener('resize', updateContainerDimensions);
+    };
+  }, [processedData, defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom, margin]);
+
+  // Re-render canvas when viewBox changes to fix distortion during resize
+  useEffect(() => {
+    if (useCanvas && coloredDotsRef.current && zoomManager.current && viewBox) {
+      const currentTransform = zoomManager.current.getCurrentTransform();
+      if (currentTransform) {
+        coloredDotsRef.current.renderCanvasWithTransform(currentTransform);
+      }
+    }
+  }, [viewBox, useCanvas]);
+
+  // Callback for decollisioning updates - wrapped to prevent infinite loops
+  const onUpdateNodes = useCallback((nodes) => {
+    if (useCanvas) {
+      setProcessedData(nodes);
+    } else {
+      // const dots0 = d3.selectAll('#colored-dots circle').data(simulationData);
+      // const dots1 = d3.selectAll('#interaction-layer circle').data(simulationData);
+      // move dots?
+    }
+  }, [useCanvas]);
 
   // Decolliding dots
   useEffect(() => {
     if (!enableDecollisioning || !processedData.length || typeof window === 'undefined' || isTransitioning) {
       return; // Don't run decollision while transitioning
-    }
-
-    const onUpdateNodes = (nodes) => {
-      if (useCanvas) {
-        setProcessedData(nodes);
-      } else {
-        // const dots0 = d3.selectAll('#colored-dots circle').data(simulationData);
-        // const dots1 = d3.selectAll('#interaction-layer circle').data(simulationData);
-        // move dots?
-      }
     }
 
     const fnDotSize = (item) => {
@@ -411,7 +472,7 @@ const DotVisualization = forwardRef((props, ref) => {
     return () => {
       simulation.stop();
     };
-  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas]);
+  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas, onUpdateNodes, data, dotStyles, onDecollisionComplete]);
 
   // Position transitions
   useEffect(() => {
