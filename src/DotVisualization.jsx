@@ -452,6 +452,11 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Callback for decollisioning updates - wrapped to prevent infinite loops
   const onUpdateNodes = useCallback((nodes) => {
+    // Save final positions to memoization system for restoration on re-renders
+    nodes.forEach(node => {
+      memoizedPositions.current.set(node.id, { x: node.x, y: node.y });
+    });
+
     if (useCanvas) {
       setProcessedData(nodes);
     } else {
