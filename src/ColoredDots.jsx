@@ -6,6 +6,7 @@ import { PrioritizedList } from './PrioritizedList.js';
 import { useDebug } from './useDebug.js';
 import { buildSpatialIndex, findDotAtPosition, useCanvasInteractions } from './canvasInteractions.js';
 import { transformToCSSPixels } from './utils.js';
+import { usePulseAnimation } from './usePulseAnimation.js';
 
 const ColoredDots = React.memo(forwardRef((props, ref) => {
   const {
@@ -44,6 +45,12 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const canvasRef = useRef(null);
   const canvasDimensionsRef = useRef(null);
 
+  // Pulse animation hook
+  const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
+    const ctx = setupCanvas();
+    if (ctx) renderDots(ctx);
+  } : null);
+
   const getColor = (item, index) => {
     if (item.color) return item.color;
     if (defaultColor) return defaultColor;
@@ -74,20 +81,33 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   const getSize = (item) => {
     const baseSize = getDotSize(item, dotStyles, defaultSize);
+    const baseColor = getColor(item, data.indexOf(item));
+    const { sizeMultiplier } = getPulseMultipliers(item.id, baseColor);
+    let finalSize = baseSize * sizeMultiplier;
+
     if (hoveredDotId === item.id) {
-      return baseSize * hoverSizeMultiplier;
+      finalSize *= hoverSizeMultiplier;
     }
-    return baseSize;
+    return finalSize;
   };
 
   const getOpacity = (item) => {
-    return hoveredDotId === item.id ? hoverOpacity : defaultOpacity;
+    const baseOpacity = hoveredDotId === item.id ? hoverOpacity : defaultOpacity;
+    const baseColor = getColor(item, data.indexOf(item));
+    const { opacityMultiplier } = getPulseMultipliers(item.id, baseColor);
+    return baseOpacity * opacityMultiplier;
+  };
+
+  const getEffectiveColor = (item, index) => {
+    const baseColor = getColor(item, index);
+    const { color } = getPulseMultipliers(item.id, baseColor);
+    return color;
   };
 
   // Unified function to compute final styles for both SVG and Canvas
   const computeFinalStyles = (item, index, isCanvas = false) => {
     const baseStyles = {
-      fill: isCanvas ? getColor(item, index) : getFill(item, index), // Canvas can't use SVG patterns
+      fill: isCanvas ? getEffectiveColor(item, index) : getFill(item, index), // Canvas can't use SVG patterns
       stroke: stroke,
       strokeWidth: strokeWidth,
       opacity: getOpacity(item),
