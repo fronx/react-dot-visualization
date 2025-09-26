@@ -114,7 +114,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
 
   // Render all dots using shared drawing function
-  const renderDots = (canvasContext = null, tOverride = null) => {
+  const renderDots = (canvasContext = null, tOverride = null, customData = null) => {
+    const dataToRender = customData || data;
     if (useCanvas && canvasContext) {
       // console.log("renderDots");
       const t = tOverride || zoomTransform || { k: 1, x: 0, y: 0 };
@@ -143,7 +144,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       // Build spatial index for mouse interaction in CSS pixel space
       // Mouse events give us CSS coordinates, so we need to convert dots to CSS space
       const cssTransform = transformToCSSPixels(t, effectiveViewBox, canvasDimensionsRef.current);
-      const spatialIndex = buildSpatialIndex(data, getSize, cssTransform);
+      const spatialIndex = buildSpatialIndex(dataToRender, getSize, cssTransform);
       if (spatialIndex) {
         canvasRef.current._spatialIndex = spatialIndex;
       }
@@ -170,7 +171,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       let hoveredItem = null;
       let hoveredIndex = -1;
 
-      data.forEach((item, index) => {
+      dataToRender.forEach((item, index) => {
         if (hoveredDotId === item.id) {
           hoveredItem = item;
           hoveredIndex = index;
@@ -185,7 +186,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       }
     } else {
       // SVG rendering: use unified styling logic
-      data.forEach((item, index) => {
+      dataToRender.forEach((item, index) => {
         const elementId = dotId(0, item);
         const position = getSyncedPosition(item, elementId);
         const styles = computeFinalStyles(item, index, false);
@@ -297,6 +298,13 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       const ctx = setupCanvas();
       if (ctx) {
         renderDots(ctx, transform);
+      }
+    },
+    renderCanvasWithData: (customData, transform) => {
+      if (!useCanvas) return;
+      const ctx = setupCanvas();
+      if (ctx) {
+        renderDots(ctx, transform, customData);
       }
     },
     findDotAtPosition: (mouseX, mouseY) => {

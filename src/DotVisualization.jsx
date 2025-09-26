@@ -219,14 +219,6 @@ const DotVisualization = forwardRef((props, ref) => {
     const positionsChanged = previousDataRef.current.length === 0 ||
       hasPositionsChanged(validData, previousDataRef.current);
 
-    // console.log('🔍 DotVisualization Data Processing:', {
-    //   previousCount: previousDataRef.current.length,
-    //   newCount: validData.length,
-    //   positionsChanged,
-    //   memoizedPositionsCount: memoizedPositions.current.size,
-    //   firstFewIds: validData.slice(0, 3).map(d => d.id)
-    // });
-
     let processedValidData = validData;
 
     // Handle position transitions
@@ -451,17 +443,19 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Callback for decollisioning updates - wrapped to prevent infinite loops
   const onUpdateNodes = useCallback((nodes) => {
-    // Save final positions to memoization system for restoration on re-renders
-    nodes.forEach(node => {
-      memoizedPositions.current.set(node.id, { x: node.x, y: node.y });
-    });
-
-    if (useCanvas) {
-      setProcessedData(nodes);
+    if (useCanvas && coloredDotsRef.current) {
+      // Update canvas directly with custom data without triggering React re-render
+      const currentTransform = zoomManager.current?.getCurrentTransform();
+      coloredDotsRef.current.renderCanvasWithData(nodes, currentTransform);
+      nodes.forEach(node => {
+        memoizedPositions.current.set(node.id, { x: node.x, y: node.y });
+      });
     } else {
-      // const dots0 = d3.selectAll('#colored-dots circle').data(simulationData);
-      // const dots1 = d3.selectAll('#interaction-layer circle').data(simulationData);
-      // move dots?
+      // For SVG mode, update DOM directly
+      const dots0 = d3.selectAll('#colored-dots circle').data(nodes);
+      const dots1 = d3.selectAll('#interaction-layer circle').data(nodes);
+      dots0.attr('cx', d => d.x).attr('cy', d => d.y);
+      dots1.attr('cx', d => d.x).attr('cy', d => d.y);
     }
   }, [useCanvas]);
 
@@ -475,12 +469,16 @@ const DotVisualization = forwardRef((props, ref) => {
       return getDotSize(item, dotStyles, defaultSize);
     }
 
-    const simulation = decollisioning(data, onUpdateNodes, fnDotSize, onDecollisionComplete);
+    const simulation = decollisioning(data, onUpdateNodes, fnDotSize, (finalData) => {
+      console.log('Decollision complete - syncing React state');
+      setProcessedData(finalData);
+      onDecollisionComplete?.();
+    });
 
     return () => {
       simulation.stop();
     };
-  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas, onUpdateNodes, data, dotStyles, onDecollisionComplete]);
+  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas, data, dotStyles, onUpdateNodes, onDecollisionComplete]);
 
   // Position transitions
   useEffect(() => {
