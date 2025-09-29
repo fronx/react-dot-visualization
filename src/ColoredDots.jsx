@@ -172,8 +172,21 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       // Canvas rendering: use unified styling logic
       const drawDot = (item, index) => {
         const styles = computeFinalStyles(item, index, true);
+        const baseColor = getColor(item, index);
+        const pulseData = getPulseMultipliers(item.id, baseColor);
         const radius = styles.size;
 
+        // Draw pulsating ring first (if present)
+        if (pulseData.ringData) {
+          const ringRadius = radius * pulseData.ringData.scale;
+          canvasContext.globalAlpha = pulseData.ringData.opacity * styles.opacity;
+          canvasContext.fillStyle = pulseData.ringData.color;
+          canvasContext.beginPath();
+          canvasContext.arc(item.x, item.y, ringRadius, 0, 2 * Math.PI);
+          canvasContext.fill();
+        }
+
+        // Draw main dot
         canvasContext.globalAlpha = styles.opacity;
         canvasContext.fillStyle = styles.fill;
         canvasContext.strokeStyle = styles.stroke;
