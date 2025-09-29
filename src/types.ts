@@ -32,6 +32,7 @@ export interface PulseConfig {
   opacityRange?: number; // opacity variation (default: 0 = no opacity change)
   pulseColor?: string;   // target color to pulse toward (interpolated with base color)
   ringEffect?: boolean;  // use pulsating ring effect instead of size/color pulse
+  ringScale?: number;    // maximum ring scale multiplier (default: 3.0 = 300%)
 }
 
 // Base style properties combining static styles and effects
