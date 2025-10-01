@@ -655,7 +655,7 @@ const DotVisualization = forwardRef((props, ref) => {
             hoverImageProvider={hoverImageProvider}
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
-            zoomTransform={zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
+            getZoomTransform={() => zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
             debug={debug}
             effectiveViewBox={effectiveViewBox}
             onHover={handleDotHover}
@@ -699,7 +699,6 @@ const DotVisualization = forwardRef((props, ref) => {
             hoverImageProvider={hoverImageProvider}
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
-            zoomTransform={zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
             debug={debug}
           />
         )}

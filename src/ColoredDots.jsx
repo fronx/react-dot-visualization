@@ -26,7 +26,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     hoverImageProvider,
     visibleDotCount = null,
     useCanvas = false,
-    zoomTransform = null,
+    getZoomTransform = null,
     effectiveViewBox = null,
     debug = false,
     onHover,
@@ -48,7 +48,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Pulse animation hook
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
     const ctx = setupCanvas();
-    if (ctx) renderDots(ctx);
+    if (ctx) renderDots(ctx, getZoomTransform?.());
   } : null);
 
   const getColor = (item, index) => {
@@ -138,7 +138,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     const dataToRender = customData || data;
     if (useCanvas && canvasContext) {
       // console.log("renderDots");
-      const t = tOverride || zoomTransform || { k: 1, x: 0, y: 0 };
+      const t = tOverride || { k: 1, x: 0, y: 0 };
 
       // Reset to identity
       canvasContext.setTransform(1, 0, 0, 1, 0, 0);
@@ -272,9 +272,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       const translateY = -vbY * scaleY;
 
       context.setTransform(scaleX, 0, 0, scaleY, translateX, translateY);
-    } else {
-      // Fallback: just apply DPR scaling
-      context.setTransform(effectiveDpr, 0, 0, effectiveDpr, 0, 0);
+      debugLog('Canvas transform set for viewBox:', { scaleX, scaleY, translateX, translateY });
     }
 
     // Clear canvas in viewBox coordinates
@@ -312,7 +310,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     // console.log('🟣 ColoredDots canvas useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2), 'data ref:', data);
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
-    if (ctx) renderDots(ctx);
+    if (ctx) renderDots(ctx, getZoomTransform?.());
   }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas]);
 
 
