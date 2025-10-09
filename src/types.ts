@@ -33,6 +33,7 @@ export interface PulseConfig {
   pulseColor?: string;   // target color to pulse toward (interpolated with base color)
   ringEffect?: boolean;  // use pulsating ring effect instead of size/color pulse
   ringScale?: number;    // maximum ring scale multiplier (default: 3.0 = 300%)
+  pulseInward?: boolean; // pulse inward (shrink) instead of outward (grow) (default: false)
 }
 
 // Base style properties combining static styles and effects
@@ -44,6 +45,7 @@ export interface DotStyle {
   opacity?: number;
   r?: number; // SVG radius attribute
   pulse?: PulseConfig;   // pulse animation effect
+  hoverSizeMultiplier?: number; // per-dot hover size multiplier override
 }
 
 // The dotStyles prop type

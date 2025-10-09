@@ -87,7 +87,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     let finalSize = baseSize * sizeMultiplier;
 
     if (hoveredDotId === item.id) {
-      finalSize *= hoverSizeMultiplier;
+      // Check for per-dot hover multiplier override
+      const customStyles = dotStyles.get(item.id);
+      const effectiveHoverMultiplier = customStyles?.hoverSizeMultiplier ?? hoverSizeMultiplier;
+      finalSize *= effectiveHoverMultiplier;
     }
     return finalSize;
   };

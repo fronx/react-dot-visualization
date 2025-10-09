@@ -14,7 +14,8 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame) => {
         opacityRange: style.pulse.opacityRange || 0,
         pulseColor: style.pulse.pulseColor,
         ringEffect: style.pulse.ringEffect || false,
-        ringScale: style.pulse.ringScale || 3.0
+        ringScale: style.pulse.ringScale || 3.0,
+        pulseInward: style.pulse.pulseInward || false
       });
     }
   }
@@ -89,8 +90,13 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame) => {
         interpolatedColor = colorInterpolator(t);
       }
 
+      // Calculate size multiplier based on pulse direction
+      const sizeMultiplier = config.pulseInward
+        ? 1 - (config.sizeRange * t)  // Shrink: 1.0 down to (1 - sizeRange)
+        : 1 + (config.sizeRange * t); // Grow: 1.0 up to (1 + sizeRange)
+
       return {
-        sizeMultiplier: 1 + (config.sizeRange * t),
+        sizeMultiplier,
         opacityMultiplier: config.opacityRange > 0 ? (1 + config.opacityRange * t) : 1,
         color: interpolatedColor,
         ringData: null
