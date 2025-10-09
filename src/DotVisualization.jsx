@@ -50,6 +50,7 @@ const DotVisualization = forwardRef((props, ref) => {
     useImages = false,
     imageProvider,
     hoverImageProvider,
+    customDotRenderer = null,
     edgeOpacity = 0.3,
     edgeColor = "#999",
     className = "",
@@ -653,6 +654,7 @@ const DotVisualization = forwardRef((props, ref) => {
             useImages={useImages}
             imageProvider={imageProvider}
             hoverImageProvider={hoverImageProvider}
+            customDotRenderer={customDotRenderer}
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
             getZoomTransform={() => zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
@@ -697,6 +699,7 @@ const DotVisualization = forwardRef((props, ref) => {
             useImages={useImages}
             imageProvider={imageProvider}
             hoverImageProvider={hoverImageProvider}
+            customDotRenderer={customDotRenderer}
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
             debug={debug}

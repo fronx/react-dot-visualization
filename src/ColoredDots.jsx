@@ -38,7 +38,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     onDoubleClick,
     onContextMenu,
     onDragStart,
-    isZooming = false
+    isZooming = false,
+    customDotRenderer = null
   } = props;
 
   const debugLog = useDebug(debug);
@@ -176,6 +177,16 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         const pulseData = getPulseMultipliers(item.id, baseColor);
         const radius = styles.size;
 
+        // Allow custom renderer to override default drawing
+        if (customDotRenderer) {
+          const didRender = customDotRenderer(canvasContext, item, styles, {
+            radius,
+            pulseData,
+            isHovered: hoveredDotId === item.id
+          });
+          if (didRender) return; // Skip default rendering if custom renderer handled it
+        }
+
         // Draw pulsating ring first (if present)
         if (pulseData.ringData) {
           const ringRadius = radius * pulseData.ringData.scale;
@@ -311,7 +322,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
-  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas]);
+  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas, customDotRenderer]);
 
 
 
@@ -352,7 +363,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       renderDots();
     }
     // SVG needs all dependencies including dotStyles for positioning
-  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider, useCanvas]);
+  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider, useCanvas, customDotRenderer]);
 
   // Canvas interaction handlers using utility hook
   const canvasInteractionHandlers = useCanvasInteractions({
