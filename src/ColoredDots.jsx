@@ -40,7 +40,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     onContextMenu,
     onDragStart,
     isZooming = false,
-    customDotRenderer = null
+    customDotRenderer = null,
+    isDecollisioning = false
   } = props;
 
   const debugLog = useDebug(debug);
@@ -421,11 +422,21 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // This prevents flickering during decollision when mouse moves over dots
   useEffect(() => {
     if (!useCanvas) { canvasDimensionsRef.current = null; return; }
+
+    // Block renders during decollision - the D3 simulation calls renderCanvasWithData()
+    // directly with live positions. If we render here with the stale 'data' prop,
+    // we'll overwrite the decollision progress and reset dots to original positions.
+    // This happens when dotStyles changes (e.g., activePointId changes during hover).
+    if (isDecollisioning) {
+      debugLog('Skipping canvas render during decollision');
+      return;
+    }
+
     // console.log('🟣 ColoredDots canvas useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2), 'data ref:', data);
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
-  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer]);
+  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer, isDecollisioning]);
 
 
 

@@ -666,6 +666,7 @@ const DotVisualization = forwardRef((props, ref) => {
             onBackgroundClick={onBackgroundClick}
             onDragStart={onDragStart}
             isZooming={isZooming}
+            isDecollisioning={enableDecollisioning}
           />
         </g>
       )}
@@ -703,6 +704,7 @@ const DotVisualization = forwardRef((props, ref) => {
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
             debug={debug}
+            isDecollisioning={enableDecollisioning}
           />
         )}
         <ClusterLabels
