@@ -166,11 +166,52 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       }
 
       // Build spatial index for mouse interaction in CSS pixel space
-      // Mouse events give us CSS coordinates, so we need to convert dots to CSS space
+      // Only rebuild when data/transform/sizes actually change
       const cssTransform = transformToCSSPixels(t, effectiveViewBox, canvasDimensionsRef.current);
-      const spatialIndex = buildSpatialIndex(dataToRender, getSize, cssTransform);
-      if (spatialIndex) {
-        canvasRef.current._spatialIndex = spatialIndex;
+
+      // Track last state to detect meaningful changes
+      const lastState = canvasRef.current._lastSpatialIndexState;
+      const currentState = {
+        dataLength: dataToRender.length,
+        // Track first/last dots to detect position changes
+        firstDotX: dataToRender[0]?.x,
+        firstDotY: dataToRender[0]?.y,
+        lastDotX: dataToRender[dataToRender.length - 1]?.x,
+        lastDotY: dataToRender[dataToRender.length - 1]?.y,
+        // Track transform (zoom/pan)
+        transformK: Math.round(t.k * 1000) / 1000, // Round to avoid float precision issues
+        transformX: Math.round(t.x),
+        transformY: Math.round(t.y),
+        // Track sample sizes to detect size changes (check first, middle, last)
+        size0: dataToRender[0] ? Math.round(getSize(dataToRender[0]) * 100) / 100 : 0,
+        sizeM: dataToRender[Math.floor(dataToRender.length / 2)] ? Math.round(getSize(dataToRender[Math.floor(dataToRender.length / 2)]) * 100) / 100 : 0,
+        sizeN: dataToRender[dataToRender.length - 1] ? Math.round(getSize(dataToRender[dataToRender.length - 1]) * 100) / 100 : 0
+      };
+
+      // Rebuild spatial index only if something meaningful changed
+      const shouldRebuildSpatialIndex = !lastState ||
+        lastState.dataLength !== currentState.dataLength ||
+        lastState.firstDotX !== currentState.firstDotX ||
+        lastState.firstDotY !== currentState.firstDotY ||
+        lastState.lastDotX !== currentState.lastDotX ||
+        lastState.lastDotY !== currentState.lastDotY ||
+        lastState.transformK !== currentState.transformK ||
+        lastState.transformX !== currentState.transformX ||
+        lastState.transformY !== currentState.transformY ||
+        lastState.size0 !== currentState.size0 ||
+        lastState.sizeM !== currentState.sizeM ||
+        lastState.sizeN !== currentState.sizeN;
+
+      if (shouldRebuildSpatialIndex) {
+        const spatialIndex = buildSpatialIndex(dataToRender, getSize, cssTransform);
+        if (spatialIndex) {
+          canvasRef.current._spatialIndex = spatialIndex;
+          canvasRef.current._lastSpatialIndexState = currentState;
+
+          if (process.env.NODE_ENV === 'development' && Math.random() < 0.05) {
+            console.log('[ColoredDots] Rebuilt spatial index (meaningful change detected)');
+          }
+        }
       }
 
       // Canvas rendering: use unified styling logic
@@ -214,11 +255,34 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         }
       };
 
+      // Viewport culling: calculate visible bounds to skip off-screen dots
+      const [vbX, vbY, vbW, vbH] = effectiveViewBox || [0, 0, 100, 100];
+      const visibleBounds = {
+        left: (vbX - t.x) / t.k,
+        right: (vbX + vbW - t.x) / t.k,
+        top: (vbY - t.y) / t.k,
+        bottom: (vbY + vbH - t.y) / t.k
+      };
+
       // Draw all non-hovered dots first, then hovered dot last (on top)
       let hoveredItem = null;
       let hoveredIndex = -1;
+      let culledCount = 0;
 
       dataToRender.forEach((item, index) => {
+        // Viewport culling: skip dots that are completely outside visible bounds
+        const radius = getSize(item);
+        const isVisible =
+          item.x + radius >= visibleBounds.left &&
+          item.x - radius <= visibleBounds.right &&
+          item.y + radius >= visibleBounds.top &&
+          item.y - radius <= visibleBounds.bottom;
+
+        if (!isVisible) {
+          culledCount++;
+          return; // Skip this dot entirely
+        }
+
         if (hoveredDotId === item.id) {
           hoveredItem = item;
           hoveredIndex = index;
@@ -227,9 +291,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         }
       });
 
-      // Draw hovered dot last
+      // Draw hovered dot last (always draw hovered dot even if technically off-screen)
       if (hoveredItem) {
         drawDot(hoveredItem, hoveredIndex);
+      }
+
+      // Log culling stats occasionally (for performance monitoring)
+      if (process.env.NODE_ENV === 'development' && culledCount > 0 && Math.random() < 0.01) {
+        console.log(`[ColoredDots] Culled ${culledCount}/${dataToRender.length} off-screen dots (${((culledCount/dataToRender.length)*100).toFixed(1)}%)`);
       }
     } else {
       // SVG rendering: use unified styling logic
