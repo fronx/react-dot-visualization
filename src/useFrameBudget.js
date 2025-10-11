@@ -11,13 +11,17 @@ import { useRef, useCallback } from 'react';
  * @param {number} options.targetFPS - Target frame rate (default: 60)
  * @param {boolean} options.adaptiveThrottling - Automatically adjust target based on performance (default: false)
  * @param {number} options.minFPS - Minimum FPS when adaptive throttling is enabled (default: 30)
+ * @param {number} options.maxFPS - Maximum FPS when adaptive throttling is enabled (default: targetFPS)
+ * @param {number} options.increaseInterval - How often to try increasing FPS in ms (default: 1000)
  * @returns {Object} Frame budget utilities
  */
 export function useFrameBudget(options = {}) {
   const {
     targetFPS = 60,
     adaptiveThrottling = false,
-    minFPS = 30
+    minFPS = 30,
+    maxFPS = targetFPS,
+    increaseInterval = 1000
   } = options;
 
   const targetFrameTime = useRef(1000 / targetFPS);
@@ -25,27 +29,38 @@ export function useFrameBudget(options = {}) {
   const frameTimings = useRef([]);
   const droppedFrameCount = useRef(0);
   const renderedFrameCount = useRef(0);
-  const statsResetTime = useRef(performance.now());
+  const lastIncreaseCheckTime = useRef(performance.now());
 
-  // Adaptive throttling: if we're consistently missing frames, reduce target FPS
-  const adjustTargetFPS = useCallback(() => {
+  // Adaptive throttling: adjust target FPS based on sustained performance
+  // Decreases aggressively (immediate), increases gradually (every ~1s)
+  const adjustTargetFPS = useCallback((checkIncrease) => {
     if (!adaptiveThrottling) return;
 
     if (frameTimings.current.length < 10) return; // Need enough data
 
     const avgFrameTime = frameTimings.current.reduce((a, b) => a + b, 0) / frameTimings.current.length;
     const achievableFPS = 1000 / avgFrameTime;
+    const currentTargetFPS = 1000 / targetFrameTime.current;
 
-    // If we can't hit target FPS, gradually reduce it (but not below minFPS)
-    if (achievableFPS < targetFPS * 0.8) {
-      const newTargetFPS = Math.max(minFPS, Math.floor(achievableFPS * 0.9));
-      targetFrameTime.current = 1000 / newTargetFPS;
-
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[useFrameBudget] Adaptive throttling: Reduced target to ${newTargetFPS} FPS (avg frame time: ${avgFrameTime.toFixed(2)}ms)`);
+    // If we're consistently achieving better than target, try increasing (only at interval)
+    if (checkIncrease && achievableFPS > currentTargetFPS * 1.2) {
+      const newTargetFPS = Math.min(maxFPS, Math.floor(achievableFPS * 0.9));
+      if (newTargetFPS > currentTargetFPS) {
+        targetFrameTime.current = 1000 / newTargetFPS;
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`[useFrameBudget] Adaptive throttling: Increased target to ${newTargetFPS} FPS`);
+        }
       }
     }
-  }, [adaptiveThrottling, targetFPS, minFPS]);
+    // If we can't hit target FPS, reduce it immediately
+    else if (achievableFPS < currentTargetFPS * 0.8) {
+      const newTargetFPS = Math.max(minFPS, Math.floor(achievableFPS * 0.9));
+      targetFrameTime.current = 1000 / newTargetFPS;
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[useFrameBudget] Adaptive throttling: Reduced target to ${newTargetFPS} FPS`);
+      }
+    }
+  }, [adaptiveThrottling, minFPS, maxFPS]);
 
   /**
    * Check if enough time has passed to render the next frame
@@ -66,14 +81,15 @@ export function useFrameBudget(options = {}) {
       renderedFrameCount.current++;
       lastFrameTime.current = now;
 
-      // Reset stats and adjust FPS every second
-      if (now - statsResetTime.current > 1000) {
-        if (adaptiveThrottling) {
-          adjustTargetFPS();
+      if (adaptiveThrottling) {
+        // Always check for decreases (aggressive throttling when too slow)
+        adjustTargetFPS(false);
+
+        // Only check for increases at the configured interval (gradual recovery)
+        if (now - lastIncreaseCheckTime.current > increaseInterval) {
+          adjustTargetFPS(true);
+          lastIncreaseCheckTime.current = now;
         }
-        droppedFrameCount.current = 0;
-        renderedFrameCount.current = 0;
-        statsResetTime.current = now;
       }
 
       return true;
@@ -81,7 +97,7 @@ export function useFrameBudget(options = {}) {
       droppedFrameCount.current++;
       return false;
     }
-  }, [adjustTargetFPS, adaptiveThrottling]);
+  }, [adjustTargetFPS, adaptiveThrottling, increaseInterval]);
 
   /**
    * Get current performance statistics
@@ -108,7 +124,7 @@ export function useFrameBudget(options = {}) {
     frameTimings.current = [];
     droppedFrameCount.current = 0;
     renderedFrameCount.current = 0;
-    statsResetTime.current = performance.now();
+    lastIncreaseCheckTime.current = performance.now();
   }, []);
 
   return {
