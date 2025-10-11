@@ -7,6 +7,7 @@ import EdgeLayer from './EdgeLayer.jsx';
 import { boundsForData, computeOcclusionAwareViewBox, countVisibleDots } from './utils.js';
 import { ZoomManager } from './ZoomManager.js';
 import { useDebug } from './useDebug.js';
+import { useLatest } from './useLatest.js';
 import { decollisioning } from './decollisioning.js';
 import { getDotSize } from './dotUtils.js'
 
@@ -103,16 +104,12 @@ const DotVisualization = forwardRef((props, ref) => {
   const contentRef = useRef(null);
   const coloredDotsRef = useRef(null);
   const zoomManager = useRef(null);
-  const isDraggingRef = useRef(false);
-  const viewBoxRef = useRef(null);
-  const onZoomStartRef = useRef(onZoomStart);
-  const onZoomEndRef = useRef(onZoomEnd);
 
-  // Keep refs in sync with state and props for use in closures
-  isDraggingRef.current = isDragging;
-  onZoomStartRef.current = onZoomStart;
-  onZoomEndRef.current = onZoomEnd;
-  viewBoxRef.current = viewBox;
+  // Keep latest values accessible in closures without triggering re-runs
+  const isDraggingRef = useLatest(isDragging);
+  const viewBoxRef = useLatest(viewBox);
+  const onZoomStartRef = useLatest(onZoomStart);
+  const onZoomEndRef = useLatest(onZoomEnd);
 
   const debugLog = useDebug(debug);
 
@@ -145,15 +142,17 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [updateVisibleDotCount]);
 
-  // Keep a ref to the latest updateCountOnTransformChange to avoid dependency issues
-  const updateCountOnTransformChangeRef = useRef(updateCountOnTransformChange);
-  updateCountOnTransformChangeRef.current = updateCountOnTransformChange;
+  // Keep latest callback accessible without triggering re-runs
+  const updateCountOnTransformChangeRef = useLatest(updateCountOnTransformChange);
 
   const dataRef = useRef([]);
   const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
   const previousDataRef = useRef([]);
   const didInitialAutoFitRef = useRef(false);
   const autoZoomTimeoutRef = useRef(null);
+
+  // Keep latest dotStyles without triggering decollision simulation restarts
+  const dotStylesRef = useLatest(dotStyles);
 
   // Check if only non-positional properties have changed
   const hasPositionsChanged = useCallback((newData, oldData) => {
@@ -466,8 +465,10 @@ const DotVisualization = forwardRef((props, ref) => {
       return; // Don't run decollision while transitioning
     }
 
+    // Use ref for dotStyles to avoid restarting simulation when styles change
+    // (styles are visual properties and shouldn't interrupt the physics simulation)
     const fnDotSize = (item) => {
-      return getDotSize(item, dotStyles, defaultSize);
+      return getDotSize(item, dotStylesRef.current, defaultSize);
     }
 
     const simulation = decollisioning(data, onUpdateNodes, fnDotSize, (finalData) => {
@@ -479,7 +480,7 @@ const DotVisualization = forwardRef((props, ref) => {
     return () => {
       simulation.stop();
     };
-  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas, data, dotStyles, onUpdateNodes, onDecollisionComplete]);
+  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas, data, onUpdateNodes, onDecollisionComplete]);
 
   // Position transitions
   useEffect(() => {
