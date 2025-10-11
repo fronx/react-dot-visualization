@@ -7,6 +7,7 @@ import { useDebug } from './useDebug.js';
 import { buildSpatialIndex, findDotAtPosition, useCanvasInteractions } from './canvasInteractions.js';
 import { transformToCSSPixels } from './utils.js';
 import { usePulseAnimation } from './usePulseAnimation.js';
+import { useCache } from './useCache.js';
 
 const ColoredDots = React.memo(forwardRef((props, ref) => {
   const {
@@ -45,6 +46,15 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const debugLog = useDebug(debug);
   const canvasRef = useRef(null);
   const canvasDimensionsRef = useRef(null);
+
+  // Style cache - invalidates when any style-affecting prop changes
+  const styleCache = useCache([
+    data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity,
+    hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider
+  ], {
+    logStats: true,
+    name: 'ColoredDots.styles'
+  });
 
   // Pulse animation hook
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
@@ -110,30 +120,42 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   // Unified function to compute final styles for both SVG and Canvas
   const computeFinalStyles = (item, index, isCanvas = false) => {
-    const baseStyles = {
-      fill: isCanvas ? getEffectiveColor(item, index) : getFill(item, index), // Canvas can't use SVG patterns
-      stroke: stroke,
-      strokeWidth: strokeWidth,
-      opacity: getOpacity(item),
-      size: getSize(item)
-    };
-
-    // Apply custom dotStyles (same logic as updateColoredDotAttributes)
     const customStyles = dotStyles.get(item.id) || {};
-    const mergedStyles = { ...baseStyles, ...customStyles };
-
-    // Handle stroke-width vs strokeWidth property name differences
-    if (customStyles['stroke-width'] !== undefined) {
-      mergedStyles.strokeWidth = customStyles['stroke-width'];
-    }
-
-    // Hover opacity always takes precedence (same as updateColoredDotAttributes)
+    const hasPulse = customStyles.pulse !== undefined;
     const isHovered = hoveredDotId === item.id;
-    if (isHovered) {
-      mergedStyles.opacity = getOpacity(item); // This already handles hover opacity
-    }
 
-    return mergedStyles;
+    // Cache key includes hover state since it affects styles
+    const cacheKey = `${item.id}_${isHovered ? 'h' : 'n'}`;
+
+    // Use cache for non-pulsing dots
+    return styleCache.getCached(
+      cacheKey,
+      () => {
+        const baseStyles = {
+          fill: isCanvas ? getEffectiveColor(item, index) : getFill(item, index),
+          stroke: stroke,
+          strokeWidth: strokeWidth,
+          opacity: getOpacity(item),
+          size: getSize(item)
+        };
+
+        // Apply custom dotStyles
+        const mergedStyles = { ...baseStyles, ...customStyles };
+
+        // Handle stroke-width vs strokeWidth property name differences
+        if (customStyles['stroke-width'] !== undefined) {
+          mergedStyles.strokeWidth = customStyles['stroke-width'];
+        }
+
+        // Hover opacity always takes precedence
+        if (isHovered) {
+          mergedStyles.opacity = getOpacity(item);
+        }
+
+        return mergedStyles;
+      },
+      hasPulse // Skip cache for pulsing dots (dynamic)
+    );
   };
 
 
@@ -166,50 +188,50 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       }
 
       // Build spatial index for mouse interaction in CSS pixel space
-      // Only rebuild when data/transform/sizes actually change
+      // Only rebuild when data/transform actually change (use cheap checks only)
       const cssTransform = transformToCSSPixels(t, effectiveViewBox, canvasDimensionsRef.current);
 
-      // Track last state to detect meaningful changes
+      // Track last state - use ONLY cheap O(1) checks to minimize per-frame overhead
       const lastState = canvasRef.current._lastSpatialIndexState;
-      const currentState = {
-        dataLength: dataToRender.length,
-        // Track first/last dots to detect position changes
-        firstDotX: dataToRender[0]?.x,
-        firstDotY: dataToRender[0]?.y,
-        lastDotX: dataToRender[dataToRender.length - 1]?.x,
-        lastDotY: dataToRender[dataToRender.length - 1]?.y,
-        // Track transform (zoom/pan)
-        transformK: Math.round(t.k * 1000) / 1000, // Round to avoid float precision issues
-        transformX: Math.round(t.x),
-        transformY: Math.round(t.y),
-        // Track sample sizes to detect size changes (check first, middle, last)
-        size0: dataToRender[0] ? Math.round(getSize(dataToRender[0]) * 100) / 100 : 0,
-        sizeM: dataToRender[Math.floor(dataToRender.length / 2)] ? Math.round(getSize(dataToRender[Math.floor(dataToRender.length / 2)]) * 100) / 100 : 0,
-        sizeN: dataToRender[dataToRender.length - 1] ? Math.round(getSize(dataToRender[dataToRender.length - 1]) * 100) / 100 : 0
-      };
 
-      // Rebuild spatial index only if something meaningful changed
+      // All checks are O(1): array length, array access, simple math, property reads
+      const transformK = Math.round(t.k * 1000) / 1000; // Round to avoid float precision
+      const transformX = Math.round(t.x);
+      const transformY = Math.round(t.y);
+      const dataLength = dataToRender.length;
+      const firstDotX = dataToRender[0]?.x;
+      const firstDotY = dataToRender[0]?.y;
+      const lastDotX = dataToRender[dataToRender.length - 1]?.x;
+      const lastDotY = dataToRender[dataToRender.length - 1]?.y;
+
+      // Simple comparison - no expensive function calls, no indexOf(), no Map lookups
       const shouldRebuildSpatialIndex = !lastState ||
-        lastState.dataLength !== currentState.dataLength ||
-        lastState.firstDotX !== currentState.firstDotX ||
-        lastState.firstDotY !== currentState.firstDotY ||
-        lastState.lastDotX !== currentState.lastDotX ||
-        lastState.lastDotY !== currentState.lastDotY ||
-        lastState.transformK !== currentState.transformK ||
-        lastState.transformX !== currentState.transformX ||
-        lastState.transformY !== currentState.transformY ||
-        lastState.size0 !== currentState.size0 ||
-        lastState.sizeM !== currentState.sizeM ||
-        lastState.sizeN !== currentState.sizeN;
+        lastState.dataLength !== dataLength ||
+        lastState.firstDotX !== firstDotX ||
+        lastState.firstDotY !== firstDotY ||
+        lastState.lastDotX !== lastDotX ||
+        lastState.lastDotY !== lastDotY ||
+        lastState.transformK !== transformK ||
+        lastState.transformX !== transformX ||
+        lastState.transformY !== transformY;
 
       if (shouldRebuildSpatialIndex) {
         const spatialIndex = buildSpatialIndex(dataToRender, getSize, cssTransform);
         if (spatialIndex) {
           canvasRef.current._spatialIndex = spatialIndex;
-          canvasRef.current._lastSpatialIndexState = currentState;
+          canvasRef.current._lastSpatialIndexState = {
+            dataLength,
+            firstDotX,
+            firstDotY,
+            lastDotX,
+            lastDotY,
+            transformK,
+            transformX,
+            transformY
+          };
 
           if (process.env.NODE_ENV === 'development' && Math.random() < 0.05) {
-            console.log('[ColoredDots] Rebuilt spatial index (meaningful change detected)');
+            console.log('[ColoredDots] Rebuilt spatial index (data/transform changed)');
           }
         }
       }

@@ -6,3 +6,4 @@ export { default as ClusterLabels } from './ClusterLabels.jsx';
 export * from './utils.js';
 export * from './types';
 export { useFrameBudget, createFrameBudget } from './useFrameBudget.js';
+export { useCache } from './useCache.js';
