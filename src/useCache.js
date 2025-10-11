@@ -1,4 +1,5 @@
 import { useRef, useEffect } from 'react';
+import { useDebug } from './useDebug.js';
 
 /**
  * A generic cache hook for expensive computations.
@@ -6,17 +7,19 @@ import { useRef, useEffect } from 'react';
  *
  * @param {Array} dependencies - Array of values that should trigger cache invalidation
  * @param {Object} options - Configuration options
- * @param {boolean} options.logStats - Whether to log cache hit rate in development (default: false)
+ * @param {boolean} options.debug - Whether to log cache hit rate (default: false)
  * @param {string} options.name - Name for logging purposes (default: 'useCache')
  * @param {number} options.logInterval - How often to log stats in ms (default: 2000)
  * @returns {Object} Cache interface with getCached() method and version property
  */
 export const useCache = (dependencies = [], options = {}) => {
   const {
-    logStats = false,
+    debug = false,
     name = 'useCache',
     logInterval = 2000
   } = options;
+
+  const debugLog = useDebug(debug);
 
   const cache = useRef(new Map());
   const version = useRef(0);
@@ -28,9 +31,7 @@ export const useCache = (dependencies = [], options = {}) => {
     version.current += 1;
     stats.current = { hits: 0, misses: 0, lastLog: 0 };
 
-    if (process.env.NODE_ENV === 'development' && logStats) {
-      console.log(`[${name}] Cache invalidated (version ${version.current})`);
-    }
+    debugLog(`[${name}] Cache invalidated (version ${version.current})`);
   }, dependencies);
 
   /**
@@ -44,7 +45,7 @@ export const useCache = (dependencies = [], options = {}) => {
     const cacheKey = `${key}_${version.current}`;
 
     if (!skipCache && cache.current.has(cacheKey)) {
-      if (process.env.NODE_ENV === 'development' && logStats) {
+      if (debug) {
         stats.current.hits += 1;
         logStatsIfNeeded();
       }
@@ -52,7 +53,7 @@ export const useCache = (dependencies = [], options = {}) => {
     }
 
     // Cache miss - compute the value
-    if (process.env.NODE_ENV === 'development' && logStats && !skipCache) {
+    if (debug && !skipCache) {
       stats.current.misses += 1;
     }
 
@@ -71,7 +72,7 @@ export const useCache = (dependencies = [], options = {}) => {
     if (now - stats.current.lastLog > logInterval) {
       const total = stats.current.hits + stats.current.misses;
       const hitRate = total > 0 ? ((stats.current.hits / total) * 100).toFixed(1) : 0;
-      console.log(`[${name}] Hit rate: ${hitRate}% (${stats.current.hits}/${total})`);
+      debugLog(`[${name}] Hit rate: ${hitRate}% (${stats.current.hits}/${total})`);
       stats.current.lastLog = now;
     }
   };

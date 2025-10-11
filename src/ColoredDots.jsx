@@ -52,7 +52,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity,
     hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider
   ], {
-    logStats: true,
+    debug,
     name: 'ColoredDots.styles'
   });
 
