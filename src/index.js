@@ -5,3 +5,4 @@ export { default as InteractionLayer } from './InteractionLayer.jsx';
 export { default as ClusterLabels } from './ClusterLabels.jsx';
 export * from './utils.js';
 export * from './types';
+export { useFrameBudget, createFrameBudget } from './useFrameBudget.js';

@@ -1,9 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
 import * as d3 from 'd3';
+import { useFrameBudget } from './useFrameBudget';
 
 export const usePulseAnimation = (dotStyles, onAnimationFrame) => {
   const [time, setTime] = useState(0);
   const frameRef = useRef();
+
+  const TARGET_FPS = 30;
+  const THRESHOLD_FPS = TARGET_FPS * 0.8;
+
+  // Frame time budgeting to ensure smooth, consistent frame rates
+  const { shouldRender, getStats } = useFrameBudget({
+    targetFPS: TARGET_FPS,
+    adaptiveThrottling: true, // Automatically adjust if system can't maintain 60 FPS
+    minFPS: TARGET_FPS * 0.6
+  });
 
   const pulseDots = new Map();
   for (const [id, style] of dotStyles) {
@@ -25,13 +36,28 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame) => {
 
     const animate = (t) => {
       setTime(t);
-      onAnimationFrame?.();
+
+      // Only trigger expensive canvas redraw if frame budget allows
+      // This prevents trying to render faster than the system can handle,
+      // which causes janky, inconsistent frame rates
+      if (shouldRender()) {
+        onAnimationFrame?.();
+
+        // Optional: Log performance warnings in development
+        if (process.env.NODE_ENV === 'development') {
+          const stats = getStats();
+          if (stats.actualFPS < THRESHOLD_FPS && stats.actualFPS > 0) {
+            console.warn(`[usePulseAnimation] Low FPS detected: ${stats.actualFPS.toFixed(1)} FPS (dropped ${stats.droppedFrames} frames)`);
+          }
+        }
+      }
+
       frameRef.current = requestAnimationFrame(animate);
     };
 
     frameRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [pulseDots.size, onAnimationFrame]);
+  }, [pulseDots.size, onAnimationFrame, shouldRender, getStats]);
 
   return (dotId, baseColor) => {
     const config = pulseDots.get(dotId);
