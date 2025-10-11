@@ -415,14 +415,17 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     }
   }, [effectiveViewBox, useCanvas]);
 
-  // Canvas rendering for data/style changes (NOT zoom)
+  // Canvas rendering for data/style changes (NOT zoom, NOT hover)
+  // Note: hoveredDotId, hoverSizeMultiplier, hoverOpacity intentionally excluded from deps
+  // Hover changes are reflected in renderDots() via closure, but don't trigger full redraws
+  // This prevents flickering during decollision when mouse moves over dots
   useEffect(() => {
     if (!useCanvas) { canvasDimensionsRef.current = null; return; }
     // console.log('🟣 ColoredDots canvas useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2), 'data ref:', data);
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
-  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, useCanvas, customDotRenderer]);
+  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer]);
 
 
 
