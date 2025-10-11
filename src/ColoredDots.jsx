@@ -203,6 +203,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       const firstDotY = dataToRender[0]?.y;
       const lastDotX = dataToRender[dataToRender.length - 1]?.x;
       const lastDotY = dataToRender[dataToRender.length - 1]?.y;
+      const canvasWidth = canvasDimensionsRef.current?.width;
+      const canvasHeight = canvasDimensionsRef.current?.height;
 
       // Simple comparison - no expensive function calls, no indexOf(), no Map lookups
       const shouldRebuildSpatialIndex = !lastState ||
@@ -213,7 +215,9 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         lastState.lastDotY !== lastDotY ||
         lastState.transformK !== transformK ||
         lastState.transformX !== transformX ||
-        lastState.transformY !== transformY;
+        lastState.transformY !== transformY ||
+        lastState.canvasWidth !== canvasWidth ||
+        lastState.canvasHeight !== canvasHeight;
 
       if (shouldRebuildSpatialIndex) {
         const spatialIndex = buildSpatialIndex(dataToRender, getSize, cssTransform);
@@ -227,7 +231,9 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
             lastDotY,
             transformK,
             transformX,
-            transformY
+            transformY,
+            canvasWidth,
+            canvasHeight
           };
 
           if (process.env.NODE_ENV === 'development' && Math.random() < 0.05) {
