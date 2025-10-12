@@ -105,6 +105,10 @@ const DotVisualization = forwardRef((props, ref) => {
   const coloredDotsRef = useRef(null);
   const zoomManager = useRef(null);
 
+  // Track when data changes during decollision (the "point of no return" logic)
+  const decollisionSnapshotRef = useRef(null);
+  const pendingDecollisionRef = useRef(false);
+
   // Keep latest values accessible in closures without triggering re-runs
   const isDraggingRef = useLatest(isDragging);
   const viewBoxRef = useLatest(viewBox);
@@ -459,28 +463,51 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [useCanvas]);
 
-  // Decolliding dots
+  // Detect when data changes during active decollision
+  useEffect(() => {
+    if (enableDecollisioning && decollisionSnapshotRef.current &&
+        processedData.length > decollisionSnapshotRef.current.length) {
+      console.log('New data detected during decollision - marking for retry');
+      pendingDecollisionRef.current = true;
+    }
+  }, [processedData, enableDecollisioning]);
+
+  // Decolliding dots with "point of no return" logic:
+  // Once decollision starts with a data snapshot, let it complete.
+  // If new data arrives during flight, mark it and launch again after landing.
   useEffect(() => {
     if (!enableDecollisioning || !processedData.length || typeof window === 'undefined' || isTransitioning) {
-      return; // Don't run decollision while transitioning
+      decollisionSnapshotRef.current = null;
+      pendingDecollisionRef.current = false;
+      return;
     }
 
-    // Use ref for dotStyles to avoid restarting simulation when styles change
-    // (styles are visual properties and shouldn't interrupt the physics simulation)
+    // Snapshot data at launch time
+    const dataSnapshot = [...processedData];
+    decollisionSnapshotRef.current = dataSnapshot;
+    pendingDecollisionRef.current = false;
+
     const fnDotSize = (item) => {
       return getDotSize(item, dotStylesRef.current, defaultSize);
     }
 
-    const simulation = decollisioning(data, onUpdateNodes, fnDotSize, (finalData) => {
+    const simulation = decollisioning(dataSnapshot, onUpdateNodes, fnDotSize, (finalData) => {
       console.log('Decollision complete - syncing React state');
       setProcessedData(finalData);
-      onDecollisionComplete?.();
+
+      const needsAnotherCycle = pendingDecollisionRef.current;
+      decollisionSnapshotRef.current = null;
+      pendingDecollisionRef.current = false;
+
+      // Notify parent, including whether more work is pending
+      onDecollisionComplete?.(finalData, needsAnotherCycle);
     });
 
     return () => {
       simulation.stop();
+      decollisionSnapshotRef.current = null;
     };
-  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas, data, onUpdateNodes, onDecollisionComplete]);
+  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas, onUpdateNodes, onDecollisionComplete]);
 
   // Position transitions
   useEffect(() => {
