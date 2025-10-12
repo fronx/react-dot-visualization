@@ -218,9 +218,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         lastState.transformX !== transformX ||
         lastState.transformY !== transformY ||
         lastState.canvasWidth !== canvasWidth ||
-        lastState.canvasHeight !== canvasHeight;
+        lastState.canvasHeight !== canvasHeight ||
+        lastState.isDecollisioning !== isDecollisioning;
 
-      if (shouldRebuildSpatialIndex) {
+      // Skip spatial index rebuilds during decollision to avoid conflicts with D3 simulation
+      // The D3 simulation maintains live positions and directly manipulates the canvas.
+      // Building a spatial index from React state during this time would capture stale positions.
+      // When decollision completes, isDecollisioning changes and triggers a rebuild automatically.
+      if (shouldRebuildSpatialIndex && !isDecollisioning) {
         const spatialIndex = buildSpatialIndex(dataToRender, getSize, cssTransform);
         if (spatialIndex) {
           canvasRef.current._spatialIndex = spatialIndex;
@@ -234,7 +239,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
             transformX,
             transformY,
             canvasWidth,
-            canvasHeight
+            canvasHeight,
+            isDecollisioning
           };
 
           if (process.env.NODE_ENV === 'development' && Math.random() < 0.05) {
