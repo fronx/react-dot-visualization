@@ -1,19 +1,23 @@
 import { useState, useRef, useEffect } from 'react';
 import * as d3 from 'd3';
 import { useFrameBudget } from './useFrameBudget';
+import { useDebug } from './useDebug.js';
 
-export const usePulseAnimation = (dotStyles, onAnimationFrame) => {
+export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) => {
   const [time, setTime] = useState(0);
   const frameRef = useRef();
 
   const TARGET_FPS = 30;
   const THRESHOLD_FPS = TARGET_FPS * 0.8;
 
+  const debugLog = useDebug(debug);
+
   // Frame time budgeting to ensure smooth, consistent frame rates
   const { shouldRender, getStats } = useFrameBudget({
     targetFPS: TARGET_FPS,
     adaptiveThrottling: true, // Automatically adjust if system can't maintain 60 FPS
-    minFPS: TARGET_FPS * 0.6
+    minFPS: TARGET_FPS * 0.6,
+    debug
   });
 
   const pulseDots = new Map();
@@ -43,12 +47,10 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame) => {
       if (shouldRender()) {
         onAnimationFrame?.();
 
-        // Optional: Log performance warnings in development
-        if (process.env.NODE_ENV === 'development') {
-          const stats = getStats();
-          if (stats.actualFPS < THRESHOLD_FPS && stats.actualFPS > 0) {
-            console.warn(`[usePulseAnimation] Low FPS detected: ${stats.actualFPS.toFixed(1)} FPS (dropped ${stats.droppedFrames} frames)`);
-          }
+        // Optional: Log performance warnings when debug is enabled
+        const stats = getStats();
+        if (stats.actualFPS < THRESHOLD_FPS && stats.actualFPS > 0) {
+          debugLog(`[usePulseAnimation] Low FPS detected: ${stats.actualFPS.toFixed(1)} FPS (dropped ${stats.droppedFrames} frames)`);
         }
       }
 
@@ -57,7 +59,7 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame) => {
 
     frameRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [pulseDots.size, onAnimationFrame, shouldRender, getStats]);
+  }, [pulseDots.size, onAnimationFrame, shouldRender, getStats, debugLog]);
 
   return (dotId, baseColor) => {
     const config = pulseDots.get(dotId);

@@ -1,4 +1,5 @@
 import { useRef, useCallback } from 'react';
+import { useDebug } from './useDebug.js';
 
 /**
  * useFrameBudget - A generic hook for frame time budgeting and throttling
@@ -13,6 +14,7 @@ import { useRef, useCallback } from 'react';
  * @param {number} options.minFPS - Minimum FPS when adaptive throttling is enabled (default: 30)
  * @param {number} options.maxFPS - Maximum FPS when adaptive throttling is enabled (default: targetFPS)
  * @param {number} options.increaseInterval - How often to try increasing FPS in ms (default: 1000)
+ * @param {boolean} options.debug - Enable debug logging (default: false)
  * @returns {Object} Frame budget utilities
  */
 export function useFrameBudget(options = {}) {
@@ -21,7 +23,8 @@ export function useFrameBudget(options = {}) {
     adaptiveThrottling = false,
     minFPS = 30,
     maxFPS = targetFPS,
-    increaseInterval = 1000
+    increaseInterval = 1000,
+    debug = false
   } = options;
 
   const targetFrameTime = useRef(1000 / targetFPS);
@@ -30,6 +33,8 @@ export function useFrameBudget(options = {}) {
   const droppedFrameCount = useRef(0);
   const renderedFrameCount = useRef(0);
   const lastIncreaseCheckTime = useRef(performance.now());
+
+  const debugLog = useDebug(debug);
 
   // Adaptive throttling: adjust target FPS based on sustained performance
   // Decreases aggressively (immediate), increases gradually (every ~1s)
@@ -47,20 +52,16 @@ export function useFrameBudget(options = {}) {
       const newTargetFPS = Math.min(maxFPS, Math.floor(achievableFPS * 0.9));
       if (newTargetFPS > currentTargetFPS) {
         targetFrameTime.current = 1000 / newTargetFPS;
-        if (process.env.NODE_ENV === 'development') {
-          console.log(`[useFrameBudget] Adaptive throttling: Increased target to ${newTargetFPS} FPS`);
-        }
+        debugLog(`[useFrameBudget] Adaptive throttling: Increased target to ${newTargetFPS} FPS`);
       }
     }
     // If we can't hit target FPS, reduce it immediately
     else if (achievableFPS < currentTargetFPS * 0.8) {
       const newTargetFPS = Math.max(minFPS, Math.floor(achievableFPS * 0.9));
       targetFrameTime.current = 1000 / newTargetFPS;
-      if (process.env.NODE_ENV === 'development') {
-        console.log(`[useFrameBudget] Adaptive throttling: Reduced target to ${newTargetFPS} FPS`);
-      }
+      debugLog(`[useFrameBudget] Adaptive throttling: Reduced target to ${newTargetFPS} FPS`);
     }
-  }, [adaptiveThrottling, minFPS, maxFPS]);
+  }, [adaptiveThrottling, minFPS, maxFPS, debugLog]);
 
   /**
    * Check if enough time has passed to render the next frame

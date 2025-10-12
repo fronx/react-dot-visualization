@@ -61,7 +61,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
-  } : null);
+  } : null, debug);
 
   const getColor = (item, index) => {
     if (item.color) return item.color;
