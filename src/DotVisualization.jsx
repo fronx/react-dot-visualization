@@ -82,21 +82,22 @@ const DotVisualization = forwardRef((props, ref) => {
   const isZooming = isDragging;
 
   // Wrapper functions to track hovered dot for hover effects
-  const handleDotHover = useCallback((item, event) => {
+  // Use useStableCallback to prevent recreation during rapid hovering
+  const handleDotHover = useStableCallback((item, event) => {
     if (item) {
-      setHoveredDotId(item.id);
+      setHoveredDotId(prevId => prevId === item.id ? prevId : item.id);
     }
     if (onHover) {
       onHover(item, event);
     }
-  }, [onHover]);
+  });
 
-  const handleDotLeave = useCallback((item, event) => {
+  const handleDotLeave = useStableCallback((item, event) => {
     setHoveredDotId(null);
     if (onLeave) {
       onLeave(item, event);
     }
-  }, [onLeave]);
+  });
 
   const zoomRef = useRef(null);
   const contentRef = useRef(null);
