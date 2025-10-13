@@ -36,9 +36,6 @@ const DotVisualization = forwardRef((props, ref) => {
     onZoomEnd,
     onDecollisionComplete,
     enableDecollisioning = true,
-    enablePositionTransitions = true,
-    transitionDuration = 300,
-    frameRate = 32,
     positionsAreIntermediate = false,
     cacheKey = 'default',
     zoomExtent = [0.5, 20],
@@ -79,7 +76,6 @@ const DotVisualization = forwardRef((props, ref) => {
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
   const [hoveredDotId, setHoveredDotId] = useState(null);
   const [visibleDotCount, setVisibleDotCount] = useState(0);
-  const [isTransitioning, setIsTransitioning] = useState(false);
 
   // Block hover only when dragging (not during wheel zoom)
   const isZooming = isDragging;
@@ -244,19 +240,8 @@ const DotVisualization = forwardRef((props, ref) => {
 
     let processedValidData = validData;
 
-    // Handle position transitions
-    if (positionsChanged && enablePositionTransitions && previousDataRef.current.length > 0 && !positionsAreIntermediate) {
-      // Start position transition: use current positions as starting point
-      processedValidData = validData.map(item => {
-        const prevItem = previousDataRef.current.find(p => p.id === item.id);
-        if (prevItem) {
-          // Use previous position as starting point for transition
-          return { ...item, x: prevItem.x, y: prevItem.y, targetX: item.x, targetY: item.y };
-        }
-        return item; // New items keep their original positions
-      });
-      setIsTransitioning(true);
-    } else if (!positionsChanged && memoizedPositions.current.size > 0 && !positionsAreIntermediate) {
+    // Restore memoized positions when positions haven't changed and we're not in intermediate state
+    if (!positionsChanged && memoizedPositions.current.size > 0 && !positionsAreIntermediate) {
       // If positions haven't changed and positions are stable, restore memoized decollisioned positions
       // console.log('📍 Restoring memoized positions for', validData.length, 'dots');
       processedValidData = validData.map(item => {
@@ -495,7 +480,7 @@ const DotVisualization = forwardRef((props, ref) => {
   // Once decollision starts with a data snapshot, let it complete.
   // If new data arrives during flight, mark it and launch again after landing.
   useEffect(() => {
-    if (!enableDecollisioning || !processedData.length || typeof window === 'undefined' || isTransitioning) {
+    if (!enableDecollisioning || !processedData.length || typeof window === 'undefined') {
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
       return;
@@ -526,42 +511,7 @@ const DotVisualization = forwardRef((props, ref) => {
       simulation.stop();
       decollisionSnapshotRef.current = null;
     };
-  }, [enableDecollisioning, defaultSize, isTransitioning, useCanvas, onUpdateNodes, onDecollisionComplete]);
-
-  // Position transitions
-  useEffect(() => {
-    if (!isTransitioning || !processedData.length || typeof window === 'undefined') return;
-
-    console.log('Starting position transition for', processedData.length, 'dots');
-
-    const simulationData = processedData.map(d => ({ ...d }));
-    const [dots0, dots1] = ['#colored-dots circle', '#interaction-layer circle'].map(sel =>
-      d3.selectAll(sel).data(simulationData)
-    );
-
-    const updateDots = (useTarget = false) => {
-      const xAttr = useTarget ? d => d.targetX || d.x : d => d.x;
-      const yAttr = useTarget ? d => d.targetY || d.y : d => d.y;
-      dots0.attr('cx', xAttr).attr('cy', yAttr);
-      dots1.attr('cx', xAttr).attr('cy', yAttr);
-    };
-
-    const simulation = d3.forceSimulation(simulationData)
-      .alpha(1)
-      .alphaMin(0.01)
-      .alphaDecay(1 / (transitionDuration / frameRate))
-      .force('position', d3.forceX().x(d => d.targetX || d.x).strength(0.3))
-      .force('positionY', d3.forceY().y(d => d.targetY || d.y).strength(0.3))
-      .on('tick', () => updateDots())
-      .on('end', () => {
-        console.log('Position transition complete');
-        updateDots(true);
-        setIsTransitioning(false);
-        setProcessedData(simulationData.map(d => ({ ...d, x: d.targetX || d.x, y: d.targetY || d.y })));
-      });
-
-    return () => simulation.stop();
-  }, [isTransitioning, processedData, transitionDuration]);
+  }, [enableDecollisioning, defaultSize, useCanvas, onUpdateNodes, onDecollisionComplete]);
 
 
   // Handle mouse leave to reset interaction states

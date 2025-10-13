@@ -70,9 +70,6 @@ export interface DotVisualizationProps {
   onZoomEnd?: (event?: any) => void;
   onDecollisionComplete?: () => void;
   enableDecollisioning?: boolean;
-  enablePositionTransitions?: boolean;
-  transitionDuration?: number;
-  frameRate?: number;
   positionsAreIntermediate?: boolean;
   zoomExtent?: [number, number];
   margin?: number;
