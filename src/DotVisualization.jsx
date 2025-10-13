@@ -463,17 +463,26 @@ const DotVisualization = forwardRef((props, ref) => {
   const stableOnDecollisionComplete = useStableCallback(onDecollisionComplete);
 
   // Detect when data changes during active decollision
+  // This effect watches for new data arriving while a simulation is in flight
   useEffect(() => {
     if (enableDecollisioning && decollisionSnapshotRef.current &&
         processedData.length > decollisionSnapshotRef.current.length) {
-      console.log('New data detected during decollision - marking for retry');
+      debugLog('New data detected during decollision - marking for retry');
       pendingDecollisionRef.current = true;
     }
-  }, [processedData, enableDecollisioning]);
+  }, [processedData, enableDecollisioning, debugLog]);
 
-  // Decolliding dots with "point of no return" logic:
-  // Once decollision starts with a data snapshot, let it complete.
-  // If new data arrives during flight, mark it and launch again after landing.
+  // Decollision state machine with "point of no return" logic
+  //
+  // This effect manages the D3 force simulation lifecycle:
+  // 1. Takes a snapshot of current data when simulation starts
+  // 2. Runs simulation to completion using the snapshot (ignoring new data during flight)
+  // 3. On completion, checks if new data arrived (via pendingDecollisionRef)
+  // 4. Parent can re-enable decollision if needsAnotherCycle is true
+  //
+  // Why snapshot? The D3 simulation mutates node positions over time. If we used live
+  // data, React re-renders could cause the simulation to restart mid-flight with different
+  // data, creating visual glitches. The snapshot ensures atomic "launch -> animate -> land".
   useEffect(() => {
     if (!enableDecollisioning || !processedData.length || typeof window === 'undefined') {
       decollisionSnapshotRef.current = null;
@@ -491,12 +500,17 @@ const DotVisualization = forwardRef((props, ref) => {
     }
 
     const simulation = decollisioning(dataSnapshot, stableOnUpdateNodes, fnDotSize, (finalData) => {
-      console.log('Decollision complete - syncing React state');
-      setProcessedData(finalData);
+      debugLog('Decollision complete - syncing React state');
 
+      // Check if new data arrived while simulation was running
       const needsAnotherCycle = pendingDecollisionRef.current;
+
+      // Clear snapshot and pending flags
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
+
+      // Update React state with final positions
+      setProcessedData(finalData);
 
       // Notify parent, including whether more work is pending
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
