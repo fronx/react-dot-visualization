@@ -40,6 +40,7 @@ const DotVisualization = forwardRef((props, ref) => {
     transitionDuration = 300,
     frameRate = 32,
     positionsAreIntermediate = false,
+    cacheKey = 'default',
     zoomExtent = [0.5, 20],
     margin = 0.1,
     dotStroke = "#111",
@@ -154,9 +155,27 @@ const DotVisualization = forwardRef((props, ref) => {
   const previousDataRef = useRef([]);
   const didInitialAutoFitRef = useRef(false);
   const autoZoomTimeoutRef = useRef(null);
+  const prevCacheKeyRef = useRef(cacheKey);
 
   // Keep latest dotStyles without triggering decollision simulation restarts
   const dotStylesRef = useLatest(dotStyles);
+
+  // Clear memoized positions when cache key changes (application state change)
+  //
+  // Use case: If your application has state that affects dot sizes (e.g., selecting
+  // a subset of dots to highlight by making them larger), you can pass a cacheKey
+  // that encodes that state. When the state changes, this effect clears the
+  // memoizedPositions cache, allowing decollision to run fresh with the new sizes.
+  //
+  // Example: cacheKey="playlist:123:open" when playlist is selected, "default" otherwise
+  useEffect(() => {
+    if (prevCacheKeyRef.current !== cacheKey) {
+      console.log('Cache key changed:', prevCacheKeyRef.current, '->', cacheKey);
+      console.log('Cleared memoized positions (cache invalidated)');
+      memoizedPositions.current.clear();
+      prevCacheKeyRef.current = cacheKey;
+    }
+  }, [cacheKey]);
 
   // Check if only non-positional properties have changed
   const hasPositionsChanged = useCallback((newData, oldData) => {
