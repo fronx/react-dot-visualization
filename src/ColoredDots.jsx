@@ -48,6 +48,18 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const canvasRef = useRef(null);
   const canvasDimensionsRef = useRef(null);
 
+  // Guard function to prevent React from interfering with D3 simulation
+  // During decollision, the D3 force simulation has exclusive control over dot positions
+  // and directly manipulates the canvas via renderCanvasWithData(). Any React-triggered
+  // render would use stale position data and overwrite the simulation's progress.
+  const shouldBlockRenderDuringDecollision = (reason) => {
+    if (isDecollisioning) {
+      debugLog(`Skipping ${reason} - D3 simulation has control`);
+      return true;
+    }
+    return false;
+  };
+
   // Style cache - invalidates when any style-affecting prop changes
   const styleCache = useCache([
     data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity,
@@ -59,10 +71,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   // Pulse animation hook
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
-    // Skip rendering during decollision - D3 simulation has control of positions
-    if (isDecollisioning) {
-      return;
-    }
+    if (shouldBlockRenderDuringDecollision('pulse animation render')) return;
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
   } : null, debug);
@@ -432,15 +441,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // This prevents flickering during decollision when mouse moves over dots
   useEffect(() => {
     if (!useCanvas) { canvasDimensionsRef.current = null; return; }
-
-    // Block renders during decollision - the D3 simulation calls renderCanvasWithData()
-    // directly with live positions. If we render here with the stale 'data' prop,
-    // we'll overwrite the decollision progress and reset dots to original positions.
-    // This happens when dotStyles changes (e.g., activePointId changes during hover).
-    if (isDecollisioning) {
-      debugLog('Skipping canvas render during decollision');
-      return;
-    }
+    if (shouldBlockRenderDuringDecollision('canvas useEffect render')) return;
 
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
