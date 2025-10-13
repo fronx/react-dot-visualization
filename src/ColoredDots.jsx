@@ -59,6 +59,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   // Pulse animation hook
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
+    // Skip rendering during decollision - D3 simulation has control of positions
+    if (isDecollisioning) {
+      return;
+    }
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
   } : null, debug);
@@ -438,7 +442,6 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       return;
     }
 
-    // console.log('🟣 ColoredDots canvas useEffect triggered - data length:', data.length, 'first item:', data[0]?.x?.toFixed(2), data[0]?.y?.toFixed(2), 'data ref:', data);
     debugLog('Immediate canvas render:', { dataLength: data.length });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());

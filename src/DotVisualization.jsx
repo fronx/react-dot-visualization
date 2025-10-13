@@ -467,6 +467,17 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [useCanvas]);
 
+  // Store callbacks in refs to avoid breaking decollision useEffect deps
+  const onUpdateNodesRef = useRef(onUpdateNodes);
+  useEffect(() => {
+    onUpdateNodesRef.current = onUpdateNodes;
+  }, [onUpdateNodes]);
+
+  const onDecollisionCompleteRef = useRef(onDecollisionComplete);
+  useEffect(() => {
+    onDecollisionCompleteRef.current = onDecollisionComplete;
+  }, [onDecollisionComplete]);
+
   // Detect when data changes during active decollision
   useEffect(() => {
     if (enableDecollisioning && decollisionSnapshotRef.current &&
@@ -495,7 +506,7 @@ const DotVisualization = forwardRef((props, ref) => {
       return getDotSize(item, dotStylesRef.current, defaultSize);
     }
 
-    const simulation = decollisioning(dataSnapshot, onUpdateNodes, fnDotSize, (finalData) => {
+    const simulation = decollisioning(dataSnapshot, (nodes) => onUpdateNodesRef.current(nodes), fnDotSize, (finalData) => {
       console.log('Decollision complete - syncing React state');
       setProcessedData(finalData);
 
@@ -504,14 +515,14 @@ const DotVisualization = forwardRef((props, ref) => {
       pendingDecollisionRef.current = false;
 
       // Notify parent, including whether more work is pending
-      onDecollisionComplete?.(finalData, needsAnotherCycle);
+      onDecollisionCompleteRef.current?.(finalData, needsAnotherCycle);
     });
 
     return () => {
       simulation.stop();
       decollisionSnapshotRef.current = null;
     };
-  }, [enableDecollisioning, defaultSize, useCanvas, onUpdateNodes, onDecollisionComplete]);
+  }, [enableDecollisioning, defaultSize, useCanvas]);
 
 
   // Handle mouse leave to reset interaction states
