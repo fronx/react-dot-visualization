@@ -243,7 +243,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
             isDecollisioning
           };
 
-          if (process.env.NODE_ENV === 'development' && Math.random() < 0.05) {
+          if (debug && process.env.NODE_ENV === 'development' && Math.random() < 0.05) {
             console.log('[ColoredDots] Rebuilt spatial index (data/transform changed)');
           }
         }
@@ -498,7 +498,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     onMouseUp,
     onDoubleClick,
     onContextMenu,
-    onDragStart
+    onDragStart,
+    debug
   });
 
   if (useCanvas) {

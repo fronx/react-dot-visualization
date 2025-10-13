@@ -110,7 +110,8 @@ export const useCanvasInteractions = (config) => {
     onMouseUp,
     onDoubleClick,
     onContextMenu,
-    onDragStart
+    onDragStart,
+    debug = false
   } = config;
 
   const currentHoveredDot = useRef(null);
@@ -122,17 +123,23 @@ export const useCanvasInteractions = (config) => {
   // Helper function to get mouse position and hit dot
   const getMousePositionAndHit = (event) => {
     if (!enabled) {
-      console.log('🔍 getMousePositionAndHit: not enabled');
+      if (debug) {
+        console.log('🔍 getMousePositionAndHit: not enabled');
+      }
       return { cssX: null, cssY: null, hitDot: null };
     }
     if (isZooming) {
-      console.log('🔍 getMousePositionAndHit: isZooming=true, blocking');
+      if (debug) {
+        console.log('🔍 getMousePositionAndHit: isZooming=true, blocking');
+      }
       return { cssX: null, cssY: null, hitDot: null };
     }
 
     const spatialIndex = getSpatialIndex?.();
     if (!spatialIndex) {
-      console.log('🔍 getMousePositionAndHit: no spatialIndex available');
+      if (debug) {
+        console.log('🔍 getMousePositionAndHit: no spatialIndex available');
+      }
       return { cssX: null, cssY: null, hitDot: null };
     }
 
