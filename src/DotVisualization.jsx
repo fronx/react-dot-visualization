@@ -9,6 +9,7 @@ import { ZoomManager } from './ZoomManager.js';
 import { useDebug } from './useDebug.js';
 import { useLatest } from './useLatest.js';
 import { useStableCallback } from './useStableCallback.js';
+import { useDotHoverHandlers } from './useDotHoverHandlers.js';
 import { decollisioning } from './decollisioning.js';
 import { getDotSize } from './dotUtils.js'
 
@@ -75,29 +76,13 @@ const DotVisualization = forwardRef((props, ref) => {
   const [containerDimensions, setContainerDimensions] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
-  const [hoveredDotId, setHoveredDotId] = useState(null);
   const [visibleDotCount, setVisibleDotCount] = useState(0);
 
   // Block hover only when dragging (not during wheel zoom)
   const isZooming = isDragging;
 
-  // Wrapper functions to track hovered dot for hover effects
-  // Use useStableCallback to prevent recreation during rapid hovering
-  const handleDotHover = useStableCallback((item, event) => {
-    if (item) {
-      setHoveredDotId(prevId => prevId === item.id ? prevId : item.id);
-    }
-    if (onHover) {
-      onHover(item, event);
-    }
-  });
-
-  const handleDotLeave = useStableCallback((item, event) => {
-    setHoveredDotId(null);
-    if (onLeave) {
-      onLeave(item, event);
-    }
-  });
+  // Manage hover state and callbacks
+  const { hoveredDotId, handleDotHover, handleDotLeave, clearHover } = useDotHoverHandlers(onHover, onLeave);
 
   const zoomRef = useRef(null);
   const contentRef = useRef(null);
@@ -368,7 +353,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
     const handleWindowBlur = () => {
       debugLog('🔍 Window blur - resetting all states');
-      setHoveredDotId(null);
+      clearHover();
       setIsDragging(false);
       if (onLeave) {
         onLeave(null, null);
@@ -528,7 +513,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const handleMouseLeave = () => {
     debugLog('🔍 Mouse leave - resetting interaction states');
     setIsDragging(false);
-    setHoveredDotId(null); // Clear hover state when mouse leaves container
+    clearHover(); // Clear hover state when mouse leaves container
     // Also call the original onLeave callback to notify parent
     if (onLeave) {
       onLeave(null, null);
@@ -539,7 +524,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const handleBackgroundHover = () => {
     if (hoveredDotId !== null) {
       debugLog('🔍 Background hover - clearing stuck hover state');
-      setHoveredDotId(null);
+      clearHover();
       if (onLeave) {
         onLeave(null, null);
       }
