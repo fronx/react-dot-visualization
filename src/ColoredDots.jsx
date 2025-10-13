@@ -332,8 +332,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       }
 
       // Log culling stats occasionally (for performance monitoring)
-      if (process.env.NODE_ENV === 'development' && culledCount > 0 && Math.random() < 0.01) {
-        console.log(`[ColoredDots] Culled ${culledCount}/${dataToRender.length} off-screen dots (${((culledCount/dataToRender.length)*100).toFixed(1)}%)`);
+      if (culledCount > 0 && Math.random() < 0.01) {
+        debugLog(`Culled ${culledCount}/${dataToRender.length} off-screen dots (${((culledCount/dataToRender.length)*100).toFixed(1)}%)`);
       }
     } else {
       // SVG rendering: use unified styling logic
