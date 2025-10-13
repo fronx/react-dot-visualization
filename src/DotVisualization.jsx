@@ -8,6 +8,7 @@ import { boundsForData, computeOcclusionAwareViewBox, countVisibleDots } from '.
 import { ZoomManager } from './ZoomManager.js';
 import { useDebug } from './useDebug.js';
 import { useLatest } from './useLatest.js';
+import { useStableCallback } from './useStableCallback.js';
 import { decollisioning } from './decollisioning.js';
 import { getDotSize } from './dotUtils.js'
 
@@ -467,16 +468,13 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [useCanvas]);
 
-  // Store callbacks in refs to avoid breaking decollision useEffect deps
-  const onUpdateNodesRef = useRef(onUpdateNodes);
-  useEffect(() => {
-    onUpdateNodesRef.current = onUpdateNodes;
-  }, [onUpdateNodes]);
-
-  const onDecollisionCompleteRef = useRef(onDecollisionComplete);
-  useEffect(() => {
-    onDecollisionCompleteRef.current = onDecollisionComplete;
-  }, [onDecollisionComplete]);
+  // Create stable callback references for the D3 simulation.
+  // The D3 force simulation is a long-running animation that should not restart when
+  // callbacks change. These stable wrappers ensure the simulation keeps running while
+  // always calling the latest version of each callback. Without this, callback changes
+  // from re-renders would restart the simulation, causing dots to jump back to start.
+  const stableOnUpdateNodes = useStableCallback(onUpdateNodes);
+  const stableOnDecollisionComplete = useStableCallback(onDecollisionComplete);
 
   // Detect when data changes during active decollision
   useEffect(() => {
@@ -506,7 +504,7 @@ const DotVisualization = forwardRef((props, ref) => {
       return getDotSize(item, dotStylesRef.current, defaultSize);
     }
 
-    const simulation = decollisioning(dataSnapshot, (nodes) => onUpdateNodesRef.current(nodes), fnDotSize, (finalData) => {
+    const simulation = decollisioning(dataSnapshot, stableOnUpdateNodes, fnDotSize, (finalData) => {
       console.log('Decollision complete - syncing React state');
       setProcessedData(finalData);
 
@@ -515,7 +513,7 @@ const DotVisualization = forwardRef((props, ref) => {
       pendingDecollisionRef.current = false;
 
       // Notify parent, including whether more work is pending
-      onDecollisionCompleteRef.current?.(finalData, needsAnotherCycle);
+      stableOnDecollisionComplete(finalData, needsAnotherCycle);
     });
 
     return () => {
