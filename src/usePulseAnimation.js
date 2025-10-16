@@ -29,8 +29,9 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
         opacityRange: style.pulse.opacityRange || 0,
         pulseColor: style.pulse.pulseColor,
         ringEffect: style.pulse.ringEffect || false,
-        ringScale: style.pulse.ringScale || 3.0,
-        pulseInward: style.pulse.pulseInward || false
+        pulseInward: style.pulse.pulseInward || false,
+        ringTargetPixels: style.pulse.ringTargetPixels,
+        ringMinRatio: style.pulse.ringMinRatio
       });
     }
   }
@@ -74,19 +75,22 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
 
     if (config.ringEffect) {
       // Ring effect animation
-      const dotPhase = (time % config.duration) / config.duration;
+      const dotPhase = phase;
       const ringPhase = ((time + 400) % config.duration) / config.duration; // 400ms offset
 
-      // Main dot: subtle scale pulse (1.0 to 1.1)
-      const dotScale = 1 + (Math.sin(dotPhase * Math.PI * 2) * 0.05);
+      // Main dot: scale pulse using sizeRange (sine wave for smooth oscillation)
+      const sineWave = Math.sin(dotPhase * Math.PI * 2); // -1 to 1
+      const dotScale = config.pulseInward
+        ? 1 - (config.sizeRange * (sineWave + 1) / 2)  // Pulse inward: 1.0 to (1 - sizeRange)
+        : 1 + (config.sizeRange * (sineWave + 1) / 2); // Pulse outward: 1.0 to (1 + sizeRange)
 
-      // Ring: starts at 50% scale, expands to configurable max scale, fades out after 80%
-      let ringScale = null;
+      // Ring: animates from 0 to 1 over first 80% of cycle, then fades out
+      // The actual ring size is calculated adaptively based on dot size
+      let ringAnimationPhase = null;
       let ringOpacity = 0;
 
       if (ringPhase <= 0.8) {
-        const maxScale = config.ringScale;
-        ringScale = 0.5 + (ringPhase * (maxScale - 0.5)); // 0.5 to maxScale
+        ringAnimationPhase = ringPhase / 0.8; // Normalize to 0-1 range
         ringOpacity = 1 - (ringPhase / 0.8);
       }
 
@@ -94,10 +98,14 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
         sizeMultiplier: dotScale,
         opacityMultiplier: 1,
         color: baseColor,
-        ringData: ringScale !== null ? {
-          scale: ringScale,
+        ringData: ringAnimationPhase !== null ? {
+          animationPhase: ringAnimationPhase, // 0 to 1
           opacity: ringOpacity,
-          color: config.pulseColor || baseColor
+          color: config.pulseColor || baseColor,
+          options: {
+            targetPixels: config.ringTargetPixels,
+            minRatio: config.ringMinRatio
+          }
         } : null
       };
     } else {

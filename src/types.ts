@@ -32,8 +32,9 @@ export interface PulseConfig {
   opacityRange?: number; // opacity variation (default: 0 = no opacity change)
   pulseColor?: string;   // target color to pulse toward (interpolated with base color)
   ringEffect?: boolean;  // use pulsating ring effect instead of size/color pulse
-  ringScale?: number;    // maximum ring scale multiplier (default: 3.0 = 300%)
   pulseInward?: boolean; // pulse inward (shrink) instead of outward (grow) (default: false)
+  ringTargetPixels?: number;   // max ring size in pixels for small dots (default: 50px)
+  ringMinRatio?: number;       // minimum ring size ratio for large dots (default: 2.0 = 2x dot radius)
 }
 
 // Base style properties combining static styles and effects

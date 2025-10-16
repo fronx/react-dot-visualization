@@ -8,6 +8,7 @@ import { buildSpatialIndex, findDotAtPosition, useCanvasInteractions } from './c
 import { transformToCSSPixels } from './utils.js';
 import { usePulseAnimation } from './usePulseAnimation.js';
 import { useCache } from './useCache.js';
+import { calculateAdaptiveRingRadius } from './pulseRingUtils.js';
 
 const ColoredDots = React.memo(forwardRef((props, ref) => {
   const {
@@ -183,12 +184,16 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       // Reset to identity
       canvasContext.setTransform(1, 0, 0, 1, 0, 0);
       // Re-apply base viewBox transform
+      let viewBoxScale = 1;
+      let canvasDPR = 1;
       if (effectiveViewBox && canvasDimensionsRef.current) {
         const { width, height } = canvasDimensionsRef.current;
         const dpr = (window.devicePixelRatio || 1) * 2;
+        canvasDPR = dpr; // Store DPR for accurate pixel calculations
         const [vbX, vbY, vbW, vbH] = effectiveViewBox;
         const scaleX = (width / vbW) * dpr;
         const scaleY = (height / vbH) * dpr;
+        viewBoxScale = scaleX; // Store for ring calculations (includes DPR)
         const translateX = -vbX * scaleX;
         const translateY = -vbY * scaleY;
         canvasContext.setTransform(scaleX, 0, 0, scaleY, translateX, translateY);
@@ -274,14 +279,27 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
           const didRender = customDotRenderer(canvasContext, item, styles, {
             radius,
             pulseData,
-            isHovered: hoveredDotId === item.id
+            isHovered: hoveredDotId === item.id,
+            zoomScale: t.k,      // Pass zoom scale for zoom-aware effects
+            viewBoxScale,        // Pass viewBox scale for accurate screen size calculations
+            canvasDPR            // Pass canvas DPR for accurate CSS pixel calculations
           });
           if (didRender) return; // Skip default rendering if custom renderer handled it
         }
 
         // Draw pulsating ring first (if present)
         if (pulseData.ringData) {
-          const ringRadius = radius * pulseData.ringData.scale;
+          const ringRadius = calculateAdaptiveRingRadius({
+            radius,
+            animationPhase: pulseData.ringData.animationPhase,
+            viewBoxScale,
+            zoomScale: t.k,
+            targetPixels: pulseData.ringData.options?.targetPixels,
+            minRatio: pulseData.ringData.options?.minRatio,
+            canvasDPR,
+            debug
+          });
+
           canvasContext.globalAlpha = pulseData.ringData.opacity * styles.opacity;
           canvasContext.fillStyle = pulseData.ringData.color;
           canvasContext.beginPath();

@@ -7,3 +7,4 @@ export * from './utils.js';
 export * from './types';
 export { useFrameBudget, createFrameBudget } from './useFrameBudget.js';
 export { useCache } from './useCache.js';
+export { calculateAdaptiveRingRadius } from './pulseRingUtils.js';
