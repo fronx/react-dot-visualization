@@ -181,10 +181,14 @@ const DotVisualization = forwardRef((props, ref) => {
   }, [defaultSize]);
 
 
-  const zoomToVisible = useCallback(async (duration = 0, easing = d3.easeCubicInOut, dataOverride = null) => {
+  const zoomToVisible = useCallback(async (duration = 0, easing = d3.easeCubicInOut, dataOverride = null, marginOverride = null) => {
     if (!zoomManager.current) return false;
     const dataToUse = dataOverride || processedData;
-    return await zoomManager.current.zoomToVisible(dataToUse, { duration, easing });
+    const options = { duration, easing };
+    if (marginOverride !== null) {
+      options.margin = marginOverride;
+    }
+    return await zoomManager.current.zoomToVisible(dataToUse, options);
   }, [processedData]);
 
   // Generate unique dot IDs

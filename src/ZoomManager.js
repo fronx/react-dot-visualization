@@ -140,7 +140,8 @@ export class ZoomManager {
     const {
       duration = 0,
       easing = d3.easeCubicInOut,
-      updateExtents = true
+      updateExtents = true,
+      margin = this.fitMargin
     } = options;
 
     if (!this.zoomRef?.current || !this.viewBox || !data?.length) {
@@ -154,7 +155,7 @@ export class ZoomManager {
       right: this.occludeRight,
       top: this.occludeTop,
       bottom: this.occludeBottom
-    }, this.fitMargin);
+    }, margin);
 
     if (!fit) return false;
 
