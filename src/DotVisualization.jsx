@@ -181,10 +181,10 @@ const DotVisualization = forwardRef((props, ref) => {
   }, [defaultSize]);
 
 
-  const zoomToVisible = useCallback(async (duration = 0, easing = d3.easeCubicInOut, dataOverride = null, marginOverride = null) => {
+  const zoomToVisible = useCallback(async (duration = 0, easing = d3.easeCubicInOut, dataOverride = null, marginOverride = null, updateExtents = true) => {
     if (!zoomManager.current) return false;
     const dataToUse = dataOverride || processedData;
-    const options = { duration, easing };
+    const options = { duration, easing, updateExtents };
     if (marginOverride !== null) {
       options.margin = marginOverride;
     }

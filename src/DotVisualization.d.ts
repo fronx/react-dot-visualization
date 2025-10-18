@@ -20,6 +20,13 @@ export interface DotVisualizationProps {
   [key: string]: any;
 }
 
-declare const DotVisualization: React.ForwardRefExoticComponent<DotVisualizationProps & React.RefAttributes<any>>;
+export interface DotVisualizationRef {
+  zoomToVisible: (duration?: number, easing?: any, dataOverride?: any[], marginOverride?: number | null, updateExtents?: boolean) => Promise<boolean>;
+  getVisibleDotCount: () => number;
+  updateVisibleDotCount: () => void;
+  getZoomTransform: () => any;
+}
+
+declare const DotVisualization: React.ForwardRefExoticComponent<DotVisualizationProps & React.RefAttributes<DotVisualizationRef>>;
 
 export default DotVisualization;
