@@ -229,6 +229,7 @@ export class ZoomManager {
       const isFirstZoom = !this.lastDataBounds;
       const duration = isFirstZoom ? 0 : autoZoomDuration;
 
+      console.log('[ZoomManager] AUTO-ZOOM triggered', { isFirstZoom, duration });
       this.zoomToVisible(newData, {
         duration,
         easing: d3.easeCubicInOut

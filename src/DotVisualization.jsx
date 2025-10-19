@@ -259,9 +259,24 @@ const DotVisualization = forwardRef((props, ref) => {
     );
 
     // Calculate/recalculate viewBox when:
-    // 1. ViewBox doesn't exist yet (initial setup)
-    // 2. Dot sizes changed (after useDotScaling updates them)
-    const shouldRecalculateViewBox = (!viewBox || sizesChanged) && containerDimensions;
+    // 1. ViewBox doesn't exist yet (initial setup) - ALWAYS do this
+    // 2. Small collections (≤10 dots) - ALWAYS recalculate when sizes change (fix giant dots bug)
+    // 3. Large collections - only recalculate when layout is stable to prevent thrashing
+    const isSmallCollection = validData.length <= 10;
+    const shouldRecalculateViewBox = containerDimensions && (
+      !viewBox || // Initial setup
+      (sizesChanged && isSmallCollection) || // Small collections: always recalculate when sizes change
+      (sizesChanged && !positionsAreIntermediate && !isSmallCollection) // Large collections: only when layout settled
+    );
+
+    if (containerDimensions && sizesChanged && positionsAreIntermediate && !isSmallCollection) {
+      console.log('[ViewBox] Skipped recalculation during layout animation', {
+        sizesChanged,
+        positionsAreIntermediate,
+        isSmallCollection,
+        dataLength: validData.length
+      });
+    }
 
     if (shouldRecalculateViewBox) {
       const bounds = boundsForData(validData, defaultSize);
@@ -275,7 +290,17 @@ const DotVisualization = forwardRef((props, ref) => {
         vb[2] !== viewBox[2] || vb[3] !== viewBox[3];
 
       if (vb && viewBoxChanged) {
-        debugLog('ViewBox updated:', sizesChanged ? 'sizes changed' : 'initialized', vb);
+        const reason = sizesChanged ? 'sizes changed' : 'initialized';
+        const hadPreviousViewBox = viewBox !== null;
+        const isInitialSetup = !hadPreviousViewBox;
+
+        console.log(`[ViewBox] Updated (${reason}):`, vb, {
+          dataLength: validData.length,
+          positionsAreIntermediate,
+          previousViewBox: viewBox,
+          hadPreviousViewBox,
+          isInitialSetup
+        });
         setViewBox(vb);
       }
     }
@@ -290,8 +315,14 @@ const DotVisualization = forwardRef((props, ref) => {
       // When auto-zoom is disabled, still do initial zoom for first data
       // Check if this is the first data (no previous data)
       if (!previousDataRef.current?.length && validData.length > 0) {
+        console.log('[InitZoom] First data - calling initZoom', {
+          dataLength: validData.length
+        });
         zoomManager.current.initZoom(validData);
       } else {
+        console.log('[ZoomExtents] Updating zoom extents for data change', {
+          dataLength: validData.length
+        });
         // Update zoom extents for subsequent data changes
         zoomManager.current.updateZoomExtentsForData(validData);
       }
