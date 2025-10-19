@@ -318,7 +318,7 @@ export function setAbsoluteExtent(handler, absExtent) {
  * @param {number} fitMargin - Margin for fitting (0-1)
  * @returns {boolean} True if extent was updated
  */
-export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occlusion, zoomExtent, fitMargin = 0.92, dotSize) {
+export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occlusion, zoomExtent, fitMargin = 0.9, dotSize) {
   if (!zoomHandler || !data.length || !viewBox || !svgRect || !zoomExtent) return false;
 
   const currentExtent = zoomHandler.scaleExtent();
