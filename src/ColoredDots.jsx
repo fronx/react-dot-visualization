@@ -178,7 +178,6 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const renderDots = (canvasContext = null, tOverride = null, customData = null) => {
     const dataToRender = customData || data;
     if (useCanvas && canvasContext) {
-      // console.log("renderDots");
       const t = tOverride || { k: 1, x: 0, y: 0 };
 
       // Reset to identity
@@ -491,11 +490,19 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         renderDots(ctx, transform, customData);
       }
     },
+    recalculateCanvasDimensions: () => {
+      // Force canvas dimensions to be recalculated on next render
+      // Used when initial zoom needs fresh dimensions
+      if (useCanvas) {
+        canvasDimensionsRef.current = null;
+        debugLog('Canvas dimensions cache cleared (forced recalculation)');
+      }
+    },
     findDotAtPosition: (mouseX, mouseY) => {
       if (!useCanvas || !canvasRef.current?._spatialIndex) return null;
       return findDotAtPosition(mouseX, mouseY, canvasRef.current._spatialIndex);
     }
-  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition]);
+  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, debugLog]);
 
 
   useEffect(() => {

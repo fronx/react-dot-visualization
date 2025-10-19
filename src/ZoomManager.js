@@ -25,7 +25,8 @@ export class ZoomManager {
     this.zoomRef = options.zoomRef;
     this.contentRef = options.contentRef;
     this.canvasRenderer = options.canvasRenderer; // Function to render canvas
-    
+    this.coloredDotsRef = options.coloredDotsRef; // Reference to ColoredDots component for direct access
+
     // Configuration
     this.zoomExtent = options.zoomExtent || [0.5, 20];
     this.defaultSize = options.defaultSize || 2;
@@ -42,7 +43,7 @@ export class ZoomManager {
     this.baseScaleRef = 1;
     this.viewBox = null;
     this.lastDataBounds = null;
-    
+
     // RAF state for coalescing rapid zoom events (prevents flicker)
     this.rafState = { pending: false, lastT: d3.zoomIdentity };
     
@@ -172,15 +173,46 @@ export class ZoomManager {
 
     if (duration > 0) {
       await this.animateToTransform(next, { duration, easing });
-      
+
       if (updateExtents) {
         // Finalize extents after animation
         const finalExtent = computeAbsoluteExtent(this.zoomExtent, this.baseScaleRef);
         setAbsoluteExtent(this.zoomHandler, finalExtent);
       }
     } else {
-      this.applyTransformViaZoomHandler(next);
+      // For instant zoom, apply transform directly to avoid D3 event system delay
+      this.applyTransformDirect(next);
+
+      // Force a canvas redraw in the next frame to ensure it picks up the transform
+      if (this.useCanvas && this.canvasRenderer) {
+        requestAnimationFrame(() => {
+          this.canvasRenderer(next);
+        });
+      }
     }
+
+    return true;
+  }
+
+  /**
+   * Initialize zoom on first data arrival (instant, no animation)
+   */
+  initZoom(newData) {
+    if (!this.viewBox || !newData?.length) {
+      return false;
+    }
+
+    // CRITICAL: Force canvas dimensions to be recalculated before initial zoom
+    // This prevents the race condition where canvas renders with stale/uninitialized dimensions
+    if (this.useCanvas && this.coloredDotsRef?.current?.recalculateCanvasDimensions) {
+      this.coloredDotsRef.current.recalculateCanvasDimensions();
+    }
+
+    // Instant zoom to fit initial content
+    this.zoomToVisible(newData, {
+      duration: 0,  // Instant!
+      updateExtents: true
+    });
 
     return true;
   }
@@ -194,7 +226,7 @@ export class ZoomManager {
       autoZoomDuration = 200
     } = options;
 
-    if (!autoZoomToNewContent || !this.viewBox || !this.lastDataBounds) {
+    if (!autoZoomToNewContent || !this.viewBox) {
       return false;
     }
 
@@ -207,10 +239,17 @@ export class ZoomManager {
     );
 
     if (shouldAutoZoom) {
-      this.zoomToVisible(newData, { 
-        duration: autoZoomDuration,
-        easing: d3.easeCubicInOut 
+      // First zoom is instant, subsequent zooms are animated
+      const isFirstZoom = !this.lastDataBounds;
+      const duration = isFirstZoom ? 0 : autoZoomDuration;
+
+      this.zoomToVisible(newData, {
+        duration,
+        easing: d3.easeCubicInOut
       });
+
+      // Update bounds after zoom succeeds
+      this.updateDataBounds(newData);
       return true;
     }
 
@@ -223,6 +262,10 @@ export class ZoomManager {
   updateDataBounds(data) {
     if (data?.length > 0) {
       this.lastDataBounds = boundsForData(data, this.defaultSize);
+    } else {
+      // Reset bounds when data becomes empty
+      // This ensures next dataset gets a clean initial zoom
+      this.lastDataBounds = null;
     }
   }
 

@@ -248,18 +248,37 @@ const DotVisualization = forwardRef((props, ref) => {
       }
     }
 
-    // Initialize viewBox using container dimensions
-    if (!viewBox && containerDimensions) {
+    // Check if dot sizes have changed (e.g., after useDotScaling runs)
+    const currentSizes = validData.map(d => d.size).filter(s => s !== undefined);
+    const hasSizeData = currentSizes.length > 0;
+    const previousSizes = previousDataRef.current.map(d => d.size).filter(s => s !== undefined);
+    const sizesChanged = hasSizeData && (
+      previousSizes.length === 0 || // First time sizes are added
+      currentSizes.length !== previousSizes.length ||
+      currentSizes.some((s, i) => s !== previousSizes[i])
+    );
+
+    // Calculate/recalculate viewBox when:
+    // 1. ViewBox doesn't exist yet (initial setup)
+    // 2. Dot sizes changed (after useDotScaling updates them)
+    const shouldRecalculateViewBox = (!viewBox || sizesChanged) && containerDimensions;
+
+    if (shouldRecalculateViewBox) {
       const bounds = boundsForData(validData, defaultSize);
       const vb = computeOcclusionAwareViewBox(bounds, containerDimensions, {
         left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
       }, margin);
-      debugLog('Initialized viewBox:', vb);
-      if (vb) setViewBox(vb);
-    }
 
-    // Calculate current data bounds
-    const currentBounds = validData.length > 0 ? boundsForData(validData, defaultSize) : null;
+      // Only update viewBox if it actually changed
+      const viewBoxChanged = !viewBox ||
+        vb[0] !== viewBox[0] || vb[1] !== viewBox[1] ||
+        vb[2] !== viewBox[2] || vb[3] !== viewBox[3];
+
+      if (vb && viewBoxChanged) {
+        debugLog('ViewBox updated:', sizesChanged ? 'sizes changed' : 'initialized', vb);
+        setViewBox(vb);
+      }
+    }
 
     // Auto-zoom to new content if enabled (using ZoomManager)
     if (autoZoomToNewContent && zoomManager.current) {
@@ -268,8 +287,14 @@ const DotVisualization = forwardRef((props, ref) => {
         autoZoomDuration
       });
     } else if (!autoZoomToNewContent && zoomManager.current) {
-      // When auto-zoom is disabled, still update zoom extents
-      zoomManager.current.updateZoomExtentsForData(validData);
+      // When auto-zoom is disabled, still do initial zoom for first data
+      // Check if this is the first data (no previous data)
+      if (!previousDataRef.current?.length && validData.length > 0) {
+        zoomManager.current.initZoom(validData);
+      } else {
+        // Update zoom extents for subsequent data changes
+        zoomManager.current.updateZoomExtentsForData(validData);
+      }
     }
 
     // Store original input data for future comparisons
@@ -278,11 +303,6 @@ const DotVisualization = forwardRef((props, ref) => {
     dataRef.current = processedValidData;
     setProcessedData(processedValidData);
 
-    // Update data bounds in ZoomManager for auto-zoom detection
-    if (zoomManager.current && currentBounds) {
-      zoomManager.current.updateDataBounds(validData);
-    }
-
     // Update visible dot count when data changes
     updateVisibleDotCount();
 
@@ -290,7 +310,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Initialize and set up zoom behavior with ZoomManager
   useEffect(() => {
-    if (!processedData.length || !zoomRef.current || typeof window === 'undefined') {
+    if (!zoomRef.current || typeof window === 'undefined') {
       return;
     }
 
@@ -306,6 +326,7 @@ const DotVisualization = forwardRef((props, ref) => {
       zoomManager.current = new ZoomManager({
         zoomRef,
         contentRef,
+        coloredDotsRef,
         canvasRenderer,
         zoomExtent,
         defaultSize,

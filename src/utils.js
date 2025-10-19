@@ -14,12 +14,15 @@ export function boundsForData(data, dotSize = 2) {
     return Math.max(max, radius);
   }, 0);
 
-  // Calculate bounds using each dot's center position plus the maximum radius
+  // Add extra padding around dots for auto-zoom (3x radius ensures comfortable spacing)
+  const paddedRadius = maxRadius * 4;
+
+  // Calculate bounds using each dot's center position plus the padded radius
   return data.reduce((acc, obj) => ({
-    minX: Math.min(acc.minX, obj.x - maxRadius),
-    minY: Math.min(acc.minY, obj.y - maxRadius),
-    maxX: Math.max(acc.maxX, obj.x + maxRadius),
-    maxY: Math.max(acc.maxY, obj.y + maxRadius),
+    minX: Math.min(acc.minX, obj.x - paddedRadius),
+    minY: Math.min(acc.minY, obj.y - paddedRadius),
+    maxX: Math.max(acc.maxX, obj.x + paddedRadius),
+    maxY: Math.max(acc.maxY, obj.y + paddedRadius),
   }), {
     minX: Infinity,
     minY: Infinity,
@@ -218,9 +221,15 @@ export function computeOcclusionAwareViewBox(bounds, container, occlusion = {}, 
  * @returns {boolean} True if auto-zoom should be triggered
  */
 export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform, dotSize) {
-  if (!newData.length || !viewBox || !transform || !previousBounds) return false;
+  if (!newData.length || !viewBox || !transform) return false;
 
   const newBounds = boundsForData(newData, dotSize);
+
+  // SPECIAL CASE: Initial zoom when previousBounds is null (first data arrival)
+  // Always zoom to fit the initial content
+  if (!previousBounds) {
+    return true;
+  }
 
   // First check if bounds have changed beyond a small tolerance (2%)
   const tolerance = 0.02;
@@ -262,8 +271,11 @@ export function shouldAutoZoomToNewContent(newData, previousBounds, viewBox, tra
   // Use the larger percentage (limiting factor)
   const contentFitPercentage = Math.max(widthFitPercentage, heightFitPercentage);
 
-  // Only auto-zoom if content is too small (< 50%) or too large (> 80%)
-  const shouldZoom = contentFitPercentage < 0.5 || contentFitPercentage > 0.9;
+  // HYSTERESIS: Use wider thresholds to prevent oscillation
+  // Zoom OUT if content < 40% (too zoomed in)
+  // Zoom IN if content > 95% (too zoomed out, content barely fits)
+  // Dead zone: 40-95% = comfortable viewing range, no zoom changes
+  const shouldZoom = contentFitPercentage < 0.4 || contentFitPercentage > 0.95;
 
   return shouldZoom;
 }
