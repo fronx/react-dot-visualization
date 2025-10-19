@@ -25,7 +25,6 @@ export class ZoomManager {
     this.zoomRef = options.zoomRef;
     this.contentRef = options.contentRef;
     this.canvasRenderer = options.canvasRenderer; // Function to render canvas
-    this.coloredDotsRef = options.coloredDotsRef; // Reference to ColoredDots component for direct access
 
     // Configuration
     this.zoomExtent = options.zoomExtent || [0.5, 20];
@@ -180,15 +179,8 @@ export class ZoomManager {
         setAbsoluteExtent(this.zoomHandler, finalExtent);
       }
     } else {
-      // For instant zoom, apply transform directly to avoid D3 event system delay
-      this.applyTransformDirect(next);
-
-      // Force a canvas redraw in the next frame to ensure it picks up the transform
-      if (this.useCanvas && this.canvasRenderer) {
-        requestAnimationFrame(() => {
-          this.canvasRenderer(next);
-        });
-      }
+      // For instant zoom, apply transform via zoom handler
+      this.applyTransformViaZoomHandler(next);
     }
 
     return true;
@@ -200,12 +192,6 @@ export class ZoomManager {
   initZoom(newData) {
     if (!this.viewBox || !newData?.length) {
       return false;
-    }
-
-    // CRITICAL: Force canvas dimensions to be recalculated before initial zoom
-    // This prevents the race condition where canvas renders with stale/uninitialized dimensions
-    if (this.useCanvas && this.coloredDotsRef?.current?.recalculateCanvasDimensions) {
-      this.coloredDotsRef.current.recalculateCanvasDimensions();
     }
 
     // Instant zoom to fit initial content

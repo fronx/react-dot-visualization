@@ -490,19 +490,11 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         renderDots(ctx, transform, customData);
       }
     },
-    recalculateCanvasDimensions: () => {
-      // Force canvas dimensions to be recalculated on next render
-      // Used when initial zoom needs fresh dimensions
-      if (useCanvas) {
-        canvasDimensionsRef.current = null;
-        debugLog('Canvas dimensions cache cleared (forced recalculation)');
-      }
-    },
     findDotAtPosition: (mouseX, mouseY) => {
       if (!useCanvas || !canvasRef.current?._spatialIndex) return null;
       return findDotAtPosition(mouseX, mouseY, canvasRef.current._spatialIndex);
     }
-  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, debugLog]);
+  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition]);
 
 
   useEffect(() => {

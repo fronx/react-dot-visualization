@@ -310,7 +310,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Initialize and set up zoom behavior with ZoomManager
   useEffect(() => {
-    if (!zoomRef.current || typeof window === 'undefined') {
+    if (!processedData.length || !zoomRef.current || typeof window === 'undefined') {
       return;
     }
 
@@ -326,7 +326,6 @@ const DotVisualization = forwardRef((props, ref) => {
       zoomManager.current = new ZoomManager({
         zoomRef,
         contentRef,
-        coloredDotsRef,
         canvasRenderer,
         zoomExtent,
         defaultSize,
