@@ -268,13 +268,13 @@ export class ZoomManager {
     }
 
     const currentTransform = this.transform;
-    
+
     // Create interpolators
     const xInterpolator = d3.interpolate(currentTransform.x, targetTransform.x);
     const yInterpolator = d3.interpolate(currentTransform.y, targetTransform.y);
     const kInterpolator = d3.interpolate(currentTransform.k, targetTransform.k);
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       d3.select(this.zoomRef.current)
         .transition()
         .duration(duration)
@@ -292,7 +292,9 @@ export class ZoomManager {
           resolve();
         })
         .on('interrupt', () => {
-          reject(new Error('Animation interrupted'));
+          // Interruptions are expected when animations are superseded by new ones
+          // (e.g., rapid arrow key navigation). Resolve silently.
+          resolve();
         });
     });
   }
