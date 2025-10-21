@@ -38,6 +38,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onZoomEnd,
     onDecollisionComplete,
     enableDecollisioning = true,
+    skipIntermediateDecollisionFrames = false,
     positionsAreIntermediate = false,
     cacheKey = 'default',
     zoomExtent = [0.5, 20],
@@ -569,7 +570,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
       // Notify parent, including whether more work is pending
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
-    });
+    }, skipIntermediateDecollisionFrames);
 
     return () => {
       simulation.stop();

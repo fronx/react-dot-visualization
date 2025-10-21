@@ -1,6 +1,6 @@
 import * as d3 from 'd3';
 
-export function decollisioning(data, onUpdatePositions, fnDotSize, onDecollisionComplete) {
+export function decollisioning(data, onUpdatePositions, fnDotSize, onDecollisionComplete, skipIntermediateFrames = false) {
   const nodes = data.map(d => ({ ...d }));
   let tickCount = 0;
   const simulation = d3.forceSimulation(nodes)
@@ -10,10 +10,14 @@ export function decollisioning(data, onUpdatePositions, fnDotSize, onDecollision
     .force('collide', d3.forceCollide().radius(fnDotSize))
     .on('tick', () => {
       tickCount++;
-      // Create new array reference so React knows the data changed
-      onUpdatePositions([...nodes]);
+      // For incremental updates, skip intermediate frames - only render the final result
+      if (!skipIntermediateFrames) {
+        // Create new array reference so React knows the data changed
+        onUpdatePositions([...nodes]);
+      }
     })
     .on('end', () => {
+      // Always update positions on completion (whether skipping intermediate frames or not)
       onUpdatePositions([...nodes]);
 
       if (onDecollisionComplete) {
