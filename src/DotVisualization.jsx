@@ -38,7 +38,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onZoomEnd,
     onDecollisionComplete,
     enableDecollisioning = true,
-    skipIntermediateDecollisionFrames = false,
+    isIncrementalUpdate = false,
     positionsAreIntermediate = false,
     cacheKey = 'default',
     zoomExtent = [0.5, 20],
@@ -73,6 +73,7 @@ const DotVisualization = forwardRef((props, ref) => {
   } = props;
 
   const [processedData, setProcessedData] = useState([]);
+  const [stablePositions, setStablePositions] = useState([]);
   const [viewBox, setViewBox] = useState(null);
   const [containerDimensions, setContainerDimensions] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -333,12 +334,30 @@ const DotVisualization = forwardRef((props, ref) => {
     previousDataRef.current = validData.map(item => ({ ...item })); // Deep copy of validData!! This is important!
     // Store processed data (either original or with restored positions)
     dataRef.current = processedValidData;
-    setProcessedData(processedValidData);
+
+    // Conditional rendering based on update type:
+    // - Incremental updates: Keep rendering stable positions while decollision runs
+    // - Full renders: Render new data directly, show animation
+    if (isIncrementalUpdate && stablePositions.length > 0) {
+      // Incremental: Don't update processedData yet, keep rendering stable old positions
+      // The decollision effect will update both stablePositions and processedData when complete
+      console.log('[INCREMENTAL RENDER] Keeping stable positions during decollision', {
+        stableCount: stablePositions.length,
+        newCount: processedValidData.length
+      });
+    } else {
+      // Full render: Update immediately to show animation
+      setProcessedData(processedValidData);
+      if (!isIncrementalUpdate) {
+        // Clear stable positions on full render
+        setStablePositions([]);
+      }
+    }
 
     // Update visible dot count when data changes
     updateVisibleDotCount();
 
-  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration]);
+  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate, stablePositions.length]);
 
   // Initialize and set up zoom behavior with ZoomManager
   useEffect(() => {
@@ -540,14 +559,30 @@ const DotVisualization = forwardRef((props, ref) => {
   // data, React re-renders could cause the simulation to restart mid-flight with different
   // data, creating visual glitches. The snapshot ensures atomic "launch -> animate -> land".
   useEffect(() => {
-    if (!enableDecollisioning || !processedData.length || typeof window === 'undefined') {
+    if (!enableDecollisioning || typeof window === 'undefined') {
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
       return;
     }
 
+    // For incremental updates, use dataRef.current (new positions) even though processedData shows stable positions
+    // For full renders, use processedData (which is the same as dataRef.current)
+    const sourceData = isIncrementalUpdate ? dataRef.current : processedData;
+
+    if (!sourceData.length) {
+      decollisionSnapshotRef.current = null;
+      pendingDecollisionRef.current = false;
+      return;
+    }
+
+    console.log('[DECOLLISION START]', {
+      isIncremental: isIncrementalUpdate,
+      sourceCount: sourceData.length,
+      processedCount: processedData.length
+    });
+
     // Snapshot data at launch time
-    const dataSnapshot = [...processedData];
+    const dataSnapshot = [...sourceData];
     decollisionSnapshotRef.current = dataSnapshot;
     pendingDecollisionRef.current = false;
 
@@ -565,18 +600,31 @@ const DotVisualization = forwardRef((props, ref) => {
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
 
+      // Always update stable positions after decollision completes
+      // This ensures they're ready for the next incremental update
+      setStablePositions([...finalData]);
+      if (isIncrementalUpdate) {
+        console.log('[INCREMENTAL COMPLETE] Saved stable positions', {
+          count: finalData.length
+        });
+      } else {
+        console.log('[FULL RENDER COMPLETE] Saved stable positions for future incremental updates', {
+          count: finalData.length
+        });
+      }
+
       // Update React state with final positions
       setProcessedData(finalData);
 
       // Notify parent, including whether more work is pending
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
-    }, skipIntermediateDecollisionFrames);
+    }, isIncrementalUpdate);
 
     return () => {
       simulation.stop();
       decollisionSnapshotRef.current = null;
     };
-  }, [enableDecollisioning, defaultSize, useCanvas]);
+  }, [enableDecollisioning, processedData.length, isIncrementalUpdate, defaultSize, useCanvas]);
 
 
   // Handle mouse leave to reset interaction states

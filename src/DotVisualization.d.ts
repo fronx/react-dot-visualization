@@ -16,7 +16,7 @@ export interface DotVisualizationProps {
   onDragStart?: (node: any) => void;
   dragIcon?: any;
   onZoomStart?: () => void;
-  skipIntermediateDecollisionFrames?: boolean;
+  isIncrementalUpdate?: boolean;
   style?: React.CSSProperties;
   [key: string]: any;
 }

@@ -49,18 +49,6 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const canvasRef = useRef(null);
   const canvasDimensionsRef = useRef(null);
 
-  // Guard function to prevent React from interfering with D3 simulation
-  // During decollision, the D3 force simulation has exclusive control over dot positions
-  // and directly manipulates the canvas via renderCanvasWithData(). Any React-triggered
-  // render would use stale position data and overwrite the simulation's progress.
-  const shouldBlockRenderDuringDecollision = (reason) => {
-    if (isDecollisioning) {
-      debugLog(`Skipping ${reason} - D3 simulation has control`);
-      return true;
-    }
-    return false;
-  };
-
   // Style cache - invalidates when any style-affecting prop changes
   const styleCache = useCache([
     data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity,
@@ -72,7 +60,6 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   // Pulse animation hook
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
-    if (shouldBlockRenderDuringDecollision('pulse animation render')) return;
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
   } : null, debug);
@@ -455,15 +442,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Canvas rendering for data/style changes (NOT zoom, NOT hover)
   // Note: hoveredDotId, hoverSizeMultiplier, hoverOpacity intentionally excluded from deps
   // Hover changes are reflected in renderDots() via closure, but don't trigger full redraws
-  // This prevents flickering during decollision when mouse moves over dots
+  // This prevents flickering during hover
   useEffect(() => {
     if (!useCanvas) { canvasDimensionsRef.current = null; return; }
-    if (shouldBlockRenderDuringDecollision('canvas useEffect render')) return;
 
-    debugLog('Immediate canvas render:', { dataLength: data.length });
+    debugLog('Canvas effect render:', { dataLength: data.length, isDecollisioning });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
-  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer, isDecollisioning]);
+  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer]);
 
 
 
