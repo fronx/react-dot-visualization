@@ -17,6 +17,8 @@ export interface DotVisualizationProps {
   dragIcon?: any;
   onZoomStart?: () => void;
   isIncrementalUpdate?: boolean;
+  transitionDuration?: number;
+  transitionEasing?: (t: number) => number;
   style?: React.CSSProperties;
   [key: string]: any;
 }

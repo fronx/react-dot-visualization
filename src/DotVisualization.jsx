@@ -39,6 +39,8 @@ const DotVisualization = forwardRef((props, ref) => {
     onDecollisionComplete,
     enableDecollisioning = true,
     isIncrementalUpdate = false,
+    transitionDuration = 350,
+    transitionEasing = null,
     positionsAreIntermediate = false,
     cacheKey = 'default',
     zoomExtent = [0.5, 20],
@@ -590,6 +592,14 @@ const DotVisualization = forwardRef((props, ref) => {
       return getDotSize(item, dotStylesRef.current, defaultSize);
     }
 
+    // Build transition config for incremental updates
+    const transitionConfig = isIncrementalUpdate ? {
+      enabled: true,
+      stablePositions: stablePositions.length > 0 ? stablePositions : processedData,
+      duration: transitionDuration,
+      easing: transitionEasing || d3.easeCubicOut,
+    } : null;
+
     const simulation = decollisioning(dataSnapshot, stableOnUpdateNodes, fnDotSize, (finalData) => {
       debugLog('Decollision complete - syncing React state');
 
@@ -618,7 +628,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
       // Notify parent, including whether more work is pending
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
-    }, isIncrementalUpdate);
+    }, isIncrementalUpdate, transitionConfig);
 
     return () => {
       simulation.stop();
