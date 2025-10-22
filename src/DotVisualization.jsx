@@ -206,6 +206,9 @@ const DotVisualization = forwardRef((props, ref) => {
   useEffect(() => {
     if (!data || data.length === 0) {
       setProcessedData([]);
+      // Reset viewBox when all data is cleared (e.g., deleting all tracks before fresh import)
+      // This prevents smooth transitions from old large viewBox to new small one
+      setViewBox(null);
       return;
     }
 
