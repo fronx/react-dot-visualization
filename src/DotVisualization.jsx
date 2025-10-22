@@ -10,13 +10,11 @@ import { useDebug } from './useDebug.js';
 import { useLatest } from './useLatest.js';
 import { useStableCallback } from './useStableCallback.js';
 import { useDotHoverHandlers } from './useDotHoverHandlers.js';
+import { useViewBoxTransition } from './useViewBoxTransition.js';
+import { useStablePositions } from './useStablePositions.js';
+import { usePositionChangeDetection } from './usePositionChangeDetection.js';
 import { decollisioning } from './decollisioning.js';
 import { getDotSize } from './dotUtils.js'
-
-// Helper function to check if two numbers are equal after rounding to 2 decimal places
-const isWithinTolerance = (a, b) => {
-  return Math.round(a * 100) === Math.round(b * 100);
-};
 
 const DotVisualization = forwardRef((props, ref) => {
   const {
@@ -75,15 +73,16 @@ const DotVisualization = forwardRef((props, ref) => {
   } = props;
 
   const [processedData, setProcessedData] = useState([]);
-  const [stablePositions, setStablePositions] = useState([]);
   const [viewBox, setViewBox] = useState(null);
   const [containerDimensions, setContainerDimensions] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
-  const viewBoxTransitionRef = useRef(null); // Track ongoing viewBox transition timer
-  const smoothedViewBoxRef = useRef(null); // Smoothed viewBox for low-pass filtering
-  const viewBoxDebounceRef = useRef(null); // Debounce timer for batching updates
   const [visibleDotCount, setVisibleDotCount] = useState(0);
+
+  // Position transition hooks
+  const { stablePositions, updateStablePositions, clearStablePositions, shouldUseStablePositions } = useStablePositions();
+  const { requestViewBoxUpdate, cleanup: cleanupViewBoxTransition } = useViewBoxTransition(setViewBox, viewBox);
+  const hasPositionsChanged = usePositionChangeDetection(defaultSize);
 
   // Block hover only when dragging (not during wheel zoom)
   const isZooming = isDragging;
@@ -167,26 +166,6 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [cacheKey]);
 
-  // Check if only non-positional properties have changed
-  const hasPositionsChanged = useCallback((newData, oldData) => {
-    if (newData.length !== oldData.length) return true;
-
-    for (let i = 0; i < newData.length; i++) {
-      const newItem = newData[i];
-      const oldItem = oldData[i];
-
-      if (newItem.id !== oldItem.id ||
-        !isWithinTolerance(newItem.x, oldItem.x) ||
-        !isWithinTolerance(newItem.y, oldItem.y) ||
-        (newItem.size || defaultSize) !== (oldItem.size || defaultSize)) {
-        // console.log('different newItem:', newItem, 'oldItem:', oldItem, 'isWithinTolerance(newItem.x, oldItem.x):', isWithinTolerance(newItem.x, oldItem.x), 'isWithinTolerance(newItem.y, oldItem.y):', isWithinTolerance(newItem.y, oldItem.y));
-        // console.log('newItem.x:', newItem.x, 'oldItem.x:', oldItem.x, 'newItem.y:', newItem.y, 'oldItem.y:', oldItem.y);
-        return true;
-      }
-    }
-    return false;
-  }, [defaultSize]);
-
 
   const zoomToVisible = useCallback(async (duration = 0, easing = d3.easeCubicInOut, dataOverride = null, marginOverride = null, updateExtents = true) => {
     if (!zoomManager.current) return false;
@@ -197,79 +176,6 @@ const DotVisualization = forwardRef((props, ref) => {
     }
     return await zoomManager.current.zoomToVisible(dataToUse, options);
   }, [processedData]);
-
-  // Compute median viewBox from sliding window
-  // Apply exponential smoothing to viewBox (low-pass filter)
-  const smoothViewBox = useCallback((newVB, alpha = 0.3) => {
-    // If no previous smoothed value, initialize with the new one
-    if (!smoothedViewBoxRef.current) {
-      smoothedViewBoxRef.current = newVB;
-      return newVB;
-    }
-
-    // Exponential moving average: smoothed = α × new + (1-α) × previous
-    // α = 0.3 means 30% new value, 70% previous (moderate smoothing)
-    const smoothed = smoothedViewBoxRef.current.map((prev, i) => {
-      return alpha * newVB[i] + (1 - alpha) * prev;
-    });
-
-    smoothedViewBoxRef.current = smoothed;
-    return smoothed;
-  }, []);
-
-  // Smoothly transition viewBox from current to target
-  const startViewBoxTransition = useCallback((fromViewBox, toViewBox, duration, easing) => {
-    // Stop any ongoing transition
-    if (viewBoxTransitionRef.current) {
-      viewBoxTransitionRef.current.stop();
-    }
-
-    const timer = d3.timer((elapsed) => {
-      const t = Math.min(elapsed / duration, 1);
-      const easedT = easing(t);
-
-      // Interpolate each viewBox component [x, y, width, height]
-      const interpolated = fromViewBox.map((start, i) => {
-        const end = toViewBox[i];
-        return start + (end - start) * easedT;
-      });
-
-      setViewBox(interpolated);
-
-      if (t >= 1) {
-        timer.stop();
-        viewBoxTransitionRef.current = null;
-        setViewBox(toViewBox); // Ensure exact final values
-      }
-    });
-
-    viewBoxTransitionRef.current = timer;
-  }, []);
-
-  // Request a smoothed viewBox update (with debouncing for batching)
-  const requestViewBoxUpdate = useCallback((vb, duration, easing) => {
-    // Apply exponential smoothing (low-pass filter)
-    const smoothedVB = smoothViewBox(vb);
-
-    console.log('[ViewBox] Smoothed update:', {
-      raw: vb,
-      smoothed: smoothedVB
-    });
-
-    // Debounce transitions - only apply after 300ms of no new updates
-    if (viewBoxDebounceRef.current) {
-      clearTimeout(viewBoxDebounceRef.current);
-    }
-
-    viewBoxDebounceRef.current = setTimeout(() => {
-      // Only start transition if not already transitioning
-      if (!viewBoxTransitionRef.current) {
-        const currentVB = viewBox || smoothedVB;
-        console.log('[ViewBox] Starting smoothed transition');
-        startViewBoxTransition(currentVB, smoothedVB, duration, easing);
-      }
-    }, 300);
-  }, [smoothViewBox, viewBox, startViewBoxTransition]);
 
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
@@ -424,7 +330,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Conditional rendering based on update type:
     // - Incremental updates: Keep rendering stable positions while decollision runs
     // - Full renders: Render new data directly, show animation
-    if (isIncrementalUpdate && stablePositions.length > 0) {
+    if (shouldUseStablePositions(isIncrementalUpdate)) {
       // Incremental: Don't update processedData yet, keep rendering stable old positions
       // The decollision effect will update both stablePositions and processedData when complete
       console.log('[INCREMENTAL RENDER] Keeping stable positions during decollision', {
@@ -435,8 +341,7 @@ const DotVisualization = forwardRef((props, ref) => {
       // Full render: Update immediately to show animation
       setProcessedData(processedValidData);
       if (!isIncrementalUpdate) {
-        // Clear stable positions on full render
-        setStablePositions([]);
+        clearStablePositions();
       }
     }
 
@@ -694,20 +599,8 @@ const DotVisualization = forwardRef((props, ref) => {
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
 
-      // Always update stable positions after decollision completes
-      // This ensures they're ready for the next incremental update
-      setStablePositions([...finalData]);
-      if (isIncrementalUpdate) {
-        console.log('[INCREMENTAL COMPLETE] Saved stable positions', {
-          count: finalData.length
-        });
-      } else {
-        console.log('[FULL RENDER COMPLETE] Saved stable positions for future incremental updates', {
-          count: finalData.length
-        });
-      }
-
-      // Update React state with final positions
+      // Update stable positions and processed data
+      updateStablePositions(finalData, isIncrementalUpdate);
       setProcessedData(finalData);
 
       // Notify parent, including whether more work is pending
@@ -753,18 +646,12 @@ const DotVisualization = forwardRef((props, ref) => {
   // Cleanup auto-zoom timeout on unmount
   useEffect(() => {
     return () => {
-      // Cleanup timers on unmount
       if (autoZoomTimeoutRef.current) {
         clearTimeout(autoZoomTimeoutRef.current);
       }
-      if (viewBoxDebounceRef.current) {
-        clearTimeout(viewBoxDebounceRef.current);
-      }
-      if (viewBoxTransitionRef.current) {
-        viewBoxTransitionRef.current.stop();
-      }
+      cleanupViewBoxTransition();
     };
-  }, []);
+  }, [cleanupViewBoxTransition]);
 
 
   useImperativeHandle(ref, () => ({
