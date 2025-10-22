@@ -82,6 +82,12 @@ const DotVisualization = forwardRef((props, ref) => {
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
   const [visibleDotCount, setVisibleDotCount] = useState(0);
 
+  // Refs - must be declared before hooks that use them
+  const zoomRef = useRef(null);
+  const contentRef = useRef(null);
+  const coloredDotsRef = useRef(null);
+  const zoomManager = useRef(null);
+
   // Position transition hooks
   const { stablePositions, updateStablePositions, clearStablePositions, shouldUseStablePositions } = useStablePositions();
   const { requestViewBoxUpdate, cleanup: cleanupViewBoxTransition } = useViewBoxTransition(
@@ -90,7 +96,8 @@ const DotVisualization = forwardRef((props, ref) => {
     viewBoxSmoothingR,
     viewBoxSmoothingQ,
     viewBoxTransitionDuration,
-    transitionEasing
+    transitionEasing,
+    zoomManager  // Pass ZoomManager ref for transform-based animation
   );
   const hasPositionsChanged = usePositionChangeDetection(defaultSize);
 
@@ -99,11 +106,6 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Manage hover state and callbacks
   const { hoveredDotId, handleDotHover, handleDotLeave, clearHover } = useDotHoverHandlers(onHover, onLeave);
-
-  const zoomRef = useRef(null);
-  const contentRef = useRef(null);
-  const coloredDotsRef = useRef(null);
-  const zoomManager = useRef(null);
 
   // Track when data changes during decollision (the "point of no return" logic)
   const decollisionSnapshotRef = useRef(null);

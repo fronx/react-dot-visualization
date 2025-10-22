@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ViewBox Transform Math Test</title>
+  <style>
+    body {
+      font-family: monospace;
+      padding: 20px;
+      background: #f0f0f0;
+    }
+    .test-case {
+      background: white;
+      padding: 15px;
+      margin: 10px 0;
+      border-radius: 5px;
+      border-left: 4px solid #4CAF50;
+    }
+    .test-case.fail {
+      border-left-color: #f44336;
+    }
+    svg {
+      border: 1px solid #ccc;
+      background: white;
+      display: block;
+      margin: 10px 0;
+    }
+    .dot {
+      fill: steelblue;
+      stroke: #333;
+      stroke-width: 0.2;
+    }
+    h2 { margin-top: 0; }
+    pre {
+      background: #f5f5f5;
+      padding: 10px;
+      border-radius: 3px;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <h1>ViewBox Transform Compensation Math Test</h1>
+
+  <div id="tests"></div>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    // The CORRECT formula (thanks GPT-5!)
+    //
+    // Mathematical derivation:
+    // ViewBox maps data coords p=(x,y) to pixels by: pixels = S(p - origin)
+    // where S = viewport/viewBox ratio and origin = (x0, y0)
+    //
+    // We want: S2(G(p) - o2) = S1(p - o1) for all p
+    // where G(p) = k*p + t is our compensating transform
+    //
+    // Solving: k = w2/w1, t = (x2 - k*x1, y2 - k*y1)
+    function calculateCompensatingTransform(oldViewBox, newViewBox) {
+      const [x1, y1, w1, h1] = oldViewBox;
+      const [x2, y2, w2, h2] = newViewBox;
+
+      // Scale: ratio of NEW to OLD viewBox size
+      const k = w2 / w1;
+
+      // Translation: new origin minus scaled old origin
+      const tx = x2 - k * x1;
+      const ty = y2 - k * y1;
+
+      return d3.zoomIdentity
+        .translate(tx, ty)
+        .scale(k);
+    }
+
+    const testsDiv = document.getElementById('tests');
+
+    // Test case structure:
+    // 1. Show original viewBox with dots
+    // 2. Show new viewBox (without transform) - dots should appear different
+    // 3. Show new viewBox WITH compensating transform - dots should look identical to #1
+
+    function runTest(name, description, oldVB, newVB, dots) {
+      const testDiv = document.createElement('div');
+      testDiv.className = 'test-case';
+
+      const transform = calculateCompensatingTransform(oldVB, newVB);
+
+      testDiv.innerHTML = `
+        <h2>${name}</h2>
+        <p>${description}</p>
+        <pre>Old ViewBox: [${oldVB.map(v => v.toFixed(1)).join(', ')}]
+New ViewBox: [${newVB.map(v => v.toFixed(1)).join(', ')}]
+Compensating Transform: translate(${transform.x.toFixed(2)}, ${transform.y.toFixed(2)}) scale(${transform.k.toFixed(2)})</pre>
+        <div style="display: flex; gap: 20px;">
+          <div>
+            <h3>Original (old viewBox)</h3>
+            <svg id="${name}-original" width="200" height="200" viewBox="${oldVB.join(' ')}"></svg>
+          </div>
+          <div>
+            <h3>New viewBox (no transform)</h3>
+            <svg id="${name}-new" width="200" height="200" viewBox="${newVB.join(' ')}"></svg>
+          </div>
+          <div>
+            <h3>New viewBox + compensating transform</h3>
+            <svg id="${name}-compensated" width="200" height="200" viewBox="${newVB.join(' ')}">
+              <g id="${name}-transformed"></g>
+            </svg>
+          </div>
+        </div>
+        <p><strong>Expected:</strong> Box 1 and Box 3 should look identical (dots in same visual position)</p>
+      `;
+
+      testsDiv.appendChild(testDiv);
+
+      // Draw dots in all three SVGs
+      dots.forEach(dot => {
+        // Original viewBox
+        d3.select(`#${name}-original`)
+          .append('circle')
+          .attr('class', 'dot')
+          .attr('cx', dot.x)
+          .attr('cy', dot.y)
+          .attr('r', dot.r || 2);
+
+        // New viewBox without transform
+        d3.select(`#${name}-new`)
+          .append('circle')
+          .attr('class', 'dot')
+          .attr('cx', dot.x)
+          .attr('cy', dot.y)
+          .attr('r', dot.r || 2);
+
+        // New viewBox with compensating transform
+        d3.select(`#${name}-transformed`)
+          .append('circle')
+          .attr('class', 'dot')
+          .attr('cx', dot.x)
+          .attr('cy', dot.y)
+          .attr('r', dot.r || 2);
+      });
+
+      // Apply transform to compensated group
+      d3.select(`#${name}-transformed`)
+        .attr('transform', transform.toString());
+    }
+
+    // Test 1: Zoom in (viewBox gets smaller)
+    runTest(
+      'zoom-in',
+      'Zooming IN: ViewBox shrinks from 100x100 to 50x50 (centered)',
+      [0, 0, 100, 100],
+      [25, 25, 50, 50],
+      [
+        { x: 50, y: 50, r: 5 },  // Center dot
+        { x: 25, y: 25, r: 3 },  // Top-left
+        { x: 75, y: 75, r: 3 }   // Bottom-right
+      ]
+    );
+
+    // Test 2: Zoom out (viewBox gets larger)
+    runTest(
+      'zoom-out',
+      'Zooming OUT: ViewBox grows from 50x50 to 100x100 (centered)',
+      [25, 25, 50, 50],
+      [0, 0, 100, 100],
+      [
+        { x: 50, y: 50, r: 5 },
+        { x: 25, y: 25, r: 3 },
+        { x: 75, y: 75, r: 3 }
+      ]
+    );
+
+    // Test 3: Pan right (viewBox shifts, same size)
+    runTest(
+      'pan-right',
+      'Pan RIGHT: ViewBox shifts right (x increases, same size)',
+      [0, 0, 100, 100],
+      [20, 0, 100, 100],
+      [
+        { x: 50, y: 50, r: 5 },
+        { x: 30, y: 30, r: 3 },
+        { x: 70, y: 70, r: 3 }
+      ]
+    );
+
+    // Test 4: Combined zoom + pan
+    runTest(
+      'zoom-pan',
+      'Zoom IN + Pan: ViewBox shrinks AND shifts',
+      [0, 0, 100, 100],
+      [30, 20, 50, 50],
+      [
+        { x: 50, y: 50, r: 5 },
+        { x: 35, y: 30, r: 3 },
+        { x: 65, y: 70, r: 3 }
+      ]
+    );
+
+    // Test 5: Single dot at origin (edge case)
+    runTest(
+      'origin-dot',
+      'Edge case: Single dot at origin',
+      [0, 0, 100, 100],
+      [25, 25, 50, 50],
+      [
+        { x: 0, y: 0, r: 5 }
+      ]
+    );
+  </script>
+</body>
+</html>

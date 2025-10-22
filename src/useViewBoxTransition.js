@@ -3,11 +3,53 @@ import * as d3 from 'd3';
 import KalmanFilter from 'kalmanjs';
 
 /**
- * Hook to manage smooth viewBox transitions with Kalman filtering and debouncing
+ * Calculate a zoom transform that compensates for a viewBox change.
+ * This transform makes the content stay visually in place when viewBox changes.
  *
- * Two-stage smoothing approach:
- * 1. Kalman filter determines smooth target (ignores noise/spikes)
- * 2. D3 animation interpolates to target over controlled duration
+ * Mathematical derivation:
+ * A viewBox maps data coordinates p=(x,y) to pixels by: pixels = S(p - origin)
+ * where S = diag(W/w, H/h) (viewport/viewBox ratio) and origin = (x0, y0)
+ *
+ * After switching to newViewBox and applying transform G(p) = k*p + t,
+ * we want: S2(G(p) - o2) = S1(p - o1) for all p
+ *
+ * Solving:
+ *   k = w2/w1 (ratio of new to old viewBox width)
+ *   t = (x2 - k*x1, y2 - k*y1) (origin shift accounting for scale)
+ *
+ * Credit: GPT-5 derivation
+ *
+ * @param {Array} oldViewBox - [x, y, width, height]
+ * @param {Array} newViewBox - [x, y, width, height]
+ * @returns {d3.ZoomTransform} - Transform to apply
+ */
+function calculateCompensatingTransform(oldViewBox, newViewBox) {
+  const [x1, y1, w1, h1] = oldViewBox;
+  const [x2, y2, w2, h2] = newViewBox;
+
+  // Scale: ratio of new to old viewBox size
+  const k = w2 / w1;
+
+  // Translation: new origin minus scaled old origin
+  const tx = x2 - k * x1;
+  const ty = y2 - k * y1;
+
+  return d3.zoomIdentity
+    .translate(tx, ty)
+    .scale(k);
+}
+
+/**
+ * Hook to manage smooth viewBox transitions using ZoomManager transforms
+ *
+ * Strategy:
+ * 1. Kalman filter smooths target viewBox (ignores noise/spikes)
+ * 2. Calculate zoom transform that compensates for viewBox change
+ * 3. Animate the transform (using ZoomManager for jiggle-free motion)
+ * 4. When animation completes, update viewBox and reset transform to identity
+ *
+ * This leverages D3's zoom transform interpolation which naturally maintains
+ * a stable focal point, avoiding jiggling from direct viewBox interpolation.
  *
  * Recommended configurations:
  * ┌──────────────┬──────┬───┬──────────┬───────────────────────────────────┐
@@ -24,7 +66,8 @@ import KalmanFilter from 'kalmanjs';
  * @param {number} Q - Kalman filter process noise (higher = expect more change)
  * @param {number} transitionDuration - Duration of viewBox transitions in ms
  * @param {Function} transitionEasing - D3 easing function for transitions
- * @returns {Object} - { requestViewBoxUpdate, startViewBoxTransition, cleanup }
+ * @param {Object} zoomManager - ZoomManager instance for transform animations
+ * @returns {Object} - { requestViewBoxUpdate, cleanup }
  */
 export function useViewBoxTransition(
   setViewBox,
@@ -32,9 +75,10 @@ export function useViewBoxTransition(
   R,
   Q = 3,
   transitionDuration,
-  transitionEasing = d3.easeCubicOut
+  transitionEasing = d3.easeCubicOut,
+  zoomManager = null
 ) {
-  const viewBoxTransitionRef = useRef(null);
+  const animationInProgressRef = useRef(false);
   const kalmanFiltersRef = useRef(null);
   const viewBoxDebounceRef = useRef(null);
   const currentParamsRef = useRef({ R, Q });
@@ -58,32 +102,60 @@ export function useViewBoxTransition(
     return smoothed;
   }, []);
 
-  // Smoothly transition viewBox from current to target
-  const startViewBoxTransition = useCallback((fromViewBox, toViewBox, duration, easing) => {
-    if (viewBoxTransitionRef.current) {
-      viewBoxTransitionRef.current.stop();
+  // Smoothly transition viewBox using ZoomManager transforms
+  const startViewBoxTransitionViaTransform = useCallback(async (fromViewBox, toViewBox) => {
+    const zm = zoomManager?.current;
+    if (!zm || animationInProgressRef.current) {
+      console.log('[ViewBox:Transform] Skipped - no zoomManager or animation in progress');
+      return;
     }
 
-    const timer = d3.timer((elapsed) => {
-      const t = Math.min(elapsed / duration, 1);
-      const easedT = easing ? easing(t) : t;
+    animationInProgressRef.current = true;
 
-      const interpolated = fromViewBox.map((start, i) => {
-        const end = toViewBox[i];
-        return start + (end - start) * easedT;
-      });
+    console.log('[ViewBox:Transform] Starting', JSON.stringify({
+      from: fromViewBox.map(v => Math.round(v * 100) / 100),
+      to: toViewBox.map(v => Math.round(v * 100) / 100),
+      duration: transitionDuration
+    }));
 
-      setViewBox(interpolated);
+    // Calculate the compensating transform
+    const compensatingTransform = calculateCompensatingTransform(fromViewBox, toViewBox);
 
-      if (t >= 1) {
-        timer.stop();
-        viewBoxTransitionRef.current = null;
-        setViewBox(toViewBox);
-      }
+    console.log('[ViewBox:Transform] Compensating transform:', {
+      x: Math.round(compensatingTransform.x * 100) / 100,
+      y: Math.round(compensatingTransform.y * 100) / 100,
+      k: Math.round(compensatingTransform.k * 100) / 100
     });
 
-    viewBoxTransitionRef.current = timer;
-  }, [setViewBox]);
+    try {
+      // Animate the transform to compensate for viewBox change
+      await zm.animateToTransform(compensatingTransform, {
+        duration: transitionDuration,
+        easing: transitionEasing
+      });
+
+      // At this point:
+      // - Transform is at compensatingTransform
+      // - ViewBox is still oldViewBox
+      // - Content looks correct (transform compensates)
+
+      // Update viewBox and reset transform
+      // React won't re-render until next tick, but applyTransformDirect is synchronous
+      // So we set viewBox (queued), then immediately reset transform (sync)
+      setViewBox(toViewBox);
+
+      // Use requestAnimationFrame to ensure transform reset happens AFTER viewBox re-render
+      requestAnimationFrame(() => {
+        zm.applyTransformDirect(d3.zoomIdentity);
+        console.log('[ViewBox:Transform] Complete - viewBox updated, transform reset to identity');
+      });
+
+    } catch (error) {
+      console.error('[ViewBox:Transform] Animation failed:', error);
+    } finally {
+      animationInProgressRef.current = false;
+    }
+  }, [zoomManager, transitionDuration, transitionEasing, setViewBox]);
 
   // Request a smoothed viewBox update (with debouncing for batching)
   const requestViewBoxUpdate = useCallback((vb) => {
@@ -100,30 +172,20 @@ export function useViewBoxTransition(
     }
 
     viewBoxDebounceRef.current = setTimeout(() => {
-      if (!viewBoxTransitionRef.current) {
-        const currentVB = currentViewBox || smoothedVB;
-        console.log('[ViewBox:Transition] Starting', JSON.stringify({
-          from: currentVB.map(v => Math.round(v * 100) / 100),
-          to: smoothedVB.map(v => Math.round(v * 100) / 100),
-          duration: transitionDuration
-        }));
-        startViewBoxTransition(currentVB, smoothedVB, transitionDuration, transitionEasing);
-      }
+      const currentVB = currentViewBox || smoothedVB;
+      startViewBoxTransitionViaTransform(currentVB, smoothedVB);
     }, 300);
-  }, [smoothViewBox, currentViewBox, startViewBoxTransition, R, Q, transitionDuration, transitionEasing]);
+  }, [smoothViewBox, currentViewBox, startViewBoxTransitionViaTransform, R, Q]);
 
   const cleanup = useCallback(() => {
     if (viewBoxDebounceRef.current) {
       clearTimeout(viewBoxDebounceRef.current);
     }
-    if (viewBoxTransitionRef.current) {
-      viewBoxTransitionRef.current.stop();
-    }
+    animationInProgressRef.current = false;
   }, []);
 
   return {
     requestViewBoxUpdate,
-    startViewBoxTransition,
     cleanup
   };
 }
