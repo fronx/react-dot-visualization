@@ -38,8 +38,11 @@ const DotVisualization = forwardRef((props, ref) => {
     enableDecollisioning = true,
     isIncrementalUpdate = false,
     transitionDuration = 350,
-    transitionEasing = null,
+    transitionEasing = d3.easeCubicOut,
     positionsAreIntermediate = false,
+    viewBoxSmoothingR = 0.5,
+    viewBoxSmoothingQ = 3,
+    viewBoxTransitionDuration = 1500,
     cacheKey = 'default',
     zoomExtent = [0.5, 20],
     margin = 0.1,
@@ -81,7 +84,14 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Position transition hooks
   const { stablePositions, updateStablePositions, clearStablePositions, shouldUseStablePositions } = useStablePositions();
-  const { requestViewBoxUpdate, cleanup: cleanupViewBoxTransition } = useViewBoxTransition(setViewBox, viewBox);
+  const { requestViewBoxUpdate, cleanup: cleanupViewBoxTransition } = useViewBoxTransition(
+    setViewBox,
+    viewBox,
+    viewBoxSmoothingR,
+    viewBoxSmoothingQ,
+    viewBoxTransitionDuration,
+    transitionEasing
+  );
   const hasPositionsChanged = usePositionChangeDetection(defaultSize);
 
   // Block hover only when dragging (not during wheel zoom)
@@ -279,18 +289,20 @@ const DotVisualization = forwardRef((props, ref) => {
         const reason = sizesChanged ? 'sizes changed' : 'initialized';
         const hadPreviousViewBox = viewBox !== null;
         const isInitialSetup = !hadPreviousViewBox;
+        const willUseSmoothing = isIncrementalUpdate && hadPreviousViewBox && !isInitialSetup;
 
-        console.log(`[ViewBox] Updated (${reason}):`, vb, {
+        console.log(`[ViewBox:Raw] ${willUseSmoothing ? 'Smoothing' : 'Immediate'} (${reason}):`, JSON.stringify({
+          vb: vb.map(v => Math.round(v * 100) / 100),
           dataLength: validData.length,
           positionsAreIntermediate,
-          previousViewBox: viewBox,
-          hadPreviousViewBox,
-          isInitialSetup
-        });
+          previousViewBox: viewBox ? viewBox.map(v => Math.round(v * 100) / 100) : null,
+          isIncrementalUpdate,
+          willUseSmoothing
+        }));
 
-        // For incremental updates with existing viewBox, use median filtering
-        if (isIncrementalUpdate && hadPreviousViewBox && !isInitialSetup) {
-          requestViewBoxUpdate(vb, transitionDuration, transitionEasing || d3.easeCubicOut);
+        // For incremental updates with existing viewBox, use smoothing
+        if (willUseSmoothing) {
+          requestViewBoxUpdate(vb);
         } else {
           // Immediate update for initial setup or full renders
           setViewBox(vb);
@@ -532,7 +544,7 @@ const DotVisualization = forwardRef((props, ref) => {
   // This effect watches for new data arriving while a simulation is in flight
   useEffect(() => {
     if (enableDecollisioning && decollisionSnapshotRef.current &&
-        processedData.length > decollisionSnapshotRef.current.length) {
+      processedData.length > decollisionSnapshotRef.current.length) {
       debugLog('New data detected during decollision - marking for retry');
       pendingDecollisionRef.current = true;
     }
