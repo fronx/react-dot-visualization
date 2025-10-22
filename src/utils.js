@@ -14,7 +14,10 @@ export function boundsForData(data, dotSize = 2) {
     return Math.max(max, radius);
   }, 0);
 
-  // Add extra padding around dots for auto-zoom (3x radius ensures comfortable spacing)
+  // Add 4x padding to prevent giant dots from filling the screen.
+  // When rendering only 2-3 initial dots at large sizes (50-100px), fitting them to 90%
+  // of screen would be overwhelming. This padding creates a minimum boundary that scales
+  // with dot size, ensuring comfortable spacing as dots shrink during import.
   const paddedRadius = maxRadius * 4;
 
   // Calculate bounds using each dot's center position plus the padded radius
