@@ -79,6 +79,7 @@ export function useViewBoxTransition(
   zoomManager = null
 ) {
   const animationInProgressRef = useRef(false);
+  const pendingViewBoxRef = useRef(null); // Track viewBox that animation is targeting
   const kalmanFiltersRef = useRef(null);
   const viewBoxDebounceRef = useRef(null);
   const currentParamsRef = useRef({ R, Q });
@@ -105,12 +106,20 @@ export function useViewBoxTransition(
   // Smoothly transition viewBox using ZoomManager transforms
   const startViewBoxTransitionViaTransform = useCallback(async (fromViewBox, toViewBox) => {
     const zm = zoomManager?.current;
-    if (!zm || animationInProgressRef.current) {
-      console.log('[ViewBox:Transform] Skipped - no zoomManager or animation in progress');
+    if (!zm) {
+      console.log('[ViewBox:Transform] Skipped - no zoomManager');
       return;
     }
 
+    // If animation in progress, it will be interrupted (D3 handles this gracefully)
+    // Update the pending viewBox that was being animated to
+    if (animationInProgressRef.current && pendingViewBoxRef.current) {
+      console.log('[ViewBox:Transform] Interrupting previous animation, updating viewBox immediately');
+      setViewBox(pendingViewBoxRef.current);
+    }
+
     animationInProgressRef.current = true;
+    pendingViewBoxRef.current = toViewBox;
 
     console.log('[ViewBox:Transform] Starting', JSON.stringify({
       from: fromViewBox.map(v => Math.round(v * 100) / 100),
@@ -134,21 +143,21 @@ export function useViewBoxTransition(
         easing: transitionEasing
       });
 
-      // At this point:
-      // - Transform is at compensatingTransform
-      // - ViewBox is still oldViewBox
-      // - Content looks correct (transform compensates)
+      // Animation completed successfully (not interrupted)
+      // Check if this is still the latest requested viewBox
+      const isStillLatest = pendingViewBoxRef.current &&
+        pendingViewBoxRef.current[0] === toViewBox[0] &&
+        pendingViewBoxRef.current[1] === toViewBox[1] &&
+        pendingViewBoxRef.current[2] === toViewBox[2] &&
+        pendingViewBoxRef.current[3] === toViewBox[3];
 
-      // Update viewBox and reset transform
-      // React won't re-render until next tick, but applyTransformDirect is synchronous
-      // So we set viewBox (queued), then immediately reset transform (sync)
-      setViewBox(toViewBox);
-
-      // Use requestAnimationFrame to ensure transform reset happens AFTER viewBox re-render
-      requestAnimationFrame(() => {
-        zm.applyTransformDirect(d3.zoomIdentity);
-        console.log('[ViewBox:Transform] Complete - viewBox updated, transform reset to identity');
-      });
+      if (isStillLatest) {
+        setViewBox(toViewBox);
+        pendingViewBoxRef.current = null;
+        console.log('[ViewBox:Transform] Complete - viewBox updated');
+      } else {
+        console.log('[ViewBox:Transform] Interrupted - skipping viewBox update');
+      }
 
     } catch (error) {
       console.error('[ViewBox:Transform] Animation failed:', error);
