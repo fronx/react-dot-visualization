@@ -80,6 +80,9 @@ const DotVisualization = forwardRef((props, ref) => {
   const [containerDimensions, setContainerDimensions] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
+  const viewBoxTransitionRef = useRef(null); // Track ongoing viewBox transition timer
+  const smoothedViewBoxRef = useRef(null); // Smoothed viewBox for low-pass filtering
+  const viewBoxDebounceRef = useRef(null); // Debounce timer for batching updates
   const [visibleDotCount, setVisibleDotCount] = useState(0);
 
   // Block hover only when dragging (not during wheel zoom)
@@ -195,6 +198,79 @@ const DotVisualization = forwardRef((props, ref) => {
     return await zoomManager.current.zoomToVisible(dataToUse, options);
   }, [processedData]);
 
+  // Compute median viewBox from sliding window
+  // Apply exponential smoothing to viewBox (low-pass filter)
+  const smoothViewBox = useCallback((newVB, alpha = 0.3) => {
+    // If no previous smoothed value, initialize with the new one
+    if (!smoothedViewBoxRef.current) {
+      smoothedViewBoxRef.current = newVB;
+      return newVB;
+    }
+
+    // Exponential moving average: smoothed = α × new + (1-α) × previous
+    // α = 0.3 means 30% new value, 70% previous (moderate smoothing)
+    const smoothed = smoothedViewBoxRef.current.map((prev, i) => {
+      return alpha * newVB[i] + (1 - alpha) * prev;
+    });
+
+    smoothedViewBoxRef.current = smoothed;
+    return smoothed;
+  }, []);
+
+  // Smoothly transition viewBox from current to target
+  const startViewBoxTransition = useCallback((fromViewBox, toViewBox, duration, easing) => {
+    // Stop any ongoing transition
+    if (viewBoxTransitionRef.current) {
+      viewBoxTransitionRef.current.stop();
+    }
+
+    const timer = d3.timer((elapsed) => {
+      const t = Math.min(elapsed / duration, 1);
+      const easedT = easing(t);
+
+      // Interpolate each viewBox component [x, y, width, height]
+      const interpolated = fromViewBox.map((start, i) => {
+        const end = toViewBox[i];
+        return start + (end - start) * easedT;
+      });
+
+      setViewBox(interpolated);
+
+      if (t >= 1) {
+        timer.stop();
+        viewBoxTransitionRef.current = null;
+        setViewBox(toViewBox); // Ensure exact final values
+      }
+    });
+
+    viewBoxTransitionRef.current = timer;
+  }, []);
+
+  // Request a smoothed viewBox update (with debouncing for batching)
+  const requestViewBoxUpdate = useCallback((vb, duration, easing) => {
+    // Apply exponential smoothing (low-pass filter)
+    const smoothedVB = smoothViewBox(vb);
+
+    console.log('[ViewBox] Smoothed update:', {
+      raw: vb,
+      smoothed: smoothedVB
+    });
+
+    // Debounce transitions - only apply after 300ms of no new updates
+    if (viewBoxDebounceRef.current) {
+      clearTimeout(viewBoxDebounceRef.current);
+    }
+
+    viewBoxDebounceRef.current = setTimeout(() => {
+      // Only start transition if not already transitioning
+      if (!viewBoxTransitionRef.current) {
+        const currentVB = viewBox || smoothedVB;
+        console.log('[ViewBox] Starting smoothed transition');
+        startViewBoxTransition(currentVB, smoothedVB, duration, easing);
+      }
+    }, 300);
+  }, [smoothViewBox, viewBox, startViewBoxTransition]);
+
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
     return `dot-${layer}-${item.id}`;
@@ -305,12 +381,20 @@ const DotVisualization = forwardRef((props, ref) => {
           hadPreviousViewBox,
           isInitialSetup
         });
-        setViewBox(vb);
+
+        // For incremental updates with existing viewBox, use median filtering
+        if (isIncrementalUpdate && hadPreviousViewBox && !isInitialSetup) {
+          requestViewBoxUpdate(vb, transitionDuration, transitionEasing || d3.easeCubicOut);
+        } else {
+          // Immediate update for initial setup or full renders
+          setViewBox(vb);
+        }
       }
     }
 
     // Auto-zoom to new content if enabled (using ZoomManager)
-    if (autoZoomToNewContent && zoomManager.current) {
+    // Skip auto-zoom during incremental updates - viewBox smoothing handles it
+    if (autoZoomToNewContent && zoomManager.current && !isIncrementalUpdate) {
       zoomManager.current.checkAutoZoom(validData, {
         autoZoomToNewContent,
         autoZoomDuration
@@ -669,8 +753,15 @@ const DotVisualization = forwardRef((props, ref) => {
   // Cleanup auto-zoom timeout on unmount
   useEffect(() => {
     return () => {
+      // Cleanup timers on unmount
       if (autoZoomTimeoutRef.current) {
         clearTimeout(autoZoomTimeoutRef.current);
+      }
+      if (viewBoxDebounceRef.current) {
+        clearTimeout(viewBoxDebounceRef.current);
+      }
+      if (viewBoxTransitionRef.current) {
+        viewBoxTransitionRef.current.stop();
       }
     };
   }, []);
