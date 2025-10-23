@@ -13,16 +13,6 @@ export function useStablePositions() {
 
   const updateStablePositions = useCallback((finalData, isIncremental) => {
     setStablePositions([...finalData]);
-
-    if (isIncremental) {
-      console.log('[INCREMENTAL COMPLETE] Saved stable positions', {
-        count: finalData.length
-      });
-    } else {
-      console.log('[FULL RENDER COMPLETE] Saved stable positions for future incremental updates', {
-        count: finalData.length
-      });
-    }
   }, []);
 
   const clearStablePositions = useCallback(() => {

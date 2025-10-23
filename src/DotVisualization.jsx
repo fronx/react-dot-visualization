@@ -281,10 +281,6 @@ const DotVisualization = forwardRef((props, ref) => {
     if (shouldUseStablePositions(isIncrementalUpdate)) {
       // Incremental: Don't update processedData yet, keep rendering stable old positions
       // The decollision effect will update both stablePositions and processedData when complete
-      console.log('[INCREMENTAL RENDER] Keeping stable positions during decollision', {
-        stableCount: stablePositions.length,
-        newCount: processedValidData.length
-      });
     } else {
       // Full render: Update immediately to show animation
       setProcessedData(processedValidData);
