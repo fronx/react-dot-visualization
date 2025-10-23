@@ -75,8 +75,21 @@ const DotVisualization = forwardRef((props, ref) => {
   } = props;
 
   const [processedData, setProcessedData] = useState([]);
-  const [viewBox] = useState([0, 0, 100, 100]); // Fixed viewBox - world coordinates are separate from camera framing
   const [containerDimensions, setContainerDimensions] = useState(null);
+
+  // Fixed viewBox with aspect ratio matching container
+  // World coordinates are separate from camera framing
+  const viewBox = (() => {
+    if (!containerDimensions) {
+      return [0, 0, 100, 100]; // Default square until container measured
+    }
+
+    const aspectRatio = containerDimensions.width / containerDimensions.height;
+    const baseHeight = 100;
+    const baseWidth = baseHeight * aspectRatio;
+
+    return [0, 0, baseWidth, baseHeight];
+  })();
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
   const [visibleDotCount, setVisibleDotCount] = useState(0);
@@ -676,6 +689,7 @@ const DotVisualization = forwardRef((props, ref) => {
             getZoomTransform={() => zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
             debug={debug}
             effectiveViewBox={effectiveViewBox}
+            containerDimensions={containerDimensions}
             onHover={handleDotHover}
             onLeave={handleDotLeave}
             onClick={onClick}
