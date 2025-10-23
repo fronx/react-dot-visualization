@@ -303,7 +303,12 @@ const DotVisualization = forwardRef((props, ref) => {
     // Create canvas renderer function
     const canvasRenderer = (transform) => {
       if (useCanvas && coloredDotsRef.current) {
-        coloredDotsRef.current.renderCanvasWithTransform(transform);
+        // Use live transition data if available (during decollision), otherwise fall back to normal render
+        if (liveTransitionDataRef.current) {
+          coloredDotsRef.current.renderCanvasWithData(liveTransitionDataRef.current, transform);
+        } else {
+          coloredDotsRef.current.renderCanvasWithTransform(transform);
+        }
       }
     };
 
@@ -424,13 +429,24 @@ const DotVisualization = forwardRef((props, ref) => {
     if (useCanvas && coloredDotsRef.current && zoomManager.current && viewBox) {
       const currentTransform = zoomManager.current.getCurrentTransform();
       if (currentTransform) {
-        coloredDotsRef.current.renderCanvasWithTransform(currentTransform);
+        // Use live transition data if available during decollision
+        if (liveTransitionDataRef.current) {
+          coloredDotsRef.current.renderCanvasWithData(liveTransitionDataRef.current, currentTransform);
+        } else {
+          coloredDotsRef.current.renderCanvasWithTransform(currentTransform);
+        }
       }
     }
   }, [viewBox, useCanvas]);
 
+  // Track live transition data for canvas renderer during decollision
+  const liveTransitionDataRef = useRef(null);
+
   // Callback for decollisioning updates - wrapped to prevent infinite loops
   const onUpdateNodes = useCallback((nodes) => {
+    // Store live transition data for other render paths to use
+    liveTransitionDataRef.current = nodes;
+
     if (useCanvas && coloredDotsRef.current) {
       // Update canvas directly with custom data without triggering React re-render
       const currentTransform = zoomManager.current?.getCurrentTransform();
@@ -525,6 +541,9 @@ const DotVisualization = forwardRef((props, ref) => {
       // Clear snapshot and pending flags
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
+
+      // Clear live transition data now that transition is complete
+      liveTransitionDataRef.current = null;
 
       // Update stable positions and processed data
       updateStablePositions(finalData, isIncrementalUpdate);

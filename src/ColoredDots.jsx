@@ -59,6 +59,9 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   });
 
   // Pulse animation hook
+  // Note: We can't pass liveTransitionDataRef here since it's in DotVisualization, not ColoredDots
+  // Instead, the pulse callback will use whatever data is currently in the 'data' prop
+  // This is acceptable because pulse animations are visual effects that don't need frame-perfect sync
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
@@ -212,7 +215,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       const canvasHeight = canvasDimensionsRef.current?.height;
 
       // Simple comparison - no expensive function calls, no indexOf(), no Map lookups
-      const shouldRebuildSpatialIndex = !lastState ||
+      // During decollision/transitions, always rebuild since positions are changing every frame
+      const shouldRebuildSpatialIndex = isDecollisioning || !lastState ||
         lastState.dataLength !== dataLength ||
         lastState.firstDotX !== firstDotX ||
         lastState.firstDotY !== firstDotY ||
@@ -222,14 +226,12 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         lastState.transformX !== transformX ||
         lastState.transformY !== transformY ||
         lastState.canvasWidth !== canvasWidth ||
-        lastState.canvasHeight !== canvasHeight ||
-        lastState.isDecollisioning !== isDecollisioning;
+        lastState.canvasHeight !== canvasHeight;
 
-      // Skip spatial index rebuilds during decollision to avoid conflicts with D3 simulation
-      // The D3 simulation maintains live positions and directly manipulates the canvas.
-      // Building a spatial index from React state during this time would capture stale positions.
-      // When decollision completes, isDecollisioning changes and triggers a rebuild automatically.
-      if (shouldRebuildSpatialIndex && !isDecollisioning) {
+      // Always rebuild spatial index when needed, including during decollision
+      // The spatial index must track the current visible positions (animated or final)
+      // to ensure hover detection works correctly during transitions
+      if (shouldRebuildSpatialIndex) {
         const spatialIndex = buildSpatialIndex(dataToRender, getSize, cssTransform);
         if (spatialIndex) {
           canvasRef.current._spatialIndex = spatialIndex;
@@ -243,8 +245,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
             transformX,
             transformY,
             canvasWidth,
-            canvasHeight,
-            isDecollisioning
+            canvasHeight
           };
 
           if (debug && process.env.NODE_ENV === 'development' && Math.random() < 0.05) {
