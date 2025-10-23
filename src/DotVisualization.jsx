@@ -71,6 +71,7 @@ const DotVisualization = forwardRef((props, ref) => {
     hoverOpacity = 1.0,
     useCanvas = false,
     debug = false,
+    initialTransform = null,
     ...otherProps
   } = props;
 
@@ -264,9 +265,6 @@ const DotVisualization = forwardRef((props, ref) => {
         });
         zoomManager.current.initZoom(validData);
       } else {
-        console.log('[ZoomExtents] Updating zoom extents for data change', {
-          dataLength: validData.length
-        });
         // Update zoom extents for subsequent data changes
         zoomManager.current.updateZoomExtentsForData(validData);
       }
@@ -327,6 +325,7 @@ const DotVisualization = forwardRef((props, ref) => {
         occludeTop,
         occludeBottom,
         useCanvas,
+        initialTransform,
         onZoomStart: (event) => {
           setIsDragging(true);
           if (onZoomStartRef.current) onZoomStartRef.current(event);

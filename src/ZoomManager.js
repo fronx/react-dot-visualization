@@ -35,22 +35,26 @@ export class ZoomManager {
     this.occludeTop = options.occludeTop || 0;
     this.occludeBottom = options.occludeBottom || 0;
     this.useCanvas = options.useCanvas || false;
-    
+
     // State
-    this.transform = d3.zoomIdentity;
+    this.transform = options.initialTransform
+      ? d3.zoomIdentity.translate(options.initialTransform.x, options.initialTransform.y).scale(options.initialTransform.k)
+      : d3.zoomIdentity;
     this.zoomHandler = d3.zoom();
-    this.baseScaleRef = 1;
+    this.baseScaleRef = options.initialTransform ? options.initialTransform.k : 1;
     this.viewBox = null;
     this.lastDataBounds = null;
+    this.hasInitialTransform = !!options.initialTransform;
+    this.initialTransformApplied = false; // Track if we've already applied initial transform
 
     // RAF state for coalescing rapid zoom events (prevents flicker)
     this.rafState = { pending: false, lastT: d3.zoomIdentity };
-    
+
     // Callbacks
     this.onZoomStart = options.onZoomStart;
     this.onZoomEnd = options.onZoomEnd;
     this.onTransformChange = options.onTransformChange;
-    
+
     this.boundHandleZoom = this.handleZoom.bind(this);
   }
 
@@ -71,6 +75,12 @@ export class ZoomManager {
       .on("zoom", this.boundHandleZoom);
 
     d3.select(this.zoomRef.current).call(this.zoomHandler);
+
+    // Apply initial transform only once (on first initialization)
+    if (this.hasInitialTransform && !this.initialTransformApplied) {
+      this.applyTransformViaZoomHandler(this.transform);
+      this.initialTransformApplied = true;
+    }
   }
 
   /**
@@ -262,6 +272,13 @@ export class ZoomManager {
   initZoom(newData) {
     if (!this.viewBox || !newData?.length) {
       return false;
+    }
+
+    // Skip auto-fit if we have an initial transform from saved state
+    if (this.hasInitialTransform) {
+      // Just update extents for the current zoom level
+      this.updateZoomExtentsForData(newData);
+      return true;
     }
 
     // Instant zoom to fit initial content
