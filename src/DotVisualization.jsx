@@ -4,13 +4,12 @@ import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
 import EdgeLayer from './EdgeLayer.jsx';
-import { boundsForData, computeOcclusionAwareViewBox, countVisibleDots } from './utils.js';
+import { countVisibleDots } from './utils.js';
 import { ZoomManager } from './ZoomManager.js';
 import { useDebug } from './useDebug.js';
 import { useLatest } from './useLatest.js';
 import { useStableCallback } from './useStableCallback.js';
 import { useDotHoverHandlers } from './useDotHoverHandlers.js';
-import { useViewBoxTransition } from './useViewBoxTransition.js';
 import { useStablePositions } from './useStablePositions.js';
 import { usePositionChangeDetection } from './usePositionChangeDetection.js';
 import { decollisioning } from './decollisioning.js';
@@ -76,7 +75,7 @@ const DotVisualization = forwardRef((props, ref) => {
   } = props;
 
   const [processedData, setProcessedData] = useState([]);
-  const [viewBox, setViewBox] = useState(null);
+  const [viewBox] = useState([0, 0, 100, 100]); // Fixed viewBox - world coordinates are separate from camera framing
   const [containerDimensions, setContainerDimensions] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
@@ -90,15 +89,6 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Position transition hooks
   const { stablePositions, updateStablePositions, clearStablePositions, shouldUseStablePositions } = useStablePositions();
-  const { requestViewBoxUpdate, cleanup: cleanupViewBoxTransition } = useViewBoxTransition(
-    setViewBox,
-    viewBox,
-    viewBoxSmoothingR,
-    viewBoxSmoothingQ,
-    viewBoxTransitionDuration,
-    transitionEasing,
-    zoomManager  // Pass ZoomManager ref for transform-based animation
-  );
   const hasPositionsChanged = usePositionChangeDetection(defaultSize);
 
   // Block hover only when dragging (not during wheel zoom)
@@ -113,7 +103,6 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Keep latest values accessible in closures without triggering re-runs
   const isDraggingRef = useLatest(isDragging);
-  const viewBoxRef = useLatest(viewBox);
   const onZoomStartRef = useLatest(onZoomStart);
   const onZoomEndRef = useLatest(onZoomEnd);
 
@@ -206,9 +195,6 @@ const DotVisualization = forwardRef((props, ref) => {
   useEffect(() => {
     if (!data || data.length === 0) {
       setProcessedData([]);
-      // Reset viewBox when all data is cleared (e.g., deleting all tracks before fresh import)
-      // This prevents smooth transitions from old large viewBox to new small one
-      setViewBox(null);
       return;
     }
 
@@ -246,72 +232,6 @@ const DotVisualization = forwardRef((props, ref) => {
     } else {
       if (positionsAreIntermediate) {
         // console.log('📍 Positions are intermediate - using raw positions from simulation');
-      }
-    }
-
-    // Check if dot sizes have changed (e.g., after useDotScaling runs)
-    const currentSizes = validData.map(d => d.size).filter(s => s !== undefined);
-    const hasSizeData = currentSizes.length > 0;
-    const previousSizes = previousDataRef.current.map(d => d.size).filter(s => s !== undefined);
-    const sizesChanged = hasSizeData && (
-      previousSizes.length === 0 || // First time sizes are added
-      currentSizes.length !== previousSizes.length ||
-      currentSizes.some((s, i) => s !== previousSizes[i])
-    );
-
-    // Calculate/recalculate viewBox when:
-    // 1. ViewBox doesn't exist yet (initial setup) - ALWAYS do this
-    // 2. Small collections (≤10 dots) - ALWAYS recalculate when sizes change (fix giant dots bug)
-    // 3. Large collections - only recalculate when layout is stable to prevent thrashing
-    const isSmallCollection = validData.length <= 10;
-    const shouldRecalculateViewBox = containerDimensions && (
-      !viewBox || // Initial setup
-      (sizesChanged && isSmallCollection) || // Small collections: always recalculate when sizes change
-      (sizesChanged && !positionsAreIntermediate && !isSmallCollection) // Large collections: only when layout settled
-    );
-
-    if (containerDimensions && sizesChanged && positionsAreIntermediate && !isSmallCollection) {
-      console.log('[ViewBox] Skipped recalculation during layout animation', {
-        sizesChanged,
-        positionsAreIntermediate,
-        isSmallCollection,
-        dataLength: validData.length
-      });
-    }
-
-    if (shouldRecalculateViewBox) {
-      const bounds = boundsForData(validData, defaultSize);
-      const vb = computeOcclusionAwareViewBox(bounds, containerDimensions, {
-        left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
-      }, margin);
-
-      // Only update viewBox if it actually changed
-      const viewBoxChanged = !viewBox ||
-        vb[0] !== viewBox[0] || vb[1] !== viewBox[1] ||
-        vb[2] !== viewBox[2] || vb[3] !== viewBox[3];
-
-      if (vb && viewBoxChanged) {
-        const reason = sizesChanged ? 'sizes changed' : 'initialized';
-        const hadPreviousViewBox = viewBox !== null;
-        const isInitialSetup = !hadPreviousViewBox;
-        const willUseSmoothing = isIncrementalUpdate && hadPreviousViewBox && !isInitialSetup;
-
-        console.log(`[ViewBox:Raw] ${willUseSmoothing ? 'Smoothing' : 'Immediate'} (${reason}):`, JSON.stringify({
-          vb: vb.map(v => Math.round(v * 100) / 100),
-          dataLength: validData.length,
-          positionsAreIntermediate,
-          previousViewBox: viewBox ? viewBox.map(v => Math.round(v * 100) / 100) : null,
-          isIncrementalUpdate,
-          willUseSmoothing
-        }));
-
-        // For incremental updates with existing viewBox, use smoothing
-        if (willUseSmoothing) {
-          requestViewBoxUpdate(vb);
-        } else {
-          // Immediate update for initial setup or full renders
-          setViewBox(vb);
-        }
       }
     }
 
@@ -458,7 +378,7 @@ const DotVisualization = forwardRef((props, ref) => {
     };
   }, [processedData, zoomExtent, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
-  // Handle container resize - update container dimensions and viewBox when window resizes
+  // Handle container resize - update container dimensions when window resizes
   useEffect(() => {
     if (!zoomRef.current || typeof window === 'undefined') {
       return;
@@ -476,24 +396,6 @@ const DotVisualization = forwardRef((props, ref) => {
 
         if (dimensionsChanged) {
           setContainerDimensions(newDimensions);
-
-          // If we have data, recalculate viewBox for the new container size
-          if (processedData.length > 0) {
-            const bounds = boundsForData(processedData, defaultSize);
-            const vb = computeOcclusionAwareViewBox(bounds, newDimensions, {
-              left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom
-            }, margin);
-
-            // Only update viewBox if it actually changed
-            // Use ref to get current viewBox to avoid dependency issues
-            const currentViewBox = viewBoxRef.current;
-            if (vb && (!currentViewBox ||
-              vb[0] !== currentViewBox[0] || vb[1] !== currentViewBox[1] ||
-              vb[2] !== currentViewBox[2] || vb[3] !== currentViewBox[3])) {
-              debugLog('Updated viewBox for new container size:', vb);
-              setViewBox(vb);
-            }
-          }
         }
       }
     };
@@ -507,7 +409,7 @@ const DotVisualization = forwardRef((props, ref) => {
     return () => {
       window.removeEventListener('resize', updateContainerDimensions);
     };
-  }, [processedData, defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom, margin]);
+  }, []);
 
   // Re-render canvas when viewBox changes to fix distortion during resize
   useEffect(() => {
@@ -666,9 +568,8 @@ const DotVisualization = forwardRef((props, ref) => {
       if (autoZoomTimeoutRef.current) {
         clearTimeout(autoZoomTimeoutRef.current);
       }
-      cleanupViewBoxTransition();
     };
-  }, [cleanupViewBoxTransition]);
+  }, []);
 
 
   useImperativeHandle(ref, () => ({

@@ -134,6 +134,76 @@ export class ZoomManager {
   }
 
   /**
+   * Initialize camera on first data arrival (instant, no animation)
+   * This is a comfort-fit that sets the initial view to show all content
+   */
+  initCamera(data) {
+    if (!this.viewBox || !data?.length) {
+      return false;
+    }
+
+    // Instant camera fit to show initial content
+    return this.comfortFit(data, {
+      duration: 0,  // Instant!
+      updateExtents: true
+    });
+  }
+
+  /**
+   * Gentle camera adjustment that keeps content comfortably in view
+   * This is the "comfort-fit" that prevents content from feeling cramped or lost
+   */
+  async comfortFit(data, options = {}) {
+    const {
+      duration = 300,
+      easing = d3.easeCubicOut,
+      updateExtents = false,
+      margin = this.fitMargin
+    } = options;
+
+    if (!this.zoomRef?.current || !this.viewBox || !data?.length) {
+      return false;
+    }
+
+    const rect = this.zoomRef.current.getBoundingClientRect();
+    const bounds = boundsForData(data, this.defaultSize);
+    const fit = computeFitTransformToVisible(bounds, this.viewBox, rect, {
+      left: this.occludeLeft,
+      right: this.occludeRight,
+      top: this.occludeTop,
+      bottom: this.occludeBottom
+    }, margin);
+
+    if (!fit) return false;
+
+    const next = d3.zoomIdentity.translate(fit.x, fit.y).scale(fit.k);
+
+    if (updateExtents) {
+      // Update zoom extents to accommodate this zoom level
+      const newAbsExtent = computeAbsoluteExtent(this.zoomExtent, fit.k);
+      const oldAbsExtent = this.zoomHandler.scaleExtent();
+      const widenedExtent = unionExtent(oldAbsExtent, newAbsExtent);
+      setAbsoluteExtent(this.zoomHandler, widenedExtent);
+      this.baseScaleRef = fit.k;
+    }
+
+    if (duration > 0) {
+      await this.animateToTransform(next, { duration, easing });
+
+      if (updateExtents) {
+        // Finalize extents after animation
+        const finalExtent = computeAbsoluteExtent(this.zoomExtent, this.baseScaleRef);
+        setAbsoluteExtent(this.zoomHandler, finalExtent);
+      }
+    } else {
+      // For instant fit, apply transform via zoom handler
+      this.applyTransformViaZoomHandler(next);
+    }
+
+    return true;
+  }
+
+  /**
    * Zoom to fit visible data with animation
    */
   async zoomToVisible(data, options = {}) {
