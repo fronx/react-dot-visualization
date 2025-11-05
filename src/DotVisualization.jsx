@@ -175,8 +175,6 @@ const DotVisualization = forwardRef((props, ref) => {
   // Example: cacheKey="playlist:123:open" when playlist is selected, "default" otherwise
   useEffect(() => {
     if (prevCacheKeyRef.current !== cacheKey) {
-      console.log('Cache key changed:', prevCacheKeyRef.current, '->', cacheKey);
-      console.log('Cleared memoized positions (cache invalidated)');
       memoizedPositions.current.clear();
       prevCacheKeyRef.current = cacheKey;
     }
@@ -261,9 +259,6 @@ const DotVisualization = forwardRef((props, ref) => {
       // When auto-zoom is disabled, still do initial zoom for first data
       // Check if this is the first data (no previous data)
       if (!previousDataRef.current?.length && validData.length > 0) {
-        console.log('[InitZoom] First data - calling initZoom', {
-          dataLength: validData.length
-        });
         zoomManager.current.initZoom(validData);
       } else {
         // Update zoom extents for subsequent data changes
@@ -526,12 +521,6 @@ const DotVisualization = forwardRef((props, ref) => {
       return;
     }
 
-    console.log('[DECOLLISION START]', {
-      isIncremental: isIncrementalUpdate,
-      sourceCount: sourceData.length,
-      processedCount: processedData.length
-    });
-
     // Snapshot data at launch time
     const dataSnapshot = [...sourceData];
     decollisionSnapshotRef.current = dataSnapshot;
@@ -622,15 +611,11 @@ const DotVisualization = forwardRef((props, ref) => {
   // Cancel any ongoing decollision animation
   const cancelDecollision = useCallback(() => {
     if (decollisionSimRef.current) {
-      console.log('[FLICKER-DEBUG] Library: cancelDecollision called - stopping D3 simulation');
       debugLog('Cancelling ongoing decollision');
       decollisionSimRef.current.stop();
       decollisionSimRef.current = null;
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
-      console.log('[FLICKER-DEBUG] Library: Decollision stopped and refs cleared');
-    } else {
-      console.log('[FLICKER-DEBUG] Library: cancelDecollision called but no simulation was running');
     }
   }, [debugLog]);
 
