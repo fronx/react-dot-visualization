@@ -114,6 +114,7 @@ const DotVisualization = forwardRef((props, ref) => {
   // Track when data changes during decollision (the "point of no return" logic)
   const decollisionSnapshotRef = useRef(null);
   const pendingDecollisionRef = useRef(false);
+  const decollisionSimRef = useRef(null);
 
   // Keep latest values accessible in closures without triggering re-runs
   const isDraggingRef = useLatest(isDragging);
@@ -463,6 +464,22 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [useCanvas]);
 
+  // Shared primitive for syncing decollision state back to React
+  // This ensures both completion and cancellation paths keep state synchronized
+  const syncDecollisionState = useCallback((finalData) => {
+    // Clear refs
+    decollisionSnapshotRef.current = null;
+    pendingDecollisionRef.current = false;
+    decollisionSimRef.current = null;
+    liveTransitionDataRef.current = null;
+
+    // Only sync positions if we have data (meaning rendering actually happened)
+    if (finalData) {
+      updateStablePositions(finalData, isIncrementalUpdate);
+      setProcessedData(finalData);
+    }
+  }, [isIncrementalUpdate]);
+
   // Create stable callback references for the D3 simulation.
   // The D3 force simulation is a long-running animation that should not restart when
   // callbacks change. These stable wrappers ensure the simulation keeps running while
@@ -538,24 +555,27 @@ const DotVisualization = forwardRef((props, ref) => {
       // Check if new data arrived while simulation was running
       const needsAnotherCycle = pendingDecollisionRef.current;
 
-      // Clear snapshot and pending flags
-      decollisionSnapshotRef.current = null;
-      pendingDecollisionRef.current = false;
-
-      // Clear live transition data now that transition is complete
-      liveTransitionDataRef.current = null;
-
-      // Update stable positions and processed data
-      updateStablePositions(finalData, isIncrementalUpdate);
-      setProcessedData(finalData);
+      // Sync state using shared primitive
+      syncDecollisionState(finalData);
 
       // Notify parent, including whether more work is pending
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
     }, isIncrementalUpdate, transitionConfig);
 
+    // Store simulation reference for potential cancellation
+    decollisionSimRef.current = simulation;
+
     return () => {
       simulation.stop();
-      decollisionSnapshotRef.current = null;
+
+      // Sync state using shared primitive
+      // Only sync if positions diverged (onUpdateNodes was called at least once)
+      if (liveTransitionDataRef.current) {
+        syncDecollisionState(liveTransitionDataRef.current);
+      } else {
+        // No rendering happened, just clear refs
+        syncDecollisionState(null);
+      }
     };
   }, [enableDecollisioning, processedData.length, isIncrementalUpdate, defaultSize, useCanvas]);
 
@@ -599,12 +619,40 @@ const DotVisualization = forwardRef((props, ref) => {
   }, []);
 
 
+  // Cancel any ongoing decollision animation
+  const cancelDecollision = useCallback(() => {
+    if (decollisionSimRef.current) {
+      console.log('[FLICKER-DEBUG] Library: cancelDecollision called - stopping D3 simulation');
+      debugLog('Cancelling ongoing decollision');
+      decollisionSimRef.current.stop();
+      decollisionSimRef.current = null;
+      decollisionSnapshotRef.current = null;
+      pendingDecollisionRef.current = false;
+      console.log('[FLICKER-DEBUG] Library: Decollision stopped and refs cleared');
+    } else {
+      console.log('[FLICKER-DEBUG] Library: cancelDecollision called but no simulation was running');
+    }
+  }, [debugLog]);
+
+  // Get current positions (including any in-progress decollision positions)
+  const getCurrentPositions = useCallback(() => {
+    // Return the current data ref which has the most up-to-date positions
+    // This includes any intermediate decollision positions
+    return dataRef.current.map(item => ({
+      id: item.id,
+      x: item.x,
+      y: item.y
+    }));
+  }, []);
+
   useImperativeHandle(ref, () => ({
     zoomToVisible,
     getVisibleDotCount: () => visibleDotCount,
     updateVisibleDotCount,
     getZoomTransform: () => zoomManager.current?.getCurrentTransform(),
-  }), [zoomToVisible, visibleDotCount, updateVisibleDotCount]);
+    cancelDecollision,
+    getCurrentPositions,
+  }), [zoomToVisible, visibleDotCount, updateVisibleDotCount, cancelDecollision, getCurrentPositions]);
 
   // Auto-fit to visible region
   useEffect(() => {

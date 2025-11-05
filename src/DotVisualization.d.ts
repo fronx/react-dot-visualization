@@ -28,6 +28,8 @@ export interface DotVisualizationRef {
   getVisibleDotCount: () => number;
   updateVisibleDotCount: () => void;
   getZoomTransform: () => any;
+  cancelDecollision: () => void;
+  getCurrentPositions: () => Array<{ id: string | number; x: number; y: number }>;
 }
 
 declare const DotVisualization: React.ForwardRefExoticComponent<DotVisualizationProps & React.RefAttributes<DotVisualizationRef>>;
