@@ -6,7 +6,8 @@ export function decollisioning(data, onUpdatePositions, fnDotSize, onDecollision
   const simulation = d3.forceSimulation(nodes)
     .alpha(1)
     .alphaMin(0.01)
-    .alphaDecay(0.10)
+    .alphaDecay(0.05)
+    .velocityDecay(0.2)
     .force('collide', d3.forceCollide().radius(fnDotSize))
     .on('tick', () => {
       tickCount++;
