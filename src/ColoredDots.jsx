@@ -152,8 +152,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
           mergedStyles.strokeWidth = customStyles['stroke-width'];
         }
 
-        // Hover opacity always takes precedence
-        if (isHovered) {
+        // Hover opacity takes precedence ONLY if custom opacity is not set
+        if (isHovered && customStyles.opacity === undefined) {
           mergedStyles.opacity = getOpacity(item);
         }
 
