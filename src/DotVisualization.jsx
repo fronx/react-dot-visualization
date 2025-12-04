@@ -72,6 +72,7 @@ const DotVisualization = forwardRef((props, ref) => {
     useCanvas = false,
     debug = false,
     initialTransform = null,
+    children,
     ...otherProps
   } = props;
 
@@ -794,6 +795,7 @@ const DotVisualization = forwardRef((props, ref) => {
           onClusterLeave={onClusterLeave}
           debug={debug}
         />
+        {children}
         {!useCanvas && (
           <InteractionLayer
             data={processedData}

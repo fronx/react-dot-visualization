@@ -11,7 +11,7 @@ export interface DotVisualizationProps {
   onClusterLeave?: () => void;
   onHover?: (node: any) => void;
   onLeave?: () => void;
-  onClick?: (node: any) => void;
+  onClick?: (node: any, event?: MouseEvent) => void;
   onBackgroundClick?: () => void;
   onDragStart?: (node: any) => void;
   dragIcon?: any;
