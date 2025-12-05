@@ -73,6 +73,8 @@ const DotVisualization = forwardRef((props, ref) => {
     debug = false,
     initialTransform = null,
     children,
+    backgroundChildren,
+    foregroundChildren,
     ...otherProps
   } = props;
 
@@ -749,8 +751,17 @@ const DotVisualization = forwardRef((props, ref) => {
         </g>
       )}
 
-      {/* Vector layer that gets the full d3 zoom transform */}
-      <g ref={contentRef} id="vector-layer">
+      {/* Transformed content layer - contains background, vector content, and foreground */}
+      <g ref={contentRef} id="content-layer">
+        {/* Background layer - renders before dots */}
+        {(backgroundChildren || children) && (
+          <g id="background-layer" pointerEvents="none">
+            {backgroundChildren || children}
+          </g>
+        )}
+
+        {/* Vector layer for edges and SVG dots */}
+        <g id="vector-layer">
         {(edges && edges.length > 0) && (
           <EdgeLayer
             edges={edges}
@@ -795,7 +806,6 @@ const DotVisualization = forwardRef((props, ref) => {
           onClusterLeave={onClusterLeave}
           debug={debug}
         />
-        {children}
         {!useCanvas && (
           <InteractionLayer
             data={processedData}
@@ -814,15 +824,23 @@ const DotVisualization = forwardRef((props, ref) => {
           />
         )}
 
-        {/* Invisible cushion so the group has a sensible bbox */}
-        <rect
-          x={effectiveViewBox[0] - effectiveViewBox[2]}
-          y={effectiveViewBox[1] - effectiveViewBox[3]}
-          width={effectiveViewBox[2] * 3}
-          height={effectiveViewBox[3] * 3}
-          fill="none"
-          pointerEvents="none"
-        />
+          {/* Invisible cushion so the group has a sensible bbox */}
+          <rect
+            x={effectiveViewBox[0] - effectiveViewBox[2]}
+            y={effectiveViewBox[1] - effectiveViewBox[3]}
+            width={effectiveViewBox[2] * 3}
+            height={effectiveViewBox[3] * 3}
+            fill="none"
+            pointerEvents="none"
+          />
+        </g>
+
+        {/* Foreground layer - renders on top of dots (e.g., overlays, dimming effects) */}
+        {foregroundChildren && (
+          <g id="foreground-layer">
+            {foregroundChildren}
+          </g>
+        )}
       </g>
     </svg>
   );

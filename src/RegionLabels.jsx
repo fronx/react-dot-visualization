@@ -10,6 +10,7 @@ const RegionLabels = ({
   onLabelDragEnd,
   dragEnabled = false,
   dragModifierKey = null, // 'shift' | 'alt' | 'meta' | null
+  clickModifierKey = null, // 'shift' | 'alt' | 'meta' | null - modifier required for clicking
   getZoomTransform,
   renderLabel,
   className = '',
@@ -20,12 +21,13 @@ const RegionLabels = ({
     isDragging: false,
     draggedLabelId: null,
     startScreenPos: null,
-    currentWorldOffset: null
+    currentWorldOffset: null,
+    wasJustDragging: false
   });
 
   const svgRef = useRef(null);
 
-  // Check if modifier key is pressed
+  // Check if drag modifier key is pressed
   const isModifierKeyPressed = useCallback((event) => {
     if (!dragModifierKey) return true; // No modifier required
 
@@ -40,6 +42,22 @@ const RegionLabels = ({
         return false;
     }
   }, [dragModifierKey]);
+
+  // Check if click modifier key is pressed
+  const isClickModifierKeyPressed = useCallback((event) => {
+    if (!clickModifierKey) return true; // No modifier required
+
+    switch (clickModifierKey) {
+      case 'shift':
+        return event.shiftKey;
+      case 'alt':
+        return event.altKey;
+      case 'meta':
+        return event.metaKey || event.ctrlKey; // Cmd on Mac, Ctrl on Windows
+      default:
+        return false;
+    }
+  }, [clickModifierKey]);
 
   // Convert screen delta to world delta
   const screenToWorldDelta = useCallback((screenDX, screenDY) => {
@@ -134,8 +152,14 @@ const RegionLabels = ({
       isDragging: false,
       draggedLabelId: null,
       startScreenPos: null,
-      currentWorldOffset: null
+      currentWorldOffset: null,
+      wasJustDragging: true
     });
+
+    // Clear wasJustDragging flag after a brief delay to prevent click from firing
+    setTimeout(() => {
+      setDragState(prev => ({ ...prev, wasJustDragging: false }));
+    }, 100);
   }, [dragState.isDragging, dragState.draggedLabelId, dragState.currentWorldOffset, labels, onLabelDragEnd, debug]);
 
   // Attach global mouse listeners for drag
@@ -212,7 +236,7 @@ const RegionLabels = ({
           className={`region-label ${label.active ? 'active' : ''} ${isDragging ? 'dragging' : ''} ${className}`}
           onClick={(e) => {
             e.stopPropagation();
-            if (onLabelClick && !isDragging) {
+            if (onLabelClick && !isDragging && !dragState.wasJustDragging && isClickModifierKeyPressed(e)) {
               onLabelClick(label);
             }
           }}
@@ -255,7 +279,7 @@ const RegionLabels = ({
       onMouseDown: (e) => handleMouseDown(e, label),
       onClick: (e) => {
         e.stopPropagation();
-        if (onLabelClick && !isDragging) {
+        if (onLabelClick && !isDragging && !dragState.wasJustDragging && isClickModifierKeyPressed(e)) {
           onLabelClick(label);
         }
       },
