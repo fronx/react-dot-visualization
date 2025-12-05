@@ -245,7 +245,6 @@ const RegionLabels = ({
           style={{
             position: 'absolute',
             transform: 'translate(-50%, -50%)',
-            padding: '4px 8px',
             fontSize: '12px',
             fontWeight: 500,
             cursor: dragEnabled && dragModifierKey ? 'grab' : 'pointer',
