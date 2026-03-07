@@ -63,16 +63,18 @@ export const findDotAtPosition = (mouseX, mouseY, spatialIndex) => {
 
   const candidates = spatialGrid.get(key) || [];
 
-  // Test each candidate dot for actual collision
-  // Return the last one (topmost in render order)
+  // Find the closest dot within 2x the dot radius (sensitivity zone)
   let hitDot = null;
+  let minDistanceSquared = Infinity;
   for (const candidate of candidates) {
     const dx = mouseX - candidate.screenX;
     const dy = mouseY - candidate.screenY;
     const distanceSquared = dx * dx + dy * dy;
-    const radiusSquared = candidate.screenRadius * candidate.screenRadius;
+    const sensitivityRadius = candidate.screenRadius * 2;
+    const sensitivityRadiusSquared = sensitivityRadius * sensitivityRadius;
 
-    if (distanceSquared <= radiusSquared) {
+    if (distanceSquared <= sensitivityRadiusSquared && distanceSquared < minDistanceSquared) {
+      minDistanceSquared = distanceSquared;
       hitDot = candidate.item;
     }
   }
