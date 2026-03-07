@@ -9,15 +9,27 @@
  */
 
 import * as d3 from 'd3';
-import { 
-  boundsForData, 
-  computeFitTransformToVisible, 
-  shouldAutoZoomToNewContent, 
-  computeAbsoluteExtent, 
-  unionExtent, 
-  setAbsoluteExtent, 
-  updateZoomExtentForData 
+import {
+  boundsForData,
+  computeFitTransformToVisible,
+  shouldAutoZoomToNewContent,
+  computeAbsoluteExtent,
+  unionExtent,
+  setAbsoluteExtent,
+  updateZoomExtentForData
 } from './utils.js';
+
+/**
+ * Classify wheel events into gesture types for intuitive trackpad behavior.
+ * - ctrlKey: pinch-to-zoom on trackpad (browser sends ctrlKey + small deltaY)
+ * - metaKey/altKey: modifier + scroll = zoom
+ * - plain scroll: pan
+ */
+function classifyWheelGesture(event) {
+  if (event.ctrlKey) return 'pinch';
+  if (event.metaKey || event.altKey) return 'scroll-zoom';
+  return 'scroll-pan';
+}
 
 export class ZoomManager {
   constructor(options = {}) {
@@ -76,10 +88,66 @@ export class ZoomManager {
 
     d3.select(this.zoomRef.current).call(this.zoomHandler);
 
+    // Disable d3-zoom's built-in wheel handling — we handle it ourselves
+    d3.select(this.zoomRef.current).on('wheel.zoom', null);
+
+    // Custom wheel handler: scroll → pan, pinch/modifier → zoom
+    this.boundHandleWheel = this.handleWheel.bind(this);
+    this.zoomRef.current.addEventListener('wheel', this.boundHandleWheel, { passive: false });
+
     // Apply initial transform only once (on first initialization)
     if (this.hasInitialTransform && !this.initialTransformApplied) {
       this.applyTransformViaZoomHandler(this.transform);
       this.initialTransformApplied = true;
+    }
+  }
+
+  /**
+   * Custom wheel handler: scroll-to-pan, pinch/modifier-to-zoom
+   */
+  handleWheel(event) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const gesture = classifyWheelGesture(event);
+    const t = this.transform;
+
+    // Convert screen pixels to viewBox units
+    const rect = this.zoomRef.current.getBoundingClientRect();
+    const vb = this.viewBox || [0, 0, 100, 100];
+    const scaleX = vb[2] / rect.width;
+    const scaleY = vb[3] / rect.height;
+
+    if (gesture === 'scroll-pan') {
+      const newTransform = d3.zoomIdentity
+        .translate(t.x - event.deltaX * scaleX, t.y - event.deltaY * scaleY)
+        .scale(t.k);
+      this.applyTransformViaZoomHandler(newTransform);
+    } else {
+      // Zoom toward cursor
+      const isPinch = gesture === 'pinch';
+      const zoomBase = 1.003;
+      const multiplier = isPinch ? 3 : 1;
+      const factor = Math.pow(zoomBase, -event.deltaY * multiplier);
+
+      const [minScale, maxScale] = this.zoomHandler.scaleExtent();
+      const newK = Math.max(minScale, Math.min(maxScale, t.k * factor));
+      if (Math.abs(newK - t.k) < 0.001) return;
+
+      // Cursor position in viewBox coordinates
+      const cursorX = (event.clientX - rect.left) * scaleX + vb[0];
+      const cursorY = (event.clientY - rect.top) * scaleY + vb[1];
+
+      // Zoom-to-point: keep cursor position fixed in screen space
+      const ratio = newK / t.k;
+      const newTransform = d3.zoomIdentity
+        .translate(
+          cursorX - ratio * (cursorX - t.x),
+          cursorY - ratio * (cursorY - t.y)
+        )
+        .scale(newK);
+
+      this.applyTransformViaZoomHandler(newTransform);
     }
   }
 
@@ -436,6 +504,9 @@ export class ZoomManager {
   destroy() {
     if (this.zoomHandler) {
       this.zoomHandler.on("start", null).on("end", null).on("zoom", null);
+    }
+    if (this.zoomRef?.current && this.boundHandleWheel) {
+      this.zoomRef.current.removeEventListener('wheel', this.boundHandleWheel);
     }
   }
 }
