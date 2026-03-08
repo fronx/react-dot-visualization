@@ -13,6 +13,9 @@ import { decollisioning } from '../decollisioning.js';
 import { getDotSize } from '../dotUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 
+const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
+const EMPTY_RADIUS_OVERRIDES = new Map();
+
 /**
  * Drop-in replacement for DotVisualization using R3F (WebGL) rendering.
  *
@@ -22,7 +25,7 @@ import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
  *   edgeColor, edgeOpacity
  *   onHover, onLeave, onClick, onBackgroundClick, onDragStart
  *   enableDecollisioning, isIncrementalUpdate, positionsAreIntermediate, cacheKey
- *   className, style, children
+ *   initialTransform, className, style, children
  */
 const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) {
   const {
@@ -53,7 +56,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     transitionEasing = d3.easeCubicOut,
     positionsAreIntermediate = false,
     cacheKey = 'default',
+    radiusOverrides = EMPTY_RADIUS_OVERRIDES,
     sharedPositionCache = null,
+    initialTransform = null,
     className = '',
     style = {},
     children,
@@ -70,6 +75,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const onDecollisionCompleteRef = useRef(onDecollisionComplete);
   const prevCacheKeyRef = useRef(cacheKey);
   const cameraInitialized = useRef(false);
+
+  // Camera state for zoom/pan persistence across renderer switches.
+  const cameraStateRef = useRef(null);
+  // Container ref for measuring dimensions when computing D3-compatible zoom transform.
+  const containerRef = useRef(null);
 
   useEffect(() => {
     dotStylesRef.current = dotStyles;
@@ -255,14 +265,30 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onBackgroundClick?.(event);
   }, [onBackgroundClick]);
 
+  const handleCameraStateChange = useCallback((state) => {
+    cameraStateRef.current = state;
+  }, []);
+
   // Imperative handle — implements the DotVisualization API surface
   useImperativeHandle(ref, () => ({
     zoomToVisible: async () => {
       cameraInitialized.current = false;
     },
     getVisibleDotCount: () => processedData.length,
-    // Stubs for methods not yet implemented in the R3F renderer
-    getZoomTransform: () => null,
+    getZoomTransform: () => {
+      const cam = cameraStateRef.current;
+      if (!cam || !containerRef.current) return null;
+      const { width: W, height: H } = containerRef.current.getBoundingClientRect();
+      if (!W || !H) return null;
+      // Convert Three.js camera position to D3-equivalent zoom transform {x, y, k}.
+      // cam.y is world Y (up+), which is the negation of data Y (down+).
+      const k = H / (cam.z * 2 * Math.tan(CAMERA_FOV_RAD / 2));
+      return {
+        x: W / 2 - cam.x * k,
+        y: H / 2 + cam.y * k, // H/2 - (-cam.y) * k = H/2 + cam.y * k
+        k,
+      };
+    },
     updateVisibleDotCount: () => {},
     cancelDecollision: () => {
       if (decollisionSimRef.current) {
@@ -275,6 +301,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
 
   return (
     <div
+      ref={containerRef}
       className={`dot-visualization-r3f ${className}`}
       style={{ width: '100%', height: '100%', position: 'relative', ...style }}
     >
@@ -307,7 +334,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           edgeColor={edgeColor}
           edgeOpacity={edgeOpacity}
           showEdges={showEdges}
+          radiusOverrides={radiusOverrides}
           cameraInitialized={cameraInitialized}
+          initialTransform={initialTransform}
+          onCameraStateChange={handleCameraStateChange}
         />
       </Canvas>
 

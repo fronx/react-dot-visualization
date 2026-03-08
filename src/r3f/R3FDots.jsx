@@ -36,6 +36,11 @@ export function R3FDots({
   const meshRef = useRef(null);
   const ringMeshRef = useRef(null);
   const dynamicDotsRef = useRef([]);
+  const dynamicDotsByIdRef = useRef(new Map());
+  const dotInfoByIdRef = useRef(new Map());
+  const hoveredIdRef = useRef(hoveredId);
+  const prevHoveredIdRef = useRef(hoveredId);
+  const prevHoverSizeMultiplierRef = useRef(hoverSizeMultiplier);
 
   // Per-dot pulse state: time reference and animation phase
   const pulseTimeRef = useRef(0);
@@ -64,13 +69,20 @@ export function R3FDots({
     return result;
   }, [dotStyles]);
 
-  // Apply static instance attributes when data/style/hover changes.
+  useEffect(() => {
+    hoveredIdRef.current = hoveredId;
+  }, [hoveredId]);
+
+  // Apply static instance attributes when data/style changes.
   useEffect(() => {
     const mesh = meshRef.current;
     const ringMesh = ringMeshRef.current;
     if (!mesh) return;
 
     const dynamicDots = [];
+    const dynamicDotsById = new Map();
+    const dotInfoById = new Map();
+    const activeHoveredId = hoveredIdRef.current;
     let needsMatrixUpdate = false;
     let needsColorUpdate = false;
     let needsRingMatrixUpdate = false;
@@ -78,7 +90,7 @@ export function R3FDots({
 
     data.forEach((item, i) => {
       const customStyle = dotStyles.get(item.id) || {};
-      const isHovered = item.id === hoveredId;
+      const isHovered = item.id === activeHoveredId;
       const pulse = pulseDots.get(item.id);
 
       const baseSize = customStyle.r ?? item.size ?? defaultSize;
@@ -95,15 +107,28 @@ export function R3FDots({
       mesh.setColorAt(i, _color);
       needsColorUpdate = true;
 
+      dotInfoById.set(item.id, {
+        index: i,
+        x: item.x,
+        y: -item.y,
+        baseScale: baseSize,
+      });
+
       if (pulse) {
-        dynamicDots.push({
+        const dynamicDot = {
+          id: item.id,
           index: i,
           x: item.x,
           y: -item.y,
           baseScale: scale,
           baseFill: fill,
           pulse,
-        });
+          colorInterpolator: pulse.pulseColor && !pulse.ringEffect
+            ? d3.interpolate(fill, pulse.pulseColor)
+            : null,
+        };
+        dynamicDots.push(dynamicDot);
+        dynamicDotsById.set(item.id, dynamicDot);
       }
 
       // Ring effect
@@ -121,6 +146,10 @@ export function R3FDots({
     });
 
     dynamicDotsRef.current = dynamicDots;
+    dynamicDotsByIdRef.current = dynamicDotsById;
+    dotInfoByIdRef.current = dotInfoById;
+    prevHoveredIdRef.current = activeHoveredId;
+    prevHoverSizeMultiplierRef.current = hoverSizeMultiplier;
 
     if (needsMatrixUpdate) mesh.instanceMatrix.needsUpdate = true;
     if (needsColorUpdate && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -130,7 +159,51 @@ export function R3FDots({
     if (ringMesh && needsRingColorUpdate && ringMesh.instanceColor) {
       ringMesh.instanceColor.needsUpdate = true;
     }
-  }, [data, dotStyles, pulseDots, defaultColor, defaultSize, hoveredId, hoverSizeMultiplier]);
+  }, [data, dotStyles, pulseDots, defaultColor, defaultSize, hoverSizeMultiplier]);
+
+  // Hover updates should only touch the previous and current hovered instances.
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+
+    const prevHoveredId = prevHoveredIdRef.current;
+    const prevMultiplier = prevHoverSizeMultiplierRef.current;
+    if (prevHoveredId === hoveredId && prevMultiplier === hoverSizeMultiplier) return;
+
+    const idsToUpdate = new Set();
+    if (prevHoveredId !== null && prevHoveredId !== undefined) idsToUpdate.add(prevHoveredId);
+    if (hoveredId !== null && hoveredId !== undefined) idsToUpdate.add(hoveredId);
+
+    let needsMatrixUpdate = false;
+    idsToUpdate.forEach((id) => {
+      const dotInfo = dotInfoByIdRef.current.get(id);
+      if (!dotInfo) return;
+
+      const isHovered = id === hoveredId;
+      const scale = isHovered
+        ? dotInfo.baseScale * hoverSizeMultiplier
+        : dotInfo.baseScale;
+
+      _dummy.position.set(dotInfo.x, dotInfo.y, 0);
+      _dummy.scale.setScalar(scale);
+      _dummy.updateMatrix();
+      mesh.setMatrixAt(dotInfo.index, _dummy.matrix);
+      needsMatrixUpdate = true;
+
+      const dynamicDot = dynamicDotsByIdRef.current.get(id);
+      if (dynamicDot) {
+        dynamicDot.baseScale = scale;
+      }
+    });
+
+    if (needsMatrixUpdate) {
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+
+    hoveredIdRef.current = hoveredId;
+    prevHoveredIdRef.current = hoveredId;
+    prevHoverSizeMultiplierRef.current = hoverSizeMultiplier;
+  }, [hoveredId, hoverSizeMultiplier]);
 
   // Animate only pulsing dots each frame.
   useFrame((_, delta) => {
@@ -149,7 +222,7 @@ export function R3FDots({
     let needsRingMatrixUpdate = false;
 
     for (const dot of dynamicDots) {
-      const { index, x, y, baseScale, baseFill, pulse } = dot;
+      const { index, x, y, baseScale, pulse } = dot;
       const duration = pulse.duration || 1250;
       const sizeRange = pulse.sizeRange || 0.3;
       const phase = (t % duration) / duration;
@@ -174,11 +247,11 @@ export function R3FDots({
       needsMatrixUpdate = true;
 
       // Pulse color interpolation only for non-ring pulses.
-      if (pulse.pulseColor && !pulse.ringEffect) {
+      if (dot.colorInterpolator) {
         let eased;
         if (phase < 0.5) eased = d3.easeQuadOut(phase * 2);
         else eased = d3.easeQuadIn(1 - (phase - 0.5) * 2);
-        _color.set(d3.interpolate(baseFill, pulse.pulseColor)(eased));
+        _color.set(dot.colorInterpolator(eased));
         mesh.setColorAt(index, _color);
         needsColorUpdate = true;
       }

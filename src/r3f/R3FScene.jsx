@@ -1,11 +1,13 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import { R3FDots } from './R3FDots.jsx';
 import { R3FEdges } from './R3FEdges.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
-import { computeFitZ } from './cameraUtils.js';
+import { computeFitZ, CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { buildSpatialGrid, queryRadius } from '../spatialIndex.js';
+
+const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 
 const _raycaster = new THREE.Raycaster();
 const _mouse = new THREE.Vector2();
@@ -13,13 +15,14 @@ const _zeroPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 const _worldPos = new THREE.Vector3();
 
 const HOVER_CELL_SIZE = 8;
+const EMPTY_RADIUS_OVERRIDES = new Map();
 
-function buildHoverSpatialIndex(data, dotStyles, defaultSize, hoverSizeMultiplier) {
+function buildHoverSpatialIndex(data, radiusOverrides, defaultSize, hoverSizeMultiplier) {
   const entries = [];
   let maxHoverRadius = 0;
 
   for (const item of data) {
-    const effectiveSize = dotStyles.get(item.id)?.r ?? item.size ?? defaultSize;
+    const effectiveSize = radiusOverrides.get(item.id) ?? item.size ?? defaultSize;
     const hoverRadius = effectiveSize * hoverSizeMultiplier;
     maxHoverRadius = Math.max(maxHoverRadius, hoverRadius);
 
@@ -73,13 +76,13 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
   return nearest;
 }
 
-function HoverDetector({ data, dotStyles, defaultSize, hoverSizeMultiplier, onHoverChange, onDotClick, onBackgroundClick }) {
+function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHoverChange, onDotClick, onBackgroundClick }) {
   const { camera, gl } = useThree();
   const hoveredIdRef = useRef(null);
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
   const spatialIndex = useMemo(
-    () => buildHoverSpatialIndex(data, dotStyles, defaultSize, hoverSizeMultiplier),
-    [data, dotStyles, defaultSize, hoverSizeMultiplier]
+    () => buildHoverSpatialIndex(data, radiusOverrides, defaultSize, hoverSizeMultiplier),
+    [data, radiusOverrides, defaultSize, hoverSizeMultiplier]
   );
 
   // Cache canvas bounds; avoid layout reads on every mouse event.
@@ -183,7 +186,7 @@ function HoverDetector({ data, dotStyles, defaultSize, hoverSizeMultiplier, onHo
   return null;
 }
 
-function CameraInitializer({ data, initialized }) {
+function CameraInitializer({ data, initialized, initialTransform, onInit }) {
   const { camera, size } = useThree();
   const hasRun = useRef(false);
 
@@ -192,19 +195,49 @@ function CameraInitializer({ data, initialized }) {
     hasRun.current = true;
     initialized.current = true;
 
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const item of data) {
-      if (item.x < minX) minX = item.x;
-      if (item.x > maxX) maxX = item.x;
-      if (item.y < minY) minY = item.y;
-      if (item.y > maxY) maxY = item.y;
+    if (initialTransform) {
+      // Restore from a saved D3 zoom transform (from Canvas renderer or previous session).
+      // Convert pixel-space D3 transform {x, y, k} to Three.js camera position.
+      const { x, y, k } = initialTransform;
+      const { width: W, height: H } = size;
+      const cx = (W / 2 - x) / k;
+      const cy_world = -((H / 2 - y) / k); // negate: data Y is SVG (down+), world Y is up+
+      const cz = H / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
+      camera.position.set(cx, cy_world, Math.max(0.5, Math.min(5000, cz)));
+    } else {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const item of data) {
+        if (item.x < minX) minX = item.x;
+        if (item.x > maxX) maxX = item.x;
+        if (item.y < minY) minY = item.y;
+        if (item.y > maxY) maxY = item.y;
+      }
+      const centerX = (minX + maxX) / 2;
+      const centerY = -((minY + maxY) / 2); // negate Y: data Y is SVG (down+), world Y is up+
+      const aspect = size.width / size.height;
+      const z = computeFitZ(minX, maxX, minY, maxY, aspect, 0.85);
+      camera.position.set(centerX, centerY, z);
     }
-    const centerX = (minX + maxX) / 2;
-    const centerY = -((minY + maxY) / 2); // negate Y: data Y is SVG (down+), world Y is up+
-    const aspect = size.width / size.height;
-    const z = computeFitZ(minX, maxX, minY, maxY, aspect, 0.85);
-    camera.position.set(centerX, centerY, z);
+
+    onInit?.({ x: camera.position.x, y: camera.position.y, z: camera.position.z });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, camera, size, initialized]);
+
+  return null;
+}
+
+// Fires onCameraStateChange whenever the camera moves, allowing the outer component
+// to read camera state for zoom/pan persistence across renderer switches.
+function CameraReporter({ reportRef, onCameraStateChange }) {
+  const { camera } = useThree();
+  const onChangeRef = useRef(onCameraStateChange);
+  useEffect(() => { onChangeRef.current = onCameraStateChange; }, [onCameraStateChange]);
+
+  useEffect(() => {
+    reportRef.current = () => {
+      onChangeRef.current?.({ x: camera.position.x, y: camera.position.y, z: camera.position.z });
+    };
+  }, [camera, reportRef]);
 
   return null;
 }
@@ -216,6 +249,7 @@ function CameraInitializer({ data, initialized }) {
 export function R3FScene({
   data,
   edges,
+  radiusOverrides = EMPTY_RADIUS_OVERRIDES,
   dotStyles,
   defaultColor,
   defaultSize,
@@ -232,6 +266,8 @@ export function R3FScene({
   edgeOpacity,
   showEdges,
   cameraInitialized,
+  initialTransform = null,
+  onCameraStateChange,
 }) {
   const dataMap = useMemo(() => {
     const map = new Map();
@@ -239,10 +275,21 @@ export function R3FScene({
     return map;
   }, [data]);
 
+  const reportCameraRef = useRef(null);
+  const handleTransformChange = useCallback(() => {
+    reportCameraRef.current?.();
+  }, []);
+
   return (
     <>
-      <CameraInitializer data={data} initialized={cameraInitialized} />
-      <R3FCamera />
+      <CameraInitializer
+        data={data}
+        initialized={cameraInitialized}
+        initialTransform={initialTransform}
+        onInit={onCameraStateChange}
+      />
+      <CameraReporter reportRef={reportCameraRef} onCameraStateChange={onCameraStateChange} />
+      <R3FCamera onTransformChange={handleTransformChange} />
 
       {showEdges && edges.length > 0 && (
         <R3FEdges
@@ -268,7 +315,7 @@ export function R3FScene({
 
       <HoverDetector
         data={data}
-        dotStyles={dotStyles}
+        radiusOverrides={radiusOverrides}
         defaultSize={defaultSize}
         hoverSizeMultiplier={hoverSizeMultiplier}
         onHoverChange={onHoverChange}
