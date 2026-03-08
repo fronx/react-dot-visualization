@@ -34,6 +34,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onZoomStart,
     onZoomEnd,
     onDecollisionComplete,
+    sharedPositionCache = null,
     enableDecollisioning = true,
     isIncrementalUpdate = false,
     transitionDuration = 350,
@@ -234,8 +235,19 @@ const DotVisualization = forwardRef((props, ref) => {
 
     let processedValidData = validData;
 
-    // Restore memoized positions when positions haven't changed and we're not in intermediate state
-    if (!positionsChanged && memoizedPositions.current.size > 0 && !positionsAreIntermediate) {
+    // Seed from shared cross-renderer cache on first mount so we immediately show
+    // decollisioned positions without a catch-up simulation.
+    let seededFromSharedCache = false;
+    if (sharedPositionCache?.current?.size > 0 && memoizedPositions.current.size === 0 && !positionsAreIntermediate) {
+      for (const item of validData) {
+        const cached = sharedPositionCache.current.get(item.id);
+        if (cached) memoizedPositions.current.set(item.id, { x: cached.x, y: cached.y });
+      }
+      seededFromSharedCache = memoizedPositions.current.size > 0;
+    }
+
+    // Restore memoized positions when positions haven't changed (or when seeded from shared cache)
+    if ((!positionsChanged || seededFromSharedCache) && memoizedPositions.current.size > 0 && !positionsAreIntermediate) {
       // If positions haven't changed and positions are stable, restore memoized decollisioned positions
       // console.log('📍 Restoring memoized positions for', validData.length, 'dots');
       processedValidData = validData.map(item => {
@@ -508,7 +520,11 @@ const DotVisualization = forwardRef((props, ref) => {
   // data, React re-renders could cause the simulation to restart mid-flight with different
   // data, creating visual glitches. The snapshot ensures atomic "launch -> animate -> land".
   useEffect(() => {
-    if (!enableDecollisioning || typeof window === 'undefined') {
+    if (typeof window === 'undefined') return;
+    // Skip only when decollision is disabled AND we already have cached results.
+    // If cache is empty (e.g. renderer just mounted after a switch), fall through
+    // and run decollision once to build the cache.
+    if (!enableDecollisioning && memoizedPositions.current.size > 0) {
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
       return;
@@ -541,6 +557,12 @@ const DotVisualization = forwardRef((props, ref) => {
       easing: transitionEasing || d3.easeCubicOut,
     } : null;
 
+    // Catch-up mode: renderer mounted fresh (no memoized positions) but decollision
+    // phase already passed. Run silently — no intermediate frames — to avoid competing
+    // state updates between the tick callbacks and the data effect.
+    const isCatchUp = !enableDecollisioning && memoizedPositions.current.size === 0;
+    const skipFrames = isCatchUp || isIncrementalUpdate;
+
     const simulation = decollisioning(dataSnapshot, stableOnUpdateNodes, fnDotSize, (finalData) => {
       debugLog('Decollision complete - syncing React state');
 
@@ -550,9 +572,17 @@ const DotVisualization = forwardRef((props, ref) => {
       // Sync state using shared primitive
       syncDecollisionState(finalData);
 
+      // Write back to shared cache so the other renderer can seed from it on mount
+      if (sharedPositionCache?.current) {
+        sharedPositionCache.current.clear();
+        for (const node of finalData) {
+          sharedPositionCache.current.set(node.id, { x: node.x, y: node.y });
+        }
+      }
+
       // Notify parent, including whether more work is pending
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
-    }, isIncrementalUpdate, transitionConfig);
+    }, skipFrames, transitionConfig);
 
     // Store simulation reference for potential cancellation
     decollisionSimRef.current = simulation;

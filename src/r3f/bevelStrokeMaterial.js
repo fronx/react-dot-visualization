@@ -38,6 +38,7 @@ const fragmentShader = /* glsl */`
     float strokeStart = 1.0 - uStrokeWidth;
     vec3 color = dist > strokeStart ? uStrokeColor : vColor;
     gl_FragColor = vec4(color, 1.0);
+    #include <colorspace_fragment>
   }
 `;
 

@@ -1,59 +1,137 @@
-import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
-import { useThree, useFrame } from '@react-three/fiber';
+import { useThree } from '@react-three/fiber';
 import { R3FDots } from './R3FDots.jsx';
 import { R3FEdges } from './R3FEdges.jsx';
-import { R3FCamera, useCameraFit } from './R3FCamera.jsx';
-import { CAMERA_FOV_DEGREES, computeFitZ } from './cameraUtils.js';
+import { R3FCamera } from './R3FCamera.jsx';
+import { computeFitZ } from './cameraUtils.js';
+import { buildSpatialGrid, queryRadius } from '../spatialIndex.js';
 
 const _raycaster = new THREE.Raycaster();
 const _mouse = new THREE.Vector2();
 const _zeroPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 const _worldPos = new THREE.Vector3();
 
-const CAMERA_FOV_RADIANS = CAMERA_FOV_DEGREES * (Math.PI / 180);
+const HOVER_CELL_SIZE = 8;
+
+function buildHoverSpatialIndex(data, dotStyles, defaultSize, hoverSizeMultiplier) {
+  const entries = [];
+  let maxHoverRadius = 0;
+
+  for (const item of data) {
+    const effectiveSize = dotStyles.get(item.id)?.r ?? item.size ?? defaultSize;
+    const hoverRadius = effectiveSize * hoverSizeMultiplier;
+    maxHoverRadius = Math.max(maxHoverRadius, hoverRadius);
+
+    entries.push({
+      item,
+      worldX: item.x,
+      worldY: -item.y,
+      hoverRadius
+    });
+  }
+
+  const spatialIndex = buildSpatialGrid(entries, {
+    cellSize: HOVER_CELL_SIZE,
+    getBounds: (entry) => ({
+      minX: entry.worldX - entry.hoverRadius,
+      maxX: entry.worldX + entry.hoverRadius,
+      minY: entry.worldY - entry.hoverRadius,
+      maxY: entry.worldY + entry.hoverRadius
+    })
+  });
+
+  return {
+    ...spatialIndex,
+    maxHoverRadius,
+  };
+}
+
+function findNearestDot(spatialIndex, worldX, worldY, threshold) {
+  if (!spatialIndex) return null;
+
+  const { maxHoverRadius } = spatialIndex;
+  const searchRadius = Math.max(threshold, maxHoverRadius);
+  const candidates = queryRadius(spatialIndex, worldX, worldY, searchRadius);
+  let minDistSquared = Infinity;
+  let nearest = null;
+
+  for (const candidate of candidates) {
+    const effectiveThreshold = Math.min(candidate.hoverRadius, threshold);
+    if (effectiveThreshold <= 0) continue;
+    const limitSquared = effectiveThreshold * effectiveThreshold;
+    const diffX = worldX - candidate.worldX;
+    const diffY = worldY - candidate.worldY;
+    const distSquared = diffX * diffX + diffY * diffY;
+
+    if (distSquared <= limitSquared && distSquared < minDistSquared) {
+      minDistSquared = distSquared;
+      nearest = candidate.item;
+    }
+  }
+
+  return nearest;
+}
 
 function HoverDetector({ data, dotStyles, defaultSize, hoverSizeMultiplier, onHoverChange, onDotClick, onBackgroundClick }) {
   const { camera, gl } = useThree();
   const hoveredIdRef = useRef(null);
+  const rectRef = useRef(gl.domElement.getBoundingClientRect());
+  const spatialIndex = useMemo(
+    () => buildHoverSpatialIndex(data, dotStyles, defaultSize, hoverSizeMultiplier),
+    [data, dotStyles, defaultSize, hoverSizeMultiplier]
+  );
 
-  // Build a fast lookup map
-  const dataById = useMemo(() => {
-    const map = new Map();
-    for (const item of data) map.set(item.id, item);
-    return map;
-  }, [data]);
+  // Cache canvas bounds; avoid layout reads on every mouse event.
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const updateRect = () => {
+      rectRef.current = canvas.getBoundingClientRect();
+    };
+
+    updateRect();
+    const observer = new ResizeObserver(updateRect);
+    observer.observe(canvas);
+    window.addEventListener('resize', updateRect);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateRect);
+    };
+  }, [gl]);
 
   useEffect(() => {
     const canvas = gl.domElement;
+    let rafId = 0;
+    let pendingX = 0;
+    let pendingY = 0;
 
-    const handleMove = (e) => {
-      const rect = canvas.getBoundingClientRect();
+    const processMove = () => {
+      rafId = 0;
+      const rect = rectRef.current;
       _mouse.set(
-        ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+        ((pendingX - rect.left) / rect.width) * 2 - 1,
+        -((pendingY - rect.top) / rect.height) * 2 + 1,
       );
       _raycaster.setFromCamera(_mouse, camera);
       if (!_raycaster.ray.intersectPlane(_zeroPlane, _worldPos)) return;
 
       // Threshold scales with camera Z to maintain consistent screen-space feel
       const threshold = 0.015 * camera.position.z;
-      let minDist = Infinity;
-      let nearest = null;
-
-      for (const item of data) {
-        const dist = Math.hypot(_worldPos.x - item.x, _worldPos.y - (-item.y));
-        const effectiveSize = (dotStyles.get(item.id)?.r ?? item.size ?? defaultSize);
-        if (dist < effectiveSize * hoverSizeMultiplier && dist < threshold && dist < minDist) {
-          minDist = dist;
-          nearest = item;
-        }
-      }
+      const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
 
       const newId = nearest?.id ?? null;
       if (newId !== hoveredIdRef.current) {
         hoveredIdRef.current = newId;
         onHoverChange?.(newId, nearest);
+      }
+    };
+
+    const handleMove = (e) => {
+      pendingX = e.clientX;
+      pendingY = e.clientY;
+      if (!rafId) {
+        rafId = requestAnimationFrame(processMove);
       }
     };
 
@@ -67,17 +145,20 @@ function HoverDetector({ data, dotStyles, defaultSize, hoverSizeMultiplier, onHo
     canvas.addEventListener('mousemove', handleMove);
     canvas.addEventListener('mouseleave', handleLeave);
     return () => {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+      }
       canvas.removeEventListener('mousemove', handleMove);
       canvas.removeEventListener('mouseleave', handleLeave);
     };
-  }, [camera, gl, data, dotStyles, defaultSize, hoverSizeMultiplier, onHoverChange]);
+  }, [camera, gl, onHoverChange, spatialIndex]);
 
   // Click detection
   useEffect(() => {
     const canvas = gl.domElement;
 
     const handleClick = (e) => {
-      const rect = canvas.getBoundingClientRect();
+      const rect = rectRef.current;
       _mouse.set(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
         -((e.clientY - rect.top) / rect.height) * 2 + 1,
@@ -86,16 +167,7 @@ function HoverDetector({ data, dotStyles, defaultSize, hoverSizeMultiplier, onHo
       if (!_raycaster.ray.intersectPlane(_zeroPlane, _worldPos)) return;
 
       const threshold = 0.015 * camera.position.z;
-      let minDist = Infinity;
-      let nearest = null;
-      for (const item of data) {
-        const dist = Math.hypot(_worldPos.x - item.x, _worldPos.y - (-item.y));
-        const effectiveSize = (dotStyles.get(item.id)?.r ?? item.size ?? defaultSize);
-        if (dist < effectiveSize * hoverSizeMultiplier && dist < threshold && dist < minDist) {
-          minDist = dist;
-          nearest = item;
-        }
-      }
+      const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
 
       if (nearest) {
         onDotClick?.(nearest, e);
@@ -106,7 +178,7 @@ function HoverDetector({ data, dotStyles, defaultSize, hoverSizeMultiplier, onHo
 
     canvas.addEventListener('click', handleClick);
     return () => canvas.removeEventListener('click', handleClick);
-  }, [camera, gl, data, dotStyles, defaultSize, hoverSizeMultiplier, onDotClick, onBackgroundClick]);
+  }, [camera, gl, onDotClick, onBackgroundClick, spatialIndex]);
 
   return null;
 }

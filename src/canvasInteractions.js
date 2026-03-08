@@ -2,6 +2,7 @@
  * Canvas interaction utilities for efficient mouse-to-dot collision detection
  */
 import { useRef } from 'react';
+import { buildSpatialGrid, queryCell } from './spatialIndex.js';
 
 /**
  * Build a spatial hash grid for fast collision detection
@@ -12,9 +13,7 @@ import { useRef } from 'react';
  * @returns {Object} Spatial index with grid and metadata
  */
 export const buildSpatialIndex = (data, getSizeFunc, transform, cellSize = 20) => {
-  const spatialGrid = new Map();
-
-  data.forEach((item) => {
+  const entries = data.map((item) => {
     const size = getSizeFunc(item);
     const radius = size;
 
@@ -23,27 +22,23 @@ export const buildSpatialIndex = (data, getSizeFunc, transform, cellSize = 20) =
     const screenY = (item.y * transform.k) + transform.y;
     const screenRadius = radius * transform.k;
 
-    // Add to all overlapping grid cells
-    const minCellX = Math.floor((screenX - screenRadius) / cellSize);
-    const maxCellX = Math.floor((screenX + screenRadius) / cellSize);
-    const minCellY = Math.floor((screenY - screenRadius) / cellSize);
-    const maxCellY = Math.floor((screenY + screenRadius) / cellSize);
-
-    for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
-      for (let cellY = minCellY; cellY <= maxCellY; cellY++) {
-        const key = `${cellX},${cellY}`;
-        if (!spatialGrid.has(key)) spatialGrid.set(key, []);
-        spatialGrid.get(key).push({
-          item,
-          screenX,
-          screenY,
-          screenRadius
-        });
-      }
-    }
+    return {
+      item,
+      screenX,
+      screenY,
+      screenRadius
+    };
   });
 
-  return { spatialGrid, cellSize };
+  return buildSpatialGrid(entries, {
+    cellSize,
+    getBounds: (entry) => ({
+      minX: entry.screenX - entry.screenRadius,
+      maxX: entry.screenX + entry.screenRadius,
+      minY: entry.screenY - entry.screenRadius,
+      maxY: entry.screenY + entry.screenRadius
+    })
+  });
 };
 
 /**
@@ -55,13 +50,7 @@ export const buildSpatialIndex = (data, getSizeFunc, transform, cellSize = 20) =
  */
 export const findDotAtPosition = (mouseX, mouseY, spatialIndex) => {
   if (!spatialIndex) return null;
-
-  const { spatialGrid, cellSize } = spatialIndex;
-  const cellX = Math.floor(mouseX / cellSize);
-  const cellY = Math.floor(mouseY / cellSize);
-  const key = `${cellX},${cellY}`;
-
-  const candidates = spatialGrid.get(key) || [];
+  const candidates = queryCell(spatialIndex, mouseX, mouseY);
 
   // Find the closest dot within 2x the dot radius (sensitivity zone)
   let hitDot = null;

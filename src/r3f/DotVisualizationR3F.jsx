@@ -3,15 +3,15 @@ import React, {
   useRef,
   useEffect,
   useCallback,
-  useMemo,
   useImperativeHandle,
   forwardRef,
 } from 'react';
+import * as d3 from 'd3';
 import { Canvas } from '@react-three/fiber';
 import { R3FScene } from './R3FScene.jsx';
 import { decollisioning } from '../decollisioning.js';
 import { getDotSize } from '../dotUtils.js';
-import { CAMERA_FOV_DEGREES, computeFitZ } from './cameraUtils.js';
+import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 
 /**
  * Drop-in replacement for DotVisualization using R3F (WebGL) rendering.
@@ -21,7 +21,7 @@ import { CAMERA_FOV_DEGREES, computeFitZ } from './cameraUtils.js';
  *   dotStroke, dotStrokeWidth, hoverSizeMultiplier, hoverOpacity
  *   edgeColor, edgeOpacity
  *   onHover, onLeave, onClick, onBackgroundClick, onDragStart
- *   enableDecollisioning, positionsAreIntermediate, cacheKey
+ *   enableDecollisioning, isIncrementalUpdate, positionsAreIntermediate, cacheKey
  *   className, style, children
  */
 const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) {
@@ -48,8 +48,12 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onDragStart,
     onDecollisionComplete,
     enableDecollisioning = true,
+    isIncrementalUpdate = false,
+    transitionDuration = 500,
+    transitionEasing = d3.easeCubicOut,
     positionsAreIntermediate = false,
     cacheKey = 'default',
+    sharedPositionCache = null,
     className = '',
     style = {},
     children,
@@ -60,14 +64,30 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
 
   const decollisionSimRef = useRef(null);
   const memoizedPositions = useRef(new Map());
+  const stablePositionsRef = useRef([]);
+  const dotStylesRef = useRef(dotStyles);
+  const defaultSizeRef = useRef(defaultSize);
+  const onDecollisionCompleteRef = useRef(onDecollisionComplete);
   const prevCacheKeyRef = useRef(cacheKey);
   const cameraInitialized = useRef(false);
-  const cameraRef = useRef(null); // for imperative API
+
+  useEffect(() => {
+    dotStylesRef.current = dotStyles;
+  }, [dotStyles]);
+
+  useEffect(() => {
+    defaultSizeRef.current = defaultSize;
+  }, [defaultSize]);
+
+  useEffect(() => {
+    onDecollisionCompleteRef.current = onDecollisionComplete;
+  }, [onDecollisionComplete]);
 
   // Clear memoized positions when cache key changes
   useEffect(() => {
     if (prevCacheKeyRef.current !== cacheKey) {
       memoizedPositions.current.clear();
+      stablePositionsRef.current = [];
       prevCacheKeyRef.current = cacheKey;
     }
   }, [cacheKey]);
@@ -82,6 +102,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   useEffect(() => {
     if (!data || data.length === 0) {
       setProcessedData([]);
+      stablePositionsRef.current = [];
       return;
     }
 
@@ -100,18 +121,31 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       return;
     }
 
-    if (!enableDecollisioning) {
-      // Decollision disabled: restore memoized decollided positions if available
-      if (memoizedPositions.current.size > 0) {
-        const restored = valid.map(item => {
-          const memo = memoizedPositions.current.get(item.id);
-          return memo ? { ...item, x: memo.x, y: memo.y } : item;
-        });
-        setProcessedData(restored);
-      } else {
-        setProcessedData(valid);
-      }
+    if (!enableDecollisioning && memoizedPositions.current.size > 0) {
+      // Decollision disabled and we have cached results: restore them
+      const restored = valid.map(item => {
+        const memo = memoizedPositions.current.get(item.id);
+        return memo ? { ...item, x: memo.x, y: memo.y } : item;
+      });
+      stablePositionsRef.current = restored.map((node) => ({ ...node }));
+      setProcessedData(restored);
       return;
+    }
+
+    // Seed from shared cross-renderer cache on first mount so we can immediately
+    // show decollisioned positions without running a catch-up simulation.
+    if (sharedPositionCache?.current?.size > 0 && memoizedPositions.current.size === 0) {
+      for (const item of valid) {
+        const cached = sharedPositionCache.current.get(item.id);
+        if (cached) {
+          memoizedPositions.current.set(item.id, {
+            inputX: item.x,
+            inputY: item.y,
+            x: cached.x,
+            y: cached.y,
+          });
+        }
+      }
     }
 
     // Check if positions changed vs memoized
@@ -125,11 +159,39 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         const memo = memoizedPositions.current.get(item.id);
         return { ...item, x: memo.x, y: memo.y };
       });
+      stablePositionsRef.current = restored.map((node) => ({ ...node }));
       setProcessedData(restored);
       return;
     }
 
-    const fnDotSize = (item) => getDotSize(item, dotStyles, defaultSize);
+    // Catch-up mode: renderer mounted fresh while global decollision phase already passed.
+    // Run silently (no intermediate frames) to avoid competing state updates.
+    const isCatchUp = !enableDecollisioning && memoizedPositions.current.size === 0;
+
+    // Incremental updates keep rendering previously stable positions while decollision runs.
+    if (!isCatchUp) {
+      if (isIncrementalUpdate && stablePositionsRef.current.length > 0) {
+        setProcessedData(stablePositionsRef.current);
+      } else if (!isIncrementalUpdate) {
+        // Full renders stream intermediate positions.
+        setProcessedData(valid);
+      }
+    }
+
+    const fnDotSize = (item) => getDotSize(item, dotStylesRef.current, defaultSizeRef.current);
+    const inputById = new Map(valid.map((item) => [item.id, item]));
+    const transitionConfig = isIncrementalUpdate
+      ? {
+          enabled: true,
+          stablePositions: stablePositionsRef.current.length > 0
+            ? stablePositionsRef.current
+            : valid,
+          duration: transitionDuration,
+          easing: transitionEasing,
+        }
+      : null;
+
+    const skipFrames = isCatchUp || isIncrementalUpdate;
     const sim = decollisioning(
       valid,
       (nodes) => setProcessedData([...nodes]),
@@ -137,7 +199,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       (finalNodes) => {
         // Memoize results
         for (const node of finalNodes) {
-          const original = valid.find(v => v.id === node.id);
+          const original = inputById.get(node.id);
           memoizedPositions.current.set(node.id, {
             inputX: original?.x ?? node.x,
             inputY: original?.y ?? node.y,
@@ -145,8 +207,18 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             y: node.y,
           });
         }
-        onDecollisionComplete?.(finalNodes);
-      }
+        stablePositionsRef.current = finalNodes.map((node) => ({ ...node }));
+        // Write back to shared cache so the other renderer can seed from it on mount
+        if (sharedPositionCache?.current) {
+          sharedPositionCache.current.clear();
+          for (const node of finalNodes) {
+            sharedPositionCache.current.set(node.id, { x: node.x, y: node.y });
+          }
+        }
+        onDecollisionCompleteRef.current?.(finalNodes);
+      },
+      skipFrames,
+      transitionConfig
     );
     decollisionSimRef.current = sim;
 
@@ -156,7 +228,15 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         decollisionSimRef.current = null;
       }
     };
-  }, [data, cacheKey, enableDecollisioning, positionsAreIntermediate]);
+  }, [
+    data,
+    cacheKey,
+    enableDecollisioning,
+    isIncrementalUpdate,
+    transitionDuration,
+    transitionEasing,
+    positionsAreIntermediate,
+  ]);
 
   const handleHoverChange = useCallback((id, item) => {
     setHoveredId(id);
@@ -200,13 +280,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     >
       <Canvas
         style={{ position: 'absolute', inset: 0 }}
+        dpr={[1, 1.5]}
         camera={{
           fov: CAMERA_FOV_DEGREES,
           near: 0.01,
           far: 100000,
           position: [0, 0, 65],
         }}
-        gl={{ antialias: true }}
+        gl={{ antialias: false, powerPreference: 'high-performance' }}
       >
         <R3FScene
           data={processedData}
