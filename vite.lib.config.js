@@ -12,10 +12,14 @@ export default defineConfig({
   ],
   build: {
     lib: {
-      entry: path.resolve(__dirname, 'src/index.js'),
+      entry: {
+        index: path.resolve(__dirname, 'src/index.js'),
+        'decollision-bench': path.resolve(__dirname, 'src/decollision-bench-entry.js'),
+        'dotviz-bench': path.resolve(__dirname, 'src/dotviz-bench-entry.js')
+      },
       name: 'ReactDotVisualization',
       formats: ['es', 'cjs'],
-      fileName: (format) => `index.${format === 'es' ? 'es.js' : 'js'}`
+      fileName: (format, entryName) => `${entryName}.${format === 'es' ? 'es.js' : 'js'}`
     },
     rollupOptions: {
       external: [

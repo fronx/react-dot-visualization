@@ -11,3 +11,4 @@ export { useFrameBudget, createFrameBudget } from './useFrameBudget.js';
 export { useCache } from './useCache.js';
 export { useSharedPositionCache } from './useSharedPositionCache.js';
 export { calculateAdaptiveRingRadius } from './pulseRingUtils.js';
+export { decollisioning } from './decollisioning.js';

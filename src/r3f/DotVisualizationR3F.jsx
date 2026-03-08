@@ -203,11 +203,16 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       : null;
 
     const skipFrames = isCatchUp || isIncrementalUpdate;
+    let cancelled = false;
     const sim = decollisioning(
       valid,
-      (nodes) => setProcessedData([...nodes]),
+      (nodes) => {
+        if (cancelled) return;
+        setProcessedData([...nodes]);
+      },
       fnDotSize,
       (finalNodes) => {
+        if (cancelled) return;
         // Memoize results
         for (const node of finalNodes) {
           const original = inputById.get(node.id);
@@ -235,8 +240,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     decollisionSimRef.current = sim;
 
     return () => {
-      if (decollisionSimRef.current) {
-        decollisionSimRef.current.stop();
+      cancelled = true;
+      sim.stop();
+      if (decollisionSimRef.current === sim) {
         decollisionSimRef.current = null;
       }
     };

@@ -171,19 +171,29 @@ function initializeNodesLikeD3(nodes) {
   }
 }
 
-function nextFrame() {
-  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
-    return Promise.resolve();
-  }
-  return new Promise(resolve => window.requestAnimationFrame(() => resolve()));
-}
-
 function destroyBuffers(buffers) {
   for (const buffer of buffers) {
     if (buffer && typeof buffer.destroy === 'function') {
       buffer.destroy();
     }
   }
+}
+
+function nextFrame() {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function getAdaptiveStepsPerTick(nodeCount, publishIntermediate) {
+  if (!publishIntermediate) {
+    return 16;
+  }
+  if (nodeCount >= 8000) return 8;
+  if (nodeCount >= 3000) return 4;
+  if (nodeCount >= 1000) return 2;
+  return 1;
 }
 
 export function startWebGpuDecollisioning({
@@ -195,7 +205,10 @@ export function startWebGpuDecollisioning({
   strength = 1,
   velocityDecay = DEFAULT_VELOCITY_DECAY,
   jitter = 1e-6,
+  stepsPerTick,
+  readbackIntervalMs = 16,
   publishIntermediate = true,
+  shouldPublishIntermediate,
   onTick,
   onComplete,
   onError
@@ -257,65 +270,101 @@ export function startWebGpuDecollisioning({
 
     const params = buildParamsBuffer();
     const workgroups = Math.ceil(nodeCount / WORKGROUP_SIZE);
+    const batchSteps = Number.isFinite(stepsPerTick)
+      ? Math.max(1, Math.floor(stepsPerTick))
+      : getAdaptiveStepsPerTick(nodeCount, publishIntermediate);
+    const minReadbackInterval = Math.max(1, readbackIntervalMs);
     let alpha = alphaStart;
     let epoch = 0;
+    let lastReadbackAt = -Infinity;
+    let positionsSyncedToCpu = true;
 
     try {
       while (!stopped) {
-        alpha += (0 - alpha) * alphaDecay;
-        writeParams(params, {
-          nNodes: nodeCount,
-          epoch,
-          strength,
-          velocityDecay: 1 - velocityDecay,
-          jitter
-        });
-        device.queue.writeBuffer(paramsBuffer, 0, params.raw);
-
-        const encoder = device.createCommandEncoder();
-        const pass = encoder.beginComputePass();
-        pass.setBindGroup(0, bindGroup);
-        pass.setPipeline(pipelines.collide);
-        pass.dispatchWorkgroups(workgroups);
-        pass.setPipeline(pipelines.apply);
-        pass.dispatchWorkgroups(workgroups);
-        pass.end();
-
-        const shouldPublish = publishIntermediate || alpha < alphaMin;
-        if (shouldPublish) {
-          encoder.copyBufferToBuffer(positionsBuffer, 0, stagingBuffer, 0, positionsData.byteLength);
+        // Drive compute from the browser frame clock so the UI remains responsive.
+        if (publishIntermediate) {
+          await nextFrame();
+          if (stopped) break;
         }
 
-        device.queue.submit([encoder.finish()]);
-        await device.queue.onSubmittedWorkDone();
-        if (stopped) break;
+        const shouldPublishNow =
+          publishIntermediate
+          && (typeof shouldPublishIntermediate === 'function'
+            ? !!shouldPublishIntermediate()
+            : true);
 
-        if (shouldPublish) {
-          const latestPositions = await readPositions(stagingBuffer, nodeCount);
-          applyPositionsToNodes(nodes, latestPositions);
-          if (publishIntermediate) {
-            onTick?.(nodes, alpha, epoch + 1);
+        let reachedFinalAlpha = false;
+        let copiedForBatch = false;
+        const iterationsThisBatch = publishIntermediate ? batchSteps : Math.max(batchSteps, 16);
+
+        for (let batchIndex = 0; batchIndex < iterationsThisBatch && !stopped; batchIndex++) {
+          alpha += (0 - alpha) * alphaDecay;
+          writeParams(params, {
+            nNodes: nodeCount,
+            epoch,
+            strength,
+            velocityDecay: 1 - velocityDecay,
+            jitter
+          });
+          device.queue.writeBuffer(paramsBuffer, 0, params.raw);
+
+          const willFinish = alpha < alphaMin;
+          const now = performance.now();
+          const readbackDue = now - lastReadbackAt >= minReadbackInterval;
+          const shouldCopyThisStep =
+            shouldPublishNow
+            && (batchIndex === iterationsThisBatch - 1 || willFinish)
+            && (willFinish || readbackDue);
+
+          const encoder = device.createCommandEncoder();
+          const pass = encoder.beginComputePass();
+          pass.setBindGroup(0, bindGroup);
+          pass.setPipeline(pipelines.collide);
+          pass.dispatchWorkgroups(workgroups);
+          pass.setPipeline(pipelines.apply);
+          pass.dispatchWorkgroups(workgroups);
+          pass.end();
+
+          if (shouldCopyThisStep) {
+            encoder.copyBufferToBuffer(positionsBuffer, 0, stagingBuffer, 0, positionsData.byteLength);
+            copiedForBatch = true;
+            lastReadbackAt = now;
+          }
+
+          device.queue.submit([encoder.finish()]);
+          epoch++;
+          positionsSyncedToCpu = false;
+
+          if (willFinish) {
+            reachedFinalAlpha = true;
+            break;
           }
         }
 
-        epoch++;
-        if (alpha < alphaMin) {
-          break;
+        await device.queue.onSubmittedWorkDone();
+        if (stopped) break;
+
+        if (publishIntermediate && copiedForBatch) {
+          const latestPositions = await readPositions(stagingBuffer, nodeCount);
+          applyPositionsToNodes(nodes, latestPositions);
+          positionsSyncedToCpu = true;
+          onTick?.(nodes, alpha, epoch);
         }
 
-        if (publishIntermediate) {
-          await nextFrame();
+        if (reachedFinalAlpha) {
+          break;
         }
       }
 
       if (!stopped) {
-        if (!publishIntermediate) {
+        if (!positionsSyncedToCpu) {
           const encoder = device.createCommandEncoder();
           encoder.copyBufferToBuffer(positionsBuffer, 0, stagingBuffer, 0, positionsData.byteLength);
           device.queue.submit([encoder.finish()]);
           await device.queue.onSubmittedWorkDone();
           const latestPositions = await readPositions(stagingBuffer, nodeCount);
           applyPositionsToNodes(nodes, latestPositions);
+          positionsSyncedToCpu = true;
         }
         onComplete?.(nodes, epoch);
       }

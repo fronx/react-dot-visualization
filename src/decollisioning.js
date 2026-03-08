@@ -9,6 +9,56 @@ const DEFAULT_ALPHA_START = 1;
 const DEFAULT_ALPHA_MIN = 0.01;
 const DEFAULT_ALPHA_DECAY = 0.05;
 
+function createFrameEmitter(onFrame) {
+  let rafId = null;
+  let latestNodes = null;
+
+  const flush = () => {
+    rafId = null;
+    if (!latestNodes) return;
+    const nodes = latestNodes;
+    latestNodes = null;
+    onFrame(nodes);
+  };
+
+  return {
+    push(nodes) {
+      latestNodes = nodes;
+      if (rafId != null) return;
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        rafId = window.requestAnimationFrame(flush);
+      } else {
+        rafId = setTimeout(flush, 0);
+      }
+    },
+    flushNow() {
+      if (rafId != null) {
+        if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+          window.cancelAnimationFrame(rafId);
+        } else {
+          clearTimeout(rafId);
+        }
+        rafId = null;
+      }
+      if (!latestNodes) return;
+      const nodes = latestNodes;
+      latestNodes = null;
+      onFrame(nodes);
+    },
+    cancel() {
+      if (rafId != null) {
+        if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+          window.cancelAnimationFrame(rafId);
+        } else {
+          clearTimeout(rafId);
+        }
+      }
+      rafId = null;
+      latestNodes = null;
+    }
+  };
+}
+
 function sendMetric(name, valueMs, tags = {}) {
   const tagStr = Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(',');
   const line = `${name}${tagStr ? ',' + tagStr : ''} value=${valueMs}`;
@@ -72,6 +122,9 @@ function startWebGpuWithFallback({
   webgpuStrength,
   webgpuJitter,
   webgpuVelocityDecay,
+  webgpuStepsPerTick,
+  webgpuReadbackIntervalMs,
+  shouldPublishIntermediate,
   allowCpuFallback
 }) {
   const radii = new Float32Array(nodes.length);
@@ -84,6 +137,9 @@ function startWebGpuWithFallback({
   let fallbackSimulation = null;
   let finalized = false;
   const decollisionT0 = performance.now();
+  const frameEmitter = createFrameEmitter((latestNodes) => {
+    onUpdatePositions([...latestNodes]);
+  });
 
   const startFallback = () => {
     if (fallbackSimulation || !allowCpuFallback) return;
@@ -111,11 +167,15 @@ function startWebGpuWithFallback({
       strength: webgpuStrength,
       jitter: webgpuJitter,
       velocityDecay: webgpuVelocityDecay,
+      stepsPerTick: webgpuStepsPerTick,
+      readbackIntervalMs: webgpuReadbackIntervalMs,
       publishIntermediate: !skipIntermediateFrames,
+      shouldPublishIntermediate,
       onTick: (updatedNodes) => {
-        onUpdatePositions([...updatedNodes]);
+        frameEmitter.push(updatedNodes);
       },
       onComplete: (finalNodes, tickCount) => {
+        frameEmitter.cancel();
         finalized = true;
         sendMetric('decollision_total', performance.now() - decollisionT0, {
           n: nodes.length,
@@ -125,6 +185,7 @@ function startWebGpuWithFallback({
         finalizeDecollision(finalNodes, onUpdatePositions, onDecollisionComplete, skipIntermediateFrames, transitionConfig);
       },
       onError: (error) => {
+        frameEmitter.cancel();
         if (error instanceof WebGpuDecollisionUnavailableError) {
           startFallback();
           return;
@@ -138,6 +199,7 @@ function startWebGpuWithFallback({
       }
     });
   } catch (error) {
+    frameEmitter.cancel();
     if (allowCpuFallback) {
       startFallback();
     } else {
@@ -147,6 +209,7 @@ function startWebGpuWithFallback({
 
   return {
     stop() {
+      frameEmitter.cancel();
       gpuRunner?.stop?.();
       fallbackSimulation?.stop?.();
     },
@@ -188,6 +251,9 @@ export function decollisioning(
       webgpuStrength: runtimeOptions.webgpuStrength ?? 1,
       webgpuJitter: runtimeOptions.webgpuJitter ?? 1e-6,
       webgpuVelocityDecay: runtimeOptions.webgpuVelocityDecay ?? 0.4,
+      webgpuStepsPerTick: runtimeOptions.webgpuStepsPerTick ?? 2,
+      webgpuReadbackIntervalMs: runtimeOptions.webgpuReadbackIntervalMs ?? 16,
+      shouldPublishIntermediate: runtimeOptions.shouldPublishIntermediate,
       allowCpuFallback
     });
   }

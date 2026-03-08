@@ -169,6 +169,19 @@ const DotVisualization = forwardRef((props, ref) => {
   const didInitialAutoFitRef = useRef(false);
   const autoZoomTimeoutRef = useRef(null);
   const prevCacheKeyRef = useRef(cacheKey);
+  const interactionActiveRef = useRef(false);
+  const interactionIdleTimerRef = useRef(null);
+
+  const markInteractionActive = useCallback(() => {
+    interactionActiveRef.current = true;
+    if (interactionIdleTimerRef.current) {
+      clearTimeout(interactionIdleTimerRef.current);
+    }
+    interactionIdleTimerRef.current = setTimeout(() => {
+      interactionActiveRef.current = false;
+      interactionIdleTimerRef.current = null;
+    }, 120);
+  }, []);
 
   // Keep latest dotStyles without triggering decollision simulation restarts
   const dotStylesRef = useLatest(dotStyles);
@@ -238,6 +251,11 @@ const DotVisualization = forwardRef((props, ref) => {
       hasPositionsChanged(validData, previousDataRef.current);
 
     let processedValidData = validData;
+
+    // If fresh input arrives while a decollision run is active, queue another pass.
+    if (enableDecollisioning && decollisionSnapshotRef.current && positionsChanged) {
+      pendingDecollisionRef.current = true;
+    }
 
     // Seed from shared cross-renderer cache on first mount so we immediately show
     // decollisioned positions without a catch-up simulation.
@@ -343,15 +361,20 @@ const DotVisualization = forwardRef((props, ref) => {
         useCanvas,
         initialTransform,
         onZoomStart: (event) => {
+          markInteractionActive();
           setIsDragging(true);
           if (onZoomStartRef.current) onZoomStartRef.current(event);
         },
         onZoomEnd: (event) => {
+          markInteractionActive();
           setIsDragging(false);
           updateCountOnTransformChangeRef.current();
           if (onZoomEndRef.current) onZoomEndRef.current(event);
         },
-        onTransformChange: () => updateCountOnTransformChangeRef.current()
+        onTransformChange: () => {
+          markInteractionActive();
+          updateCountOnTransformChangeRef.current();
+        }
       });
     } else {
       // Update config when props change
@@ -404,7 +427,7 @@ const DotVisualization = forwardRef((props, ref) => {
       }
       setIsZoomSetupComplete(false);
     };
-  }, [processedData, zoomExtent, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
+  }, [processedData, zoomExtent, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom, markInteractionActive]);
 
   // Handle container resize - update container dimensions when window resizes
   useEffect(() => {
@@ -456,19 +479,25 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Track live transition data for canvas renderer during decollision
   const liveTransitionDataRef = useRef(null);
+  const pendingInteractionFlushRef = useRef(false);
 
   // Callback for decollisioning updates - wrapped to prevent infinite loops
   const onUpdateNodes = useCallback((nodes) => {
     // Store live transition data for other render paths to use
     liveTransitionDataRef.current = nodes;
 
+    // During active zoom/pan, skip decollision repaints to keep interaction snappy.
+    if (isDraggingRef.current || interactionActiveRef.current) {
+      pendingInteractionFlushRef.current = true;
+      return;
+    }
+
+    pendingInteractionFlushRef.current = false;
+
     if (useCanvas && coloredDotsRef.current) {
       // Update canvas directly with custom data without triggering React re-render
       const currentTransform = zoomManager.current?.getCurrentTransform();
       coloredDotsRef.current.renderCanvasWithData(nodes, currentTransform);
-      nodes.forEach(node => {
-        memoizedPositions.current.set(node.id, { x: node.x, y: node.y });
-      });
     } else {
       // For SVG mode, update DOM directly
       const dots0 = d3.selectAll('#colored-dots circle').data(nodes);
@@ -476,7 +505,25 @@ const DotVisualization = forwardRef((props, ref) => {
       dots0.attr('cx', d => d.x).attr('cy', d => d.y);
       dots1.attr('cx', d => d.x).attr('cy', d => d.y);
     }
-  }, [useCanvas]);
+  }, [useCanvas, isDraggingRef]);
+
+  // Flush one deferred decollision frame right after interaction ends.
+  useEffect(() => {
+    if (isDragging || !pendingInteractionFlushRef.current) return;
+    const nodes = liveTransitionDataRef.current;
+    if (!nodes) return;
+
+    pendingInteractionFlushRef.current = false;
+    if (useCanvas && coloredDotsRef.current) {
+      const currentTransform = zoomManager.current?.getCurrentTransform();
+      coloredDotsRef.current.renderCanvasWithData(nodes, currentTransform);
+    } else {
+      const dots0 = d3.selectAll('#colored-dots circle').data(nodes);
+      const dots1 = d3.selectAll('#interaction-layer circle').data(nodes);
+      dots0.attr('cx', d => d.x).attr('cy', d => d.y);
+      dots1.attr('cx', d => d.x).attr('cy', d => d.y);
+    }
+  }, [isDragging, useCanvas]);
 
   // Shared primitive for syncing decollision state back to React
   // This ensures both completion and cancellation paths keep state synchronized
@@ -489,6 +536,10 @@ const DotVisualization = forwardRef((props, ref) => {
 
     // Only sync positions if we have data (meaning rendering actually happened)
     if (finalData) {
+      memoizedPositions.current.clear();
+      for (const node of finalData) {
+        memoizedPositions.current.set(node.id, { x: node.x, y: node.y });
+      }
       updateStablePositions(finalData, isIncrementalUpdate);
       setProcessedData(finalData);
     }
@@ -501,16 +552,6 @@ const DotVisualization = forwardRef((props, ref) => {
   // from re-renders would restart the simulation, causing dots to jump back to start.
   const stableOnUpdateNodes = useStableCallback(onUpdateNodes);
   const stableOnDecollisionComplete = useStableCallback(onDecollisionComplete);
-
-  // Detect when data changes during active decollision
-  // This effect watches for new data arriving while a simulation is in flight
-  useEffect(() => {
-    if (enableDecollisioning && decollisionSnapshotRef.current &&
-      processedData.length > decollisionSnapshotRef.current.length) {
-      debugLog('New data detected during decollision - marking for retry');
-      pendingDecollisionRef.current = true;
-    }
-  }, [processedData, enableDecollisioning, debugLog]);
 
   // Decollision state machine with "point of no return" logic
   //
@@ -567,7 +608,12 @@ const DotVisualization = forwardRef((props, ref) => {
     const isCatchUp = !enableDecollisioning && memoizedPositions.current.size === 0;
     const skipFrames = isCatchUp || isIncrementalUpdate;
 
-    const simulation = decollisioning(dataSnapshot, stableOnUpdateNodes, fnDotSize, (finalData) => {
+    let cancelled = false;
+    const simulation = decollisioning(dataSnapshot, (nodes) => {
+      if (cancelled) return;
+      stableOnUpdateNodes(nodes);
+    }, fnDotSize, (finalData) => {
+      if (cancelled) return;
       debugLog('Decollision complete - syncing React state');
 
       // Check if new data arrived while simulation was running
@@ -586,22 +632,25 @@ const DotVisualization = forwardRef((props, ref) => {
 
       // Notify parent, including whether more work is pending
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
-    }, skipFrames, transitionConfig, { engine: decollisionEngine });
+    }, skipFrames, transitionConfig, {
+      engine: decollisionEngine,
+      shouldPublishIntermediate: () => !(isDraggingRef.current || interactionActiveRef.current)
+    });
 
     // Store simulation reference for potential cancellation
     decollisionSimRef.current = simulation;
 
     return () => {
+      cancelled = true;
       simulation.stop();
-
-      // Sync state using shared primitive
-      // Only sync if positions diverged (onUpdateNodes was called at least once)
-      if (liveTransitionDataRef.current) {
-        syncDecollisionState(liveTransitionDataRef.current);
-      } else {
-        // No rendering happened, just clear refs
-        syncDecollisionState(null);
+      if (decollisionSimRef.current === simulation) {
+        decollisionSimRef.current = null;
       }
+      if (decollisionSnapshotRef.current === dataSnapshot) {
+        decollisionSnapshotRef.current = null;
+        pendingDecollisionRef.current = false;
+      }
+      liveTransitionDataRef.current = null;
     };
   }, [enableDecollisioning, decollisionEngine, processedData.length, isIncrementalUpdate, defaultSize, useCanvas]);
 
@@ -640,6 +689,9 @@ const DotVisualization = forwardRef((props, ref) => {
     return () => {
       if (autoZoomTimeoutRef.current) {
         clearTimeout(autoZoomTimeoutRef.current);
+      }
+      if (interactionIdleTimerRef.current) {
+        clearTimeout(interactionIdleTimerRef.current);
       }
     };
   }, []);
