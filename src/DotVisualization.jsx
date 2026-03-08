@@ -38,6 +38,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onDecollisionComplete,
     sharedPositionCache = null,
     enableDecollisioning = true,
+    decollisionEngine = 'auto',
     isIncrementalUpdate = false,
     transitionDuration = 350,
     transitionEasing = d3.easeCubicOut,
@@ -585,7 +586,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
       // Notify parent, including whether more work is pending
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
-    }, skipFrames, transitionConfig);
+    }, skipFrames, transitionConfig, { engine: decollisionEngine });
 
     // Store simulation reference for potential cancellation
     decollisionSimRef.current = simulation;
@@ -602,7 +603,7 @@ const DotVisualization = forwardRef((props, ref) => {
         syncDecollisionState(null);
       }
     };
-  }, [enableDecollisioning, processedData.length, isIncrementalUpdate, defaultSize, useCanvas]);
+  }, [enableDecollisioning, decollisionEngine, processedData.length, isIncrementalUpdate, defaultSize, useCanvas]);
 
 
   // Handle mouse leave to reset interaction states

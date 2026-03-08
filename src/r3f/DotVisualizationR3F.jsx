@@ -51,6 +51,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onDragStart,
     onDecollisionComplete,
     enableDecollisioning = true,
+    decollisionEngine = 'auto',
     isIncrementalUpdate = false,
     transitionDuration = 500,
     transitionEasing = d3.easeCubicOut,
@@ -228,7 +229,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         onDecollisionCompleteRef.current?.(finalNodes);
       },
       skipFrames,
-      transitionConfig
+      transitionConfig,
+      { engine: decollisionEngine }
     );
     decollisionSimRef.current = sim;
 
@@ -242,6 +244,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     data,
     cacheKey,
     enableDecollisioning,
+    decollisionEngine,
     isIncrementalUpdate,
     transitionDuration,
     transitionEasing,
