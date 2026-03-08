@@ -13,8 +13,8 @@ import { buildSpatialGrid, queryCell } from './spatialIndex.js';
  * @returns {Object} Spatial index with grid and metadata
  */
 export const buildSpatialIndex = (data, getSizeFunc, transform, cellSize = 20) => {
-  const entries = data.map((item) => {
-    const size = getSizeFunc(item);
+  const entries = data.map((item, index) => {
+    const size = getSizeFunc(item, index);
     const radius = size;
 
     // Transform to screen coordinates (same as rendering)

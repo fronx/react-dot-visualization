@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
-import { getDotSize, getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
+import { getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
 import { PrioritizedList } from './PrioritizedList.js';
 import { useDebug } from './useDebug.js';
@@ -9,6 +9,8 @@ import { transformToCSSPixels } from './utils.js';
 import { usePulseAnimation } from './usePulseAnimation.js';
 import { useCache } from './useCache.js';
 import { calculateAdaptiveRingRadius } from './pulseRingUtils.js';
+
+const EMPTY_RADIUS_OVERRIDES = new Map();
 
 const ColoredDots = React.memo(forwardRef((props, ref) => {
   const {
@@ -20,6 +22,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     defaultSize = 2,
     defaultOpacity = 0.7,
     dotStyles = new Map(),
+    radiusOverrides = EMPTY_RADIUS_OVERRIDES,
     hoveredDotId = null,
     hoverSizeMultiplier = 1.5,
     hoverOpacity = 1.0,
@@ -51,7 +54,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
   // Style cache - invalidates when any style-affecting prop changes
   const styleCache = useCache([
-    data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity,
+    data, dotStyles, radiusOverrides, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity,
     hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider
   ], {
     debug,
@@ -95,32 +98,35 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     return getColor(item, index);
   };
 
-  const getSize = (item) => {
-    const baseSize = getDotSize(item, dotStyles, defaultSize);
-    const baseColor = getColor(item, data.indexOf(item));
-    const { sizeMultiplier } = getPulseMultipliers(item.id, baseColor);
+  const getPulseData = (item, index, baseColor) => {
+    const resolvedColor = baseColor ?? getColor(item, index);
+    return getPulseMultipliers(item.id, resolvedColor);
+  };
+
+  const getSize = (item, index, pulseData) => {
+    const customStyles = dotStyles.get(item.id);
+    const baseSize = customStyles?.r ?? radiusOverrides.get(item.id) ?? item.size ?? defaultSize;
+    const resolvedPulseData = pulseData ?? getPulseData(item, index);
+    const { sizeMultiplier } = resolvedPulseData;
     let finalSize = baseSize * sizeMultiplier;
 
     if (hoveredDotId === item.id) {
       // Check for per-dot hover multiplier override
-      const customStyles = dotStyles.get(item.id);
       const effectiveHoverMultiplier = customStyles?.hoverSizeMultiplier ?? hoverSizeMultiplier;
       finalSize *= effectiveHoverMultiplier;
     }
     return finalSize;
   };
 
-  const getOpacity = (item) => {
+  const getOpacity = (item, index, pulseData) => {
     const baseOpacity = hoveredDotId === item.id ? hoverOpacity : defaultOpacity;
-    const baseColor = getColor(item, data.indexOf(item));
-    const { opacityMultiplier } = getPulseMultipliers(item.id, baseColor);
+    const resolvedPulseData = pulseData ?? getPulseData(item, index);
+    const { opacityMultiplier } = resolvedPulseData;
     return baseOpacity * opacityMultiplier;
   };
 
-  const getEffectiveColor = (item, index) => {
-    const baseColor = getColor(item, index);
-    const { color } = getPulseMultipliers(item.id, baseColor);
-    return color;
+  const getEffectiveColor = (_item, _index, pulseData) => {
+    return pulseData.color;
   };
 
   // Unified function to compute final styles for both SVG and Canvas
@@ -136,12 +142,15 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     return styleCache.getCached(
       cacheKey,
       () => {
+        const baseColor = getColor(item, index);
+        const pulseData = getPulseData(item, index, baseColor);
         const baseStyles = {
-          fill: isCanvas ? getEffectiveColor(item, index) : getFill(item, index),
+          fill: isCanvas ? getEffectiveColor(item, index, pulseData) : getFill(item, index),
           stroke: stroke,
           strokeWidth: strokeWidth,
-          opacity: getOpacity(item),
-          size: getSize(item)
+          opacity: getOpacity(item, index, pulseData),
+          size: getSize(item, index, pulseData),
+          __pulseData: pulseData
         };
 
         // Apply custom dotStyles
@@ -154,7 +163,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
         // Hover opacity takes precedence ONLY if custom opacity is not set
         if (isHovered && customStyles.opacity === undefined) {
-          mergedStyles.opacity = getOpacity(item);
+          mergedStyles.opacity = getOpacity(item, index, pulseData);
         }
 
         return mergedStyles;
@@ -257,13 +266,13 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       // Canvas rendering: use unified styling logic
       const drawDot = (item, index) => {
         const styles = computeFinalStyles(item, index, true);
-        const baseColor = getColor(item, index);
-        const pulseData = getPulseMultipliers(item.id, baseColor);
-        const radius = styles.size;
+        const { __pulseData, ...renderStyles } = styles;
+        const pulseData = __pulseData ?? getPulseData(item, index);
+        const radius = renderStyles.size;
 
         // Allow custom renderer to override default drawing
         if (customDotRenderer) {
-          const didRender = customDotRenderer(canvasContext, item, styles, {
+          const didRender = customDotRenderer(canvasContext, item, renderStyles, {
             radius,
             pulseData,
             isHovered: hoveredDotId === item.id,
@@ -287,7 +296,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
             debug
           });
 
-          canvasContext.globalAlpha = pulseData.ringData.opacity * styles.opacity;
+          canvasContext.globalAlpha = pulseData.ringData.opacity * renderStyles.opacity;
           canvasContext.fillStyle = pulseData.ringData.color;
           canvasContext.beginPath();
           canvasContext.arc(item.x, item.y, ringRadius, 0, 2 * Math.PI);
@@ -295,15 +304,15 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         }
 
         // Draw main dot
-        canvasContext.globalAlpha = styles.opacity;
-        canvasContext.fillStyle = styles.fill;
-        canvasContext.strokeStyle = styles.stroke;
-        canvasContext.lineWidth = styles.strokeWidth;
+        canvasContext.globalAlpha = renderStyles.opacity;
+        canvasContext.fillStyle = renderStyles.fill;
+        canvasContext.strokeStyle = renderStyles.stroke;
+        canvasContext.lineWidth = renderStyles.strokeWidth;
 
         canvasContext.beginPath();
         canvasContext.arc(item.x, item.y, radius, 0, 2 * Math.PI);
         canvasContext.fill();
-        if (styles.strokeWidth > 0) {
+        if (renderStyles.strokeWidth > 0) {
           canvasContext.stroke();
         }
       };
@@ -324,7 +333,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
       dataToRender.forEach((item, index) => {
         // Viewport culling: skip dots that are completely outside visible bounds
-        const radius = getSize(item);
+        const radius = getSize(item, index);
         const isVisible =
           item.x + radius >= visibleBounds.left &&
           item.x - radius <= visibleBounds.right &&
@@ -450,7 +459,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     debugLog('Canvas effect render:', { dataLength: data.length, isDecollisioning });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
-  }, [data, dotStyles, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer]);
+  }, [data, dotStyles, radiusOverrides, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer]);
 
 
 
@@ -491,7 +500,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       renderDots();
     }
     // SVG needs all dependencies including dotStyles for positioning
-  }, [data, dotStyles, dotId, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider, useCanvas, customDotRenderer]);
+  }, [data, dotStyles, radiusOverrides, dotId, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, hoveredDotId, hoverSizeMultiplier, hoverOpacity, useImages, imageProvider, hoverImageProvider, useCanvas, customDotRenderer]);
 
   // Canvas interaction handlers using utility hook
   const canvasInteractionHandlers = useCanvasInteractions({
@@ -550,7 +559,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
           <circle
             id={dotId(0, item)}
             key={dotId(0, item)}
-            r={getSize(item)}
+            r={getSize(item, index)}
             cx={item.x}
             cy={item.y}
             fill={getFill(item, index)}

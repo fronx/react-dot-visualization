@@ -15,6 +15,8 @@ import { usePositionChangeDetection } from './usePositionChangeDetection.js';
 import { decollisioning } from './decollisioning.js';
 import { getDotSize } from './dotUtils.js'
 
+const EMPTY_RADIUS_OVERRIDES = new Map();
+
 const DotVisualization = forwardRef((props, ref) => {
   const {
     data = [],
@@ -52,6 +54,7 @@ const DotVisualization = forwardRef((props, ref) => {
     defaultSize = 2,
     defaultOpacity = 0.7,
     dotStyles = new Map(),
+    radiusOverrides = EMPTY_RADIUS_OVERRIDES,
     useImages = false,
     imageProvider,
     hoverImageProvider,
@@ -757,6 +760,7 @@ const DotVisualization = forwardRef((props, ref) => {
             defaultSize={defaultSize}
             defaultOpacity={defaultOpacity}
             dotStyles={dotStyles}
+            radiusOverrides={radiusOverrides}
             hoveredDotId={hoveredDotId}
             hoverSizeMultiplier={hoverSizeMultiplier}
             hoverOpacity={hoverOpacity}
@@ -813,6 +817,7 @@ const DotVisualization = forwardRef((props, ref) => {
             defaultSize={defaultSize}
             defaultOpacity={defaultOpacity}
             dotStyles={dotStyles}
+            radiusOverrides={radiusOverrides}
             hoveredDotId={hoveredDotId}
             hoverSizeMultiplier={hoverSizeMultiplier}
             hoverOpacity={hoverOpacity}
