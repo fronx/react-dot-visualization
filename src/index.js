@@ -1,4 +1,5 @@
 export { default as DotVisualization } from './DotVisualization.jsx';
+export { default as DotVisualizationR3F } from './r3f/DotVisualizationR3F.jsx';
 export { default as DotVisualizationSigma } from './DotVisualizationSigma.jsx';
 export { default as ColoredDots } from './ColoredDots.jsx';
 export { default as InteractionLayer } from './InteractionLayer.jsx';

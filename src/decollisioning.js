@@ -1,8 +1,15 @@
 import * as d3 from 'd3';
 
+function sendMetric(name, valueMs, tags = {}) {
+  const tagStr = Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(',');
+  const line = `${name}${tagStr ? ',' + tagStr : ''} value=${valueMs}`;
+  try { fetch('http://localhost:8428/write', { method: 'POST', body: line }).catch(() => {}); } catch (_) {}
+}
+
 export function decollisioning(data, onUpdatePositions, fnDotSize, onDecollisionComplete, skipIntermediateFrames = false, transitionConfig = null) {
   const nodes = data.map(d => ({ ...d }));
   let tickCount = 0;
+  const decollisionT0 = performance.now();
   const simulation = d3.forceSimulation(nodes)
     .alpha(1)
     .alphaMin(0.01)
@@ -18,6 +25,7 @@ export function decollisioning(data, onUpdatePositions, fnDotSize, onDecollision
       }
     })
     .on('end', () => {
+      sendMetric('decollision_total', performance.now() - decollisionT0, { n: nodes.length, ticks: tickCount });
       // For incremental updates with transition, animate from stable to final positions
       if (skipIntermediateFrames && transitionConfig?.enabled && transitionConfig?.stablePositions) {
         startTransition(nodes, transitionConfig, onUpdatePositions, onDecollisionComplete);
