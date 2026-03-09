@@ -66,6 +66,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Instead, the pulse callback will use whatever data is currently in the 'data' prop
   // This is acceptable because pulse animations are visual effects that don't need frame-perfect sync
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
+    // During decollision, DotVisualization pushes live positions directly via
+    // renderCanvasWithData(). Skip pulse-triggered redraws to avoid dual writers
+    // competing between processedData and live transition frames.
+    if (isDecollisioning) return;
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
   } : null, debug);
@@ -455,11 +459,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // This prevents flickering during hover
   useEffect(() => {
     if (!useCanvas) { canvasDimensionsRef.current = null; return; }
+    // Decollision path owns canvas writes through renderCanvasWithData().
+    // Skipping this effect avoids flicker from stale processedData redraws.
+    if (isDecollisioning) return;
 
     debugLog('Canvas effect render:', { dataLength: data.length, isDecollisioning });
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
-  }, [data, dotStyles, radiusOverrides, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer]);
+  }, [data, dotStyles, radiusOverrides, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer, isDecollisioning]);
 
 
 

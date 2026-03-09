@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useCallback, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useImperativeHandle, useMemo, forwardRef } from 'react';
 import * as d3 from 'd3';
 import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
@@ -14,6 +14,11 @@ import { useStablePositions } from './useStablePositions.js';
 import { usePositionChangeDetection } from './usePositionChangeDetection.js';
 import { decollisioning } from './decollisioning.js';
 import { getDotSize } from './dotUtils.js'
+import {
+  cancelDecollisionWithInvariants,
+  chooseDecollisionLaunchMode,
+  shouldQueueDecollisionRetry
+} from './decollisionStateMachine.js';
 
 const EMPTY_RADIUS_OVERRIDES = new Map();
 
@@ -87,8 +92,9 @@ const DotVisualization = forwardRef((props, ref) => {
   const [containerDimensions, setContainerDimensions] = useState(null);
 
   // Fixed viewBox with aspect ratio matching container
-  // World coordinates are separate from camera framing
-  const viewBox = (() => {
+  // World coordinates are separate from camera framing.
+  // Memoizing prevents referential churn that can retrigger heavy effects.
+  const viewBox = useMemo(() => {
     if (!containerDimensions) {
       return [0, 0, 100, 100]; // Default square until container measured
     }
@@ -98,7 +104,7 @@ const DotVisualization = forwardRef((props, ref) => {
     const baseWidth = baseHeight * aspectRatio;
 
     return [0, 0, baseWidth, baseHeight];
-  })();
+  }, [containerDimensions]);
   const [isDragging, setIsDragging] = useState(false);
   const [isZoomSetupComplete, setIsZoomSetupComplete] = useState(false);
   const [visibleDotCount, setVisibleDotCount] = useState(0);
@@ -128,6 +134,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const isDraggingRef = useLatest(isDragging);
   const onZoomStartRef = useLatest(onZoomStart);
   const onZoomEndRef = useLatest(onZoomEnd);
+  const onLeaveRef = useLatest(onLeave);
 
   const debugLog = useDebug(debug);
 
@@ -139,7 +146,7 @@ const DotVisualization = forwardRef((props, ref) => {
     if (!currentTransform) return;
 
     const count = countVisibleDots(processedData, currentTransform, viewBox, defaultSize);
-    setVisibleDotCount(count);
+    setVisibleDotCount(prev => prev === count ? prev : count);
     debugLog('Visible dots:', count);
   }, [processedData, viewBox, defaultSize, debugLog]);
 
@@ -253,7 +260,11 @@ const DotVisualization = forwardRef((props, ref) => {
     let processedValidData = validData;
 
     // If fresh input arrives while a decollision run is active, queue another pass.
-    if (enableDecollisioning && decollisionSnapshotRef.current && positionsChanged) {
+    if (shouldQueueDecollisionRetry({
+      enableDecollisioning,
+      hasActiveSnapshot: Boolean(decollisionSnapshotRef.current),
+      positionsChanged
+    })) {
       pendingDecollisionRef.current = true;
     }
 
@@ -327,15 +338,15 @@ const DotVisualization = forwardRef((props, ref) => {
 
   }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate]);
 
-  // Initialize and set up zoom behavior with ZoomManager
+  // Initialize and set up zoom behavior with ZoomManager once.
   useEffect(() => {
-    if (!processedData.length || !zoomRef.current || typeof window === 'undefined') {
+    if (!zoomRef.current || typeof window === 'undefined') {
       return;
     }
 
     // Create canvas renderer function
     const canvasRenderer = (transform) => {
-      if (useCanvas && coloredDotsRef.current) {
+      if (coloredDotsRef.current) {
         // Use live transition data if available (during decollision), otherwise fall back to normal render
         if (liveTransitionDataRef.current) {
           coloredDotsRef.current.renderCanvasWithData(liveTransitionDataRef.current, transform);
@@ -362,12 +373,12 @@ const DotVisualization = forwardRef((props, ref) => {
         initialTransform,
         onZoomStart: (event) => {
           markInteractionActive();
-          setIsDragging(true);
+          setIsDragging(prev => prev ? prev : true);
           if (onZoomStartRef.current) onZoomStartRef.current(event);
         },
         onZoomEnd: (event) => {
           markInteractionActive();
-          setIsDragging(false);
+          setIsDragging(prev => prev ? false : prev);
           updateCountOnTransformChangeRef.current();
           if (onZoomEndRef.current) onZoomEndRef.current(event);
         },
@@ -376,23 +387,6 @@ const DotVisualization = forwardRef((props, ref) => {
           updateCountOnTransformChangeRef.current();
         }
       });
-    } else {
-      // Update config when props change
-      zoomManager.current.updateConfig({
-        zoomExtent,
-        defaultSize,
-        fitMargin,
-        occludeLeft,
-        occludeRight,
-        occludeTop,
-        occludeBottom,
-        useCanvas
-      });
-    }
-
-    // Set viewBox if available
-    if (viewBox) {
-      zoomManager.current.setViewBox(viewBox);
     }
 
     // Initialize zoom behavior
@@ -401,16 +395,16 @@ const DotVisualization = forwardRef((props, ref) => {
     // Add global event listeners
     const handleGlobalMouseUp = () => {
       if (isDraggingRef.current) {
-        setIsDragging(false);
+        setIsDragging(prev => prev ? false : prev);
       }
     };
 
     const handleWindowBlur = () => {
       debugLog('🔍 Window blur - resetting all states');
       clearHover();
-      setIsDragging(false);
-      if (onLeave) {
-        onLeave(null, null);
+      setIsDragging(prev => prev ? false : prev);
+      if (onLeaveRef.current) {
+        onLeaveRef.current(null, null);
       }
     };
 
@@ -424,10 +418,30 @@ const DotVisualization = forwardRef((props, ref) => {
       window.removeEventListener('blur', handleWindowBlur);
       if (zoomManager.current) {
         zoomManager.current.destroy();
+        zoomManager.current = null;
       }
-      setIsZoomSetupComplete(false);
     };
-  }, [processedData, zoomExtent, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom, markInteractionActive]);
+  }, []);
+
+  // Keep zoom config and viewBox in sync without reinitializing listeners/handlers.
+  useEffect(() => {
+    if (!zoomManager.current) return;
+
+    zoomManager.current.updateConfig({
+      zoomExtent,
+      defaultSize,
+      fitMargin,
+      occludeLeft,
+      occludeRight,
+      occludeTop,
+      occludeBottom,
+      useCanvas
+    });
+
+    if (viewBox) {
+      zoomManager.current.setViewBox(viewBox);
+    }
+  }, [zoomExtent, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
   // Handle container resize - update container dimensions when window resizes
   useEffect(() => {
@@ -566,10 +580,13 @@ const DotVisualization = forwardRef((props, ref) => {
   // data, creating visual glitches. The snapshot ensures atomic "launch -> animate -> land".
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    // Skip only when decollision is disabled AND we already have cached results.
-    // If cache is empty (e.g. renderer just mounted after a switch), fall through
-    // and run decollision once to build the cache.
-    if (!enableDecollisioning && memoizedPositions.current.size > 0) {
+    const launchMode = chooseDecollisionLaunchMode({
+      enableDecollisioning,
+      positionsAreIntermediate,
+      hasMemoizedPositions: memoizedPositions.current.size > 0
+    });
+
+    if (launchMode === 'skip-intermediate' || launchMode === 'skip-cached') {
       decollisionSnapshotRef.current = null;
       pendingDecollisionRef.current = false;
       return;
@@ -605,7 +622,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Catch-up mode: renderer mounted fresh (no memoized positions) but decollision
     // phase already passed. Run silently — no intermediate frames — to avoid competing
     // state updates between the tick callbacks and the data effect.
-    const isCatchUp = !enableDecollisioning && memoizedPositions.current.size === 0;
+    const isCatchUp = launchMode === 'run-catchup';
     const skipFrames = isCatchUp || isIncrementalUpdate;
 
     let cancelled = false;
@@ -652,7 +669,7 @@ const DotVisualization = forwardRef((props, ref) => {
       }
       liveTransitionDataRef.current = null;
     };
-  }, [enableDecollisioning, decollisionEngine, processedData.length, isIncrementalUpdate, defaultSize, useCanvas]);
+  }, [enableDecollisioning, decollisionEngine, processedData.length, isIncrementalUpdate, defaultSize, useCanvas, positionsAreIntermediate]);
 
 
   // Handle mouse leave to reset interaction states
@@ -699,19 +716,20 @@ const DotVisualization = forwardRef((props, ref) => {
 
   // Cancel any ongoing decollision animation, preserving current positions
   const cancelDecollision = useCallback(() => {
-    if (decollisionSimRef.current) {
-      debugLog('Cancelling ongoing decollision');
-      decollisionSimRef.current.stop();
-      // Save in-progress positions so the next decollision starts from here
-      // instead of snapping back to pre-decollision positions
-      const snapshot = decollisionSnapshotRef.current;
-      if (snapshot) {
-        syncDecollisionState(snapshot);
-      } else {
+    cancelDecollisionWithInvariants({
+      simulation: decollisionSimRef.current,
+      debugLog,
+      livePositions: liveTransitionDataRef.current,
+      snapshotPositions: decollisionSnapshotRef.current,
+      syncDecollisionState,
+      clearDecollisionState: () => {
         decollisionSimRef.current = null;
+        decollisionSnapshotRef.current = null;
         pendingDecollisionRef.current = false;
+        liveTransitionDataRef.current = null;
+        pendingInteractionFlushRef.current = false;
       }
-    }
+    });
   }, [debugLog, syncDecollisionState]);
 
   // Get current positions (including any in-progress decollision positions)
