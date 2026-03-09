@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 
 /**
  * Hook to manage stable positions for incremental updates
@@ -10,18 +10,24 @@ import { useState, useCallback } from 'react';
  */
 export function useStablePositions() {
   const [stablePositions, setStablePositions] = useState([]);
+  // Mirror length in a ref so shouldUseStablePositions has a stable identity
+  // and doesn't force effects that depend on it to re-run
+  const stableLengthRef = useRef(0);
 
   const updateStablePositions = useCallback((finalData, isIncremental) => {
+    stableLengthRef.current = finalData.length;
     setStablePositions([...finalData]);
   }, []);
 
   const clearStablePositions = useCallback(() => {
+    stableLengthRef.current = 0;
     setStablePositions([]);
   }, []);
 
+  // Stable identity — reads length from ref, never changes
   const shouldUseStablePositions = useCallback((isIncrementalUpdate) => {
-    return isIncrementalUpdate && stablePositions.length > 0;
-  }, [stablePositions.length]);
+    return isIncrementalUpdate && stableLengthRef.current > 0;
+  }, []);
 
   return {
     stablePositions,

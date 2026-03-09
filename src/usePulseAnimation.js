@@ -1,10 +1,13 @@
-import { useState, useRef, useEffect } from 'react';
+import { useRef, useEffect, useMemo } from 'react';
 import * as d3 from 'd3';
 import { useFrameBudget } from './useFrameBudget';
 import { useDebug } from './useDebug.js';
 
 export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) => {
-  const [time, setTime] = useState(0);
+  // Use a ref for animation time — no React re-renders needed.
+  // Canvas redraws are driven by onAnimationFrame(), and the returned
+  // interpolation function reads timeRef.current at draw time.
+  const timeRef = useRef(0);
   const frameRef = useRef();
 
   const TARGET_FPS = 30;
@@ -20,10 +23,21 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
     debug
   });
 
-  const pulseDots = new Map();
+  // Memoize pulse config to avoid recreating on every render
+  const pulseDotCount = useMemo(() => {
+    let count = 0;
+    for (const [, style] of dotStyles) {
+      if (style?.pulse) count++;
+    }
+    return count;
+  }, [dotStyles]);
+
+  // Build pulse config map as a ref (read at draw time, not render time)
+  const pulseDotConfigRef = useRef(new Map());
+  pulseDotConfigRef.current = new Map();
   for (const [id, style] of dotStyles) {
     if (style?.pulse) {
-      pulseDots.set(id, {
+      pulseDotConfigRef.current.set(id, {
         duration: style.pulse.duration || 1250,
         sizeRange: style.pulse.sizeRange || 0.3,
         opacityRange: style.pulse.opacityRange || 0,
@@ -36,22 +50,32 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
     }
   }
 
+  // Keep stable refs for callbacks used in the animation loop
+  const onAnimationFrameRef = useRef(onAnimationFrame);
+  onAnimationFrameRef.current = onAnimationFrame;
+  const shouldRenderRef = useRef(shouldRender);
+  shouldRenderRef.current = shouldRender;
+  const getStatsRef = useRef(getStats);
+  getStatsRef.current = getStats;
+  const debugLogRef = useRef(debugLog);
+  debugLogRef.current = debugLog;
+
   useEffect(() => {
-    if (pulseDots.size === 0) return;
+    if (pulseDotCount === 0) return;
 
     const animate = (t) => {
-      setTime(t);
+      timeRef.current = t;
 
       // Only trigger expensive canvas redraw if frame budget allows
       // This prevents trying to render faster than the system can handle,
       // which causes janky, inconsistent frame rates
-      if (shouldRender()) {
-        onAnimationFrame?.();
+      if (shouldRenderRef.current()) {
+        onAnimationFrameRef.current?.();
 
         // Optional: Log performance warnings when debug is enabled
-        const stats = getStats();
+        const stats = getStatsRef.current();
         if (stats.actualFPS < THRESHOLD_FPS && stats.actualFPS > 0) {
-          debugLog(`[usePulseAnimation] Low FPS detected: ${stats.actualFPS.toFixed(1)} FPS (dropped ${stats.droppedFrames} frames)`);
+          debugLogRef.current(`[usePulseAnimation] Low FPS detected: ${stats.actualFPS.toFixed(1)} FPS (dropped ${stats.droppedFrames} frames)`);
         }
       }
 
@@ -60,10 +84,10 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
 
     frameRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [pulseDots.size, onAnimationFrame, shouldRender, getStats, debugLog]);
+  }, [pulseDotCount]); // Only restart loop when pulse count changes
 
   return (dotId, baseColor) => {
-    const config = pulseDots.get(dotId);
+    const config = pulseDotConfigRef.current.get(dotId);
     if (!config) return {
       sizeMultiplier: 1,
       opacityMultiplier: 1,
@@ -71,6 +95,7 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
       ringData: null
     };
 
+    const time = timeRef.current;
     const phase = (time % config.duration) / config.duration;
 
     if (config.ringEffect) {

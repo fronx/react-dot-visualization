@@ -325,7 +325,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Update visible dot count when data changes
     updateVisibleDotCount();
 
-  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate, stablePositions.length]);
+  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate]);
 
   // Initialize and set up zoom behavior with ZoomManager
   useEffect(() => {
@@ -697,16 +697,22 @@ const DotVisualization = forwardRef((props, ref) => {
   }, []);
 
 
-  // Cancel any ongoing decollision animation
+  // Cancel any ongoing decollision animation, preserving current positions
   const cancelDecollision = useCallback(() => {
     if (decollisionSimRef.current) {
       debugLog('Cancelling ongoing decollision');
       decollisionSimRef.current.stop();
-      decollisionSimRef.current = null;
-      decollisionSnapshotRef.current = null;
-      pendingDecollisionRef.current = false;
+      // Save in-progress positions so the next decollision starts from here
+      // instead of snapping back to pre-decollision positions
+      const snapshot = decollisionSnapshotRef.current;
+      if (snapshot) {
+        syncDecollisionState(snapshot);
+      } else {
+        decollisionSimRef.current = null;
+        pendingDecollisionRef.current = false;
+      }
     }
-  }, [debugLog]);
+  }, [debugLog, syncDecollisionState]);
 
   // Get current positions (including any in-progress decollision positions)
   const getCurrentPositions = useCallback(() => {
