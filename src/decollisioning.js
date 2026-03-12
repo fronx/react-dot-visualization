@@ -59,7 +59,8 @@ function createFrameEmitter(onFrame) {
   };
 }
 
-function sendMetric(name, valueMs, tags = {}) {
+function sendMetric(name, valueMs, tags = {}, enabled = false) {
+  if (!enabled) return;
   const tagStr = Object.entries(tags).map(([k, v]) => `${k}=${v}`).join(',');
   const line = `${name}${tagStr ? ',' + tagStr : ''} value=${valueMs}`;
   try { fetch('http://localhost:8428/write', { method: 'POST', body: line }).catch(() => {}); } catch (_) {}
@@ -86,7 +87,8 @@ function startCpuDecollisioning({
   transitionConfig,
   alphaStart = DEFAULT_ALPHA_START,
   alphaMin = DEFAULT_ALPHA_MIN,
-  alphaDecay = DEFAULT_ALPHA_DECAY
+  alphaDecay = DEFAULT_ALPHA_DECAY,
+  sendMetrics = false
 }) {
   let tickCount = 0;
   const decollisionT0 = performance.now();
@@ -102,7 +104,7 @@ function startCpuDecollisioning({
       }
     })
     .on('end', () => {
-      sendMetric('decollision_total', performance.now() - decollisionT0, { n: nodes.length, ticks: tickCount, backend: 'cpu' });
+      sendMetric('decollision_total', performance.now() - decollisionT0, { n: nodes.length, ticks: tickCount, backend: 'cpu' }, sendMetrics);
       finalizeDecollision(nodes, onUpdatePositions, onDecollisionComplete, skipIntermediateFrames, transitionConfig);
     });
 
@@ -125,7 +127,8 @@ function startWebGpuWithFallback({
   webgpuStepsPerTick,
   webgpuReadbackIntervalMs,
   shouldPublishIntermediate,
-  allowCpuFallback
+  allowCpuFallback,
+  sendMetrics = false
 }) {
   const radii = new Float32Array(nodes.length);
   for (let i = 0; i < nodes.length; i++) {
@@ -153,7 +156,8 @@ function startWebGpuWithFallback({
       transitionConfig,
       alphaStart,
       alphaMin,
-      alphaDecay
+      alphaDecay,
+      sendMetrics
     });
   };
 
@@ -181,7 +185,7 @@ function startWebGpuWithFallback({
           n: nodes.length,
           ticks: tickCount,
           backend: 'webgpu'
-        });
+        }, sendMetrics);
         finalizeDecollision(finalNodes, onUpdatePositions, onDecollisionComplete, skipIntermediateFrames, transitionConfig);
       },
       onError: (error) => {
@@ -233,6 +237,7 @@ export function decollisioning(
   const alphaStart = runtimeOptions.alphaStart ?? DEFAULT_ALPHA_START;
   const alphaMin = runtimeOptions.alphaMin ?? DEFAULT_ALPHA_MIN;
   const alphaDecay = runtimeOptions.alphaDecay ?? DEFAULT_ALPHA_DECAY;
+  const sendMetrics = runtimeOptions.sendMetrics ?? false;
 
   // Auto prefers WebGPU and falls back to CPU when unavailable or invalid.
   const shouldTryWebGpu = engine !== 'cpu';
@@ -254,7 +259,8 @@ export function decollisioning(
       webgpuStepsPerTick: runtimeOptions.webgpuStepsPerTick ?? 2,
       webgpuReadbackIntervalMs: runtimeOptions.webgpuReadbackIntervalMs ?? 16,
       shouldPublishIntermediate: runtimeOptions.shouldPublishIntermediate,
-      allowCpuFallback
+      allowCpuFallback,
+      sendMetrics
     });
   }
 
@@ -268,7 +274,8 @@ export function decollisioning(
     transitionConfig,
     alphaStart,
     alphaMin,
-    alphaDecay
+    alphaDecay,
+    sendMetrics
   });
 }
 

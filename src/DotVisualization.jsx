@@ -81,6 +81,7 @@ const DotVisualization = forwardRef((props, ref) => {
     hoverOpacity = 1.0,
     useCanvas = false,
     debug = false,
+    sendMetrics = false,
     initialTransform = null,
     children,
     backgroundChildren,
@@ -651,7 +652,8 @@ const DotVisualization = forwardRef((props, ref) => {
       stableOnDecollisionComplete(finalData, needsAnotherCycle);
     }, skipFrames, transitionConfig, {
       engine: decollisionEngine,
-      shouldPublishIntermediate: () => !(isDraggingRef.current || interactionActiveRef.current)
+      shouldPublishIntermediate: () => !(isDraggingRef.current || interactionActiveRef.current),
+      sendMetrics
     });
 
     // Store simulation reference for potential cancellation
