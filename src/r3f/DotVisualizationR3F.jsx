@@ -11,7 +11,8 @@ import { Canvas } from '@react-three/fiber';
 import { R3FScene } from './R3FScene.jsx';
 import { decollisioning } from '../decollisioning.js';
 import { getDotSize } from '../dotUtils.js';
-import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
+import { computeFitZ, CAMERA_FOV_DEGREES } from './cameraUtils.js';
+import { boundsForData } from '../utils.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const EMPTY_RADIUS_OVERRIDES = new Map();
@@ -81,6 +82,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const cameraStateRef = useRef(null);
   // Container ref for measuring dimensions when computing D3-compatible zoom transform.
   const containerRef = useRef(null);
+  // Ref to programmatically set camera position from outside the Canvas.
+  const setCameraPositionRef = useRef(null);
 
   useEffect(() => {
     dotStylesRef.current = dotStyles;
@@ -298,6 +301,41 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         k,
       };
     },
+    getFitTransform: (dataOverride = null, marginOverride = null) => {
+      if (!containerRef.current) return null;
+      const dataToUse = dataOverride || processedData;
+      if (!dataToUse.length) return null;
+      const { width: W, height: H } = containerRef.current.getBoundingClientRect();
+      if (!W || !H) return null;
+
+      const bounds = boundsForData(dataToUse, defaultSize);
+      const margin = marginOverride ?? 0.9;
+      const aspect = W / H;
+      const cz = computeFitZ(bounds.minX, bounds.maxX, bounds.minY, bounds.maxY, aspect, margin);
+      const cx = (bounds.minX + bounds.maxX) / 2;
+      const cy = -((bounds.minY + bounds.maxY) / 2); // negate: data Y is SVG (down+), world Y is up+
+
+      const k = H / (cz * 2 * Math.tan(CAMERA_FOV_RAD / 2));
+      return {
+        x: W / 2 - cx * k,
+        y: H / 2 + cy * k,
+        k,
+      };
+    },
+    setZoomTransform: (transform, options = {}) => {
+      if (!containerRef.current || !setCameraPositionRef.current) return false;
+      const { x, y, k } = transform;
+      const { width: W, height: H } = containerRef.current.getBoundingClientRect();
+      if (!W || !H || !k) return false;
+
+      // Convert D3 {x, y, k} to Three.js camera {x, y, z}
+      const cx = (W / 2 - x) / k;
+      const cy = -((H / 2 - y) / k);
+      const cz = H / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
+      setCameraPositionRef.current(cx, cy, Math.max(0.5, Math.min(5000, cz)));
+      cameraStateRef.current = { x: cx, y: cy, z: cz };
+      return true;
+    },
     updateVisibleDotCount: () => {},
     cancelDecollision: () => {
       if (decollisionSimRef.current) {
@@ -306,7 +344,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       }
     },
     getCurrentPositions: () => processedData,
-  }), [processedData]);
+  }), [processedData, defaultSize]);
 
   return (
     <div
@@ -347,6 +385,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           cameraInitialized={cameraInitialized}
           initialTransform={initialTransform}
           onCameraStateChange={handleCameraStateChange}
+          setCameraRef={setCameraPositionRef}
         />
       </Canvas>
 

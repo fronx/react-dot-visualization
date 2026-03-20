@@ -226,6 +226,20 @@ function CameraInitializer({ data, initialized, initialTransform, onInit }) {
   return null;
 }
 
+// Allows programmatic camera positioning from outside the Canvas context.
+function CameraSetter({ setCameraRef }) {
+  const { camera } = useThree();
+
+  useEffect(() => {
+    setCameraRef.current = (x, y, z) => {
+      camera.position.set(x, y, z);
+    };
+    return () => { setCameraRef.current = null; };
+  }, [camera, setCameraRef]);
+
+  return null;
+}
+
 // Fires onCameraStateChange whenever the camera moves, allowing the outer component
 // to read camera state for zoom/pan persistence across renderer switches.
 function CameraReporter({ reportRef, onCameraStateChange }) {
@@ -268,6 +282,7 @@ export function R3FScene({
   cameraInitialized,
   initialTransform = null,
   onCameraStateChange,
+  setCameraRef,
 }) {
   const dataMap = useMemo(() => {
     const map = new Map();
@@ -289,6 +304,7 @@ export function R3FScene({
         onInit={onCameraStateChange}
       />
       <CameraReporter reportRef={reportCameraRef} onCameraStateChange={onCameraStateChange} />
+      {setCameraRef && <CameraSetter setCameraRef={setCameraRef} />}
       <R3FCamera onTransformChange={handleTransformChange} />
 
       {showEdges && edges.length > 0 && (

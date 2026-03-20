@@ -335,6 +335,36 @@ export class ZoomManager {
   }
 
   /**
+   * Compute the transform needed to fit data into the visible region.
+   */
+  getFitTransform(data, options = {}) {
+    const {
+      margin = this.fitMargin
+    } = options;
+
+    if (!this.zoomRef?.current || !this.viewBox || !data?.length) {
+      return null;
+    }
+
+    const rect = this.zoomRef.current.getBoundingClientRect();
+    const bounds = boundsForData(data, this.defaultSize);
+    const fit = computeFitTransformToVisible(bounds, this.viewBox, rect, {
+      left: this.occludeLeft,
+      right: this.occludeRight,
+      top: this.occludeTop,
+      bottom: this.occludeBottom
+    }, margin);
+
+    if (!fit) return null;
+
+    return {
+      x: fit.x,
+      y: fit.y,
+      k: fit.k
+    };
+  }
+
+  /**
    * Initialize zoom on first data arrival (instant, no animation)
    */
   initZoom(newData) {
