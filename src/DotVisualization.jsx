@@ -56,6 +56,7 @@ const DotVisualization = forwardRef((props, ref) => {
     margin = 0.1,
     dotStroke = "#111",
     dotStrokeWidth = 0.2,
+    dotStrokeWidthFraction = null,
     defaultColor = null,
     defaultSize = 2,
     defaultOpacity = 0.7,
@@ -219,6 +220,31 @@ const DotVisualization = forwardRef((props, ref) => {
     }
     return await zoomManager.current.zoomToVisible(dataToUse, options);
   }, [processedData]);
+
+  const getFitTransform = useCallback((dataOverride = null, marginOverride = null) => {
+    if (!zoomManager.current) return null;
+    const dataToUse = dataOverride || processedData;
+    const options = {};
+    if (marginOverride !== null) {
+      options.margin = marginOverride;
+    }
+    return zoomManager.current.getFitTransform(dataToUse, options);
+  }, [processedData]);
+
+  const setZoomTransform = useCallback((transform, options = {}) => {
+    if (!zoomManager.current || !transform) return false;
+    const { direct = true } = options;
+    if (direct) {
+      zoomManager.current.applyTransformDirect(
+        d3.zoomIdentity.translate(transform.x, transform.y).scale(transform.k)
+      );
+    } else {
+      zoomManager.current.applyTransformViaZoomHandler(
+        d3.zoomIdentity.translate(transform.x, transform.y).scale(transform.k)
+      );
+    }
+    return true;
+  }, []);
 
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
@@ -747,12 +773,14 @@ const DotVisualization = forwardRef((props, ref) => {
 
   useImperativeHandle(ref, () => ({
     zoomToVisible,
+    getFitTransform,
+    setZoomTransform,
     getVisibleDotCount: () => visibleDotCount,
     updateVisibleDotCount,
     getZoomTransform: () => zoomManager.current?.getCurrentTransform(),
     cancelDecollision,
     getCurrentPositions,
-  }), [zoomToVisible, visibleDotCount, updateVisibleDotCount, cancelDecollision, getCurrentPositions]);
+  }), [zoomToVisible, getFitTransform, setZoomTransform, visibleDotCount, updateVisibleDotCount, cancelDecollision, getCurrentPositions]);
 
   // Auto-fit to visible region
   useEffect(() => {
@@ -835,6 +863,7 @@ const DotVisualization = forwardRef((props, ref) => {
             dotId={dotId}
             stroke={dotStroke}
             strokeWidth={dotStrokeWidth}
+            strokeWidthFraction={dotStrokeWidthFraction}
             defaultColor={defaultColor}
             defaultSize={defaultSize}
             defaultOpacity={defaultOpacity}

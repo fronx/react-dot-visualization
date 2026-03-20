@@ -18,6 +18,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     dotId,
     stroke = "#111",
     strokeWidth = 0.2,
+    strokeWidthFraction = null,
     defaultColor = null,
     defaultSize = 2,
     defaultOpacity = 0.7,
@@ -272,7 +273,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         const styles = computeFinalStyles(item, index, true);
         const { __pulseData, ...renderStyles } = styles;
         const pulseData = __pulseData ?? getPulseData(item, index);
-        const radius = renderStyles.size;
+        const radius = Math.min(renderStyles.size, maxDotRadius);
 
         // Allow custom renderer to override default drawing
         if (customDotRenderer) {
@@ -311,12 +312,13 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         canvasContext.globalAlpha = renderStyles.opacity;
         canvasContext.fillStyle = renderStyles.fill;
         canvasContext.strokeStyle = renderStyles.stroke;
-        canvasContext.lineWidth = renderStyles.strokeWidth;
+        const effectiveStrokeWidth = strokeWidthFraction != null ? radius * strokeWidthFraction : renderStyles.strokeWidth;
+        canvasContext.lineWidth = effectiveStrokeWidth;
 
         canvasContext.beginPath();
         canvasContext.arc(item.x, item.y, radius, 0, 2 * Math.PI);
         canvasContext.fill();
-        if (renderStyles.strokeWidth > 0) {
+        if (effectiveStrokeWidth > 0) {
           canvasContext.stroke();
         }
       };
@@ -329,6 +331,12 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         top: (vbY - t.y) / t.k,
         bottom: (vbY + vbH - t.y) / t.k
       };
+
+      // Max dot radius: 15% of visible viewport height in data units.
+      // Prevents dots from filling the screen during volatile early UMAP frames
+      // when zoom-to-fit has zoomed in tight but dot sizing hasn't adjusted yet.
+      const visibleHeight = visibleBounds.bottom - visibleBounds.top;
+      const maxDotRadius = Math.abs(visibleHeight) * 0.075; // diameter = 15%
 
       // Draw all non-hovered dots first, then hovered dot last (on top)
       let hoveredItem = null;
