@@ -113,6 +113,22 @@ export class DecollisionCacheManager {
   store(constraintKey, positions) {
     this.cache.store(constraintKey, positions);
   }
+
+  /**
+   * Check if scope changed and clear cache if so.
+   * Call this from the data effect — it only tracks scope, not constraints.
+   * Returns true if scope changed (cache was cleared).
+   */
+  checkScope(scopeKey) {
+    if (this._prevScopeKey !== null && this._prevScopeKey !== scopeKey) {
+      this.cache.clear();
+      this._prevScopeKey = scopeKey;
+      this._prevConstraintKey = '';
+      return true;
+    }
+    this._prevScopeKey = scopeKey;
+    return false;
+  }
 }
 
 // ── React hook ────────────────────────────────────────────────────────────────

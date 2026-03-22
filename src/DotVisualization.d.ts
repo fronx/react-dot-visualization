@@ -32,6 +32,8 @@ export interface DotVisualizationRef {
   getZoomTransform: () => any;
   cancelDecollision: () => void;
   getCurrentPositions: () => Array<{ id: string | number; x: number; y: number }>;
+  decollideForConstraint: (constraintKey: string) => void;
+  getSchedulerPhase: () => string | undefined;
 }
 
 declare const DotVisualization: React.ForwardRefExoticComponent<DotVisualizationProps & React.RefAttributes<DotVisualizationRef>>;

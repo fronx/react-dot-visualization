@@ -1,6 +1,5 @@
-import React, { useEffect, useState, useRef, useCallback, useImperativeHandle, useMemo, forwardRef } from 'react';
+import { useEffect, useState, useRef, useCallback, useImperativeHandle, useMemo, forwardRef } from 'react';
 import * as d3 from 'd3';
-import { planCacheTransition } from './useDecollisionCache.js';
 import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
@@ -9,17 +8,10 @@ import { countVisibleDots } from './utils.js';
 import { ZoomManager } from './ZoomManager.js';
 import { useDebug } from './useDebug.js';
 import { useLatest } from './useLatest.js';
-import { useStableCallback } from './useStableCallback.js';
 import { useDotHoverHandlers } from './useDotHoverHandlers.js';
 import { useStablePositions } from './useStablePositions.js';
 import { usePositionChangeDetection } from './usePositionChangeDetection.js';
-import { decollisioning } from './decollisioning.js';
-import { getDotSize } from './dotUtils.js'
-import {
-  cancelDecollisionWithInvariants,
-  chooseDecollisionLaunchMode,
-  shouldQueueDecollisionRetry
-} from './decollisionStateMachine.js';
+import { useDecollisionScheduler } from './useDecollisionScheduler.js';
 
 const EMPTY_RADIUS_OVERRIDES = new Map();
 
@@ -43,7 +35,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onZoomEnd,
     onDecollisionComplete,
     sharedPositionCache = null,
-    enableDecollisioning = true,
+    enableDecollisioning = true, // unused by canvas renderer (scheduler handles it), kept for R3F compat
     decollisionEngine = 'auto',
     isIncrementalUpdate = false,
     transitionDuration = 350,
@@ -94,6 +86,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
   const [processedData, setProcessedData] = useState([]);
   const [containerDimensions, setContainerDimensions] = useState(null);
+  const [isSimulationRunning, setIsSimulationRunning] = useState(false);
 
   // Fixed viewBox with aspect ratio matching container
   // World coordinates are separate from camera framing.
@@ -120,7 +113,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const zoomManager = useRef(null);
 
   // Position transition hooks
-  const { stablePositions, updateStablePositions, clearStablePositions, shouldUseStablePositions } = useStablePositions();
+  const { updateStablePositions, clearStablePositions, shouldUseStablePositions } = useStablePositions();
   const hasPositionsChanged = usePositionChangeDetection(defaultSize);
 
   // Block hover only when dragging (not during wheel zoom)
@@ -129,10 +122,8 @@ const DotVisualization = forwardRef((props, ref) => {
   // Manage hover state and callbacks
   const { hoveredDotId, handleDotHover, handleDotLeave, clearHover } = useDotHoverHandlers(onHover, onLeave);
 
-  // Track when data changes during decollision (the "point of no return" logic)
-  const decollisionSnapshotRef = useRef(null);
-  const pendingDecollisionRef = useRef(false);
-  const decollisionSimRef = useRef(null);
+  // Scheduler ref (set after useDecollisionScheduler call below)
+  const schedulerRef = useRef(null);
 
   // Keep latest values accessible in closures without triggering re-runs
   const isDraggingRef = useLatest(isDragging);
@@ -175,11 +166,11 @@ const DotVisualization = forwardRef((props, ref) => {
   const updateCountOnTransformChangeRef = useLatest(updateCountOnTransformChange);
 
   const dataRef = useRef([]);
+  const processedDataRef = useRef([]);
+  const constraintKeyRef = useLatest(constraintKey);
   const previousDataRef = useRef([]);
   const didInitialAutoFitRef = useRef(false);
   const autoZoomTimeoutRef = useRef(null);
-  // (scope/constraint key tracking is now inside the decollisionCache hook)
-  const cacheRestoreFromRef = useRef(null); // pre-restore positions for transition animation
   const interactionActiveRef = useRef(false);
   const interactionIdleTimerRef = useRef(null);
 
@@ -194,8 +185,6 @@ const DotVisualization = forwardRef((props, ref) => {
     }, 120);
   }, []);
 
-  // Keep latest dotStyles without triggering decollision simulation restarts
-  const dotStylesRef = useLatest(dotStyles);
 
 
 
@@ -247,14 +236,16 @@ const DotVisualization = forwardRef((props, ref) => {
     }));
   }, []);
 
-  // Process data and set up initial state
+  // Process data and set up initial state.
+  // With the scheduler, this effect no longer handles constraint transitions or
+  // decollision retry queuing. It validates data, checks scope changes, restores
+  // cached positions on unchanged re-renders, and manages auto-zoom.
   useEffect(() => {
     if (!data || data.length === 0) {
       setProcessedData([]);
+      processedDataRef.current = [];
       return;
     }
-
-    // console.log('DotVisualization incoming data:', data[0]?.x, data[0]?.y, "previousDataRef.current:", previousDataRef.current[0]?.x, previousDataRef.current[0]?.y);
 
     // Auto-generate IDs and validate required fields
     const dataWithIds = ensureIds(data);
@@ -274,42 +265,21 @@ const DotVisualization = forwardRef((props, ref) => {
 
     let processedValidData = validData;
 
-    // If fresh input arrives while a decollision run is active, queue another pass.
-    if (shouldQueueDecollisionRetry({
-      enableDecollisioning,
-      hasActiveSnapshot: Boolean(decollisionSnapshotRef.current),
-      positionsChanged
-    })) {
-      pendingDecollisionRef.current = true;
-    }
-
-    // ── Cache resolution ────────────────────────────────────────────────────
-    // Resolve cache state and build an action plan. This is the single place
-    // that decides what happens on constraint/scope transitions.
-    let cachePlan = null;
+    // ── Scope change detection ──────────────────────────────────────────────
+    // Clear cache on scope changes (collection/checkpoint switch, refresh).
+    // Constraint transitions are handled by the scheduler, not this effect.
     if (sharedPositionCache) {
-      const resolution = sharedPositionCache.resolve(scopeKey, constraintKey);
-      cachePlan = planCacheTransition(resolution, {
-        currentOnScreen: dataRef.current,
-        validData,
-      });
+      sharedPositionCache.checkScope(scopeKey);
     }
 
-    // ── Apply cache plan ──────────────────────────────────────────────────
-    if (cachePlan?.type === 'animate') {
-      // Exact hit: we'll animate to these positions (no physics).
-      cacheRestoreFromRef.current = cachePlan;
-      // cachePlan.to already has positions applied to validData — use directly
-      processedValidData = cachePlan.to;
-    } else if (cachePlan?.type === 'decollide' && cachePlan.positions && !positionsAreIntermediate) {
-      // Seed from base positions. Decollision effect will run physics on top.
-      processedValidData = validData.map(item => {
-        const pos = cachePlan.positions.get(item.id);
-        return pos ? { ...item, x: pos.x, y: pos.y } : item;
-      });
-    } else if (!cachePlan && !positionsChanged && !positionsAreIntermediate && sharedPositionCache) {
-      // Unchanged re-render: restore decollided positions from cache
-      const cached = sharedPositionCache.cache.get(constraintKey);
+    // ── Unchanged re-render: restore cached positions ───────────────────────
+    // When React re-renders without actual position changes, restore decollided
+    // positions from cache to prevent snapping to raw UMAP coords.
+    // Uses constraintKeyRef (not constraintKey dep) because constraint transitions
+    // are the scheduler's domain — this effect should not re-run on constraint changes.
+    if (!positionsChanged && !positionsAreIntermediate && sharedPositionCache) {
+      const currentConstraintKey = constraintKeyRef.current;
+      const cached = sharedPositionCache.cache.get(currentConstraintKey);
       if (cached && cached.size > 0) {
         processedValidData = validData.map(item => {
           const pos = cached.get(item.id);
@@ -327,7 +297,6 @@ const DotVisualization = forwardRef((props, ref) => {
       });
     } else if (!autoZoomToNewContent && zoomManager.current) {
       // When auto-zoom is disabled, still do initial zoom for first data
-      // Check if this is the first data (no previous data)
       if (!previousDataRef.current?.length && validData.length > 0) {
         zoomManager.current.initZoom(validData);
       } else {
@@ -337,22 +306,20 @@ const DotVisualization = forwardRef((props, ref) => {
     }
 
     // Store original input data for future comparisons
-    previousDataRef.current = validData.map(item => ({ ...item })); // Deep copy of validData!! This is important!
-    // Store processed data (either original or with restored positions)
+    previousDataRef.current = validData.map(item => ({ ...item })); // Deep copy!
+    // Store processed data for the scheduler to read
     dataRef.current = processedValidData;
 
     // Conditional rendering based on update type:
     // - Incremental updates: Keep rendering stable positions while decollision runs
     // - Full renders: Render new data directly, show animation
-    if (cachePlan?.type === 'animate') {
-      // Exact cache hit: keep current positions on screen.
-      // The decollision effect will animate from current → cached target.
-    } else if (shouldUseStablePositions(isIncrementalUpdate)) {
+    if (shouldUseStablePositions(isIncrementalUpdate)) {
       // Incremental: Don't update processedData yet, keep rendering stable old positions
-      // The decollision effect will update both stablePositions and processedData when complete
+      // The scheduler will update both stablePositions and processedData when complete
     } else {
       // Full render: Update immediately to show animation
       setProcessedData(processedValidData);
+      processedDataRef.current = processedValidData;
       if (!isIncrementalUpdate) {
         clearStablePositions();
       }
@@ -361,7 +328,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Update visible dot count when data changes
     updateVisibleDotCount();
 
-  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate, scopeKey, constraintKey]);
+  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate, scopeKey]);
 
   // Initialize and set up zoom behavior with ZoomManager once.
   useEffect(() => {
@@ -564,172 +531,44 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [isDragging, useCanvas]);
 
-  // Shared primitive for syncing decollision state back to React
-  // This ensures both completion and cancellation paths keep state synchronized
+  // Shared primitive for syncing decollision state back to React.
+  // Called by the scheduler when a simulation completes (base or constraint).
   const syncDecollisionState = useCallback((finalData) => {
-    // Clear refs
-    decollisionSnapshotRef.current = null;
-    pendingDecollisionRef.current = false;
-    decollisionSimRef.current = null;
     liveTransitionDataRef.current = null;
-
-    // Only sync positions if we have data (meaning rendering actually happened)
     if (finalData) {
       updateStablePositions(finalData, isIncrementalUpdate);
       setProcessedData(finalData);
+      processedDataRef.current = finalData;
     }
   }, [isIncrementalUpdate]);
 
-  // Create stable callback references for the D3 simulation.
-  // The D3 force simulation is a long-running animation that should not restart when
-  // callbacks change. These stable wrappers ensure the simulation keeps running while
-  // always calling the latest version of each callback. Without this, callback changes
-  // from re-renders would restart the simulation, causing dots to jump back to start.
-  const stableOnUpdateNodes = useStableCallback(onUpdateNodes);
-  const stableOnDecollisionComplete = useStableCallback(onDecollisionComplete);
-
-  // Decollision state machine with "point of no return" logic
-  //
-  // This effect manages the D3 force simulation lifecycle:
-  // 1. Takes a snapshot of current data when simulation starts
-  // 2. Runs simulation to completion using the snapshot (ignoring new data during flight)
-  // 3. On completion, checks if new data arrived (via pendingDecollisionRef)
-  // 4. Parent can re-enable decollision if needsAnotherCycle is true
-  //
-  // Why snapshot? The D3 simulation mutates node positions over time. If we used live
-  // data, React re-renders could cause the simulation to restart mid-flight with different
-  // data, creating visual glitches. The snapshot ensures atomic "launch -> animate -> land".
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const launchMode = chooseDecollisionLaunchMode({
-      enableDecollisioning,
-      positionsAreIntermediate,
-      hasMemoizedPositions: sharedPositionCache ? sharedPositionCache.cache.size > 0 : false
-    });
-
-    if (launchMode === 'skip-intermediate' || launchMode === 'skip-cached') {
-      decollisionSnapshotRef.current = null;
-      pendingDecollisionRef.current = false;
-      return;
-    }
-
-    // For incremental updates, use dataRef.current (new positions) even though processedData shows stable positions
-    // For full renders, use processedData (which is the same as dataRef.current)
-    const sourceData = isIncrementalUpdate ? dataRef.current : processedData;
-
-    if (!sourceData.length) {
-      decollisionSnapshotRef.current = null;
-      pendingDecollisionRef.current = false;
-      return;
-    }
-
-    // Snapshot data at launch time
-    const dataSnapshot = [...sourceData];
-    decollisionSnapshotRef.current = dataSnapshot;
-    pendingDecollisionRef.current = false;
-
-    const fnDotSize = (item) => {
-      return getDotSize(item, dotStylesRef.current, defaultSize);
-    }
-
-    // Cache restore: pure transition, no physics needed.
-    // The cached positions are already decollided — just animate to them.
-    const cacheRestore = cacheRestoreFromRef.current;
-    cacheRestoreFromRef.current = null; // consume once
-    if (cacheRestore) {
-      let cancelled = false;
-      const { from, to } = cacheRestore;
-      const duration = 500;
-      const ease = transitionEasing || d3.easeCubicOut;
-      const timer = d3.timer((elapsed) => {
-        if (cancelled) { timer.stop(); return; }
-        const t = Math.min(1, ease(elapsed / duration));
-        const interpolated = to.map((target, i) => {
-          const source = from[i] || target;
-          return { ...target, x: source.x + (target.x - source.x) * t, y: source.y + (target.y - source.y) * t };
-        });
-        stableOnUpdateNodes(interpolated);
-        if (t >= 1) {
-          timer.stop();
-          syncDecollisionState(to);
-          if (sharedPositionCache) {
-            sharedPositionCache.store(constraintKey, to);
-          }
-          stableOnDecollisionComplete(to, pendingDecollisionRef.current);
-        }
-      });
-      decollisionSimRef.current = { stop: () => { cancelled = true; timer.stop(); } };
-      return () => {
-        cancelled = true;
-        timer.stop();
-        if (decollisionSimRef.current?.stop === timer.stop) {
-          decollisionSimRef.current = null;
-        }
-      };
-    }
-
-    // Build transition config for incremental updates
-    const transitionConfig = isIncrementalUpdate ? {
-      enabled: true,
-      stablePositions: stablePositions.length > 0 ? stablePositions : processedData,
-      duration: transitionDuration,
-      easing: transitionEasing || d3.easeCubicOut,
-    } : null;
-
-    // Catch-up mode: renderer mounted fresh (no memoized positions) but decollision
-    // phase already passed. Run silently — no intermediate frames — to avoid competing
-    // state updates between the tick callbacks and the data effect.
-    const isCatchUp = launchMode === 'run-catchup';
-    const skipFrames = isCatchUp || isIncrementalUpdate;
-
-    // Capture the constraint key at launch time — the result belongs to this key,
-    // even if the constraint changes before the decollision completes.
-    const launchConstraintKey = constraintKey;
-    let cancelled = false;
-    const simulation = decollisioning(dataSnapshot, (nodes) => {
-      if (cancelled) return;
-      stableOnUpdateNodes(nodes);
-    }, fnDotSize, (finalData) => {
-      if (cancelled) return;
-      debugLog('Decollision complete - syncing React state');
-
-      // Check if new data arrived while simulation was running
-      const needsAnotherCycle = pendingDecollisionRef.current;
-
-      // Sync state using shared primitive
-      syncDecollisionState(finalData);
-
-      // Store decollision result in keyed cache under the constraint it was computed for
-      if (sharedPositionCache) {
-        sharedPositionCache.store(launchConstraintKey, finalData);
-      }
-
-      // Notify parent, including whether more work is pending
-      stableOnDecollisionComplete(finalData, needsAnotherCycle);
-    }, skipFrames, transitionConfig, {
-      engine: decollisionEngine,
-      shouldPublishIntermediate: () => !(isDraggingRef.current || interactionActiveRef.current),
-      sendMetrics
-    });
-
-    // Store simulation reference for potential cancellation
-    decollisionSimRef.current = simulation;
-
-    return () => {
-      cancelled = true;
-      simulation.stop();
-
-      if (decollisionSimRef.current === simulation) {
-        decollisionSimRef.current = null;
-      }
-      if (decollisionSnapshotRef.current === dataSnapshot) {
-        decollisionSnapshotRef.current = null;
-        pendingDecollisionRef.current = false;
-      }
-      liveTransitionDataRef.current = null;
-    };
-  }, [enableDecollisioning, decollisionEngine, processedData.length, isIncrementalUpdate, defaultSize, useCanvas, positionsAreIntermediate, constraintKey]);
-
+  // ── Decollision scheduler ─────────────────────────────────────────────────
+  // Replaces the old decollision useEffect. The scheduler owns the simulation
+  // lifecycle imperatively — no effect deps for positionsAreIntermediate or
+  // constraintKey. Base decollision runs automatically when layout settles.
+  // Constraint decollision is requested by the app via decollideForConstraint().
+  const scheduler = useDecollisionScheduler({
+    dataRef,
+    processedDataRef,
+    liveTransitionDataRef,
+    cache: sharedPositionCache,
+    positionsAreIntermediate,
+    constraintKey,
+    radiusOverrides,
+    decollisionEngine,
+    defaultSize,
+    onUpdateNodes,
+    onBaseReady: onDecollisionComplete,
+    // Don't forward the constraintKey arg — the app's handleDecollisionComplete
+    // interprets the second arg as needsAnotherCycle (boolean).
+    onConstraintReady: (finalData) => onDecollisionComplete?.(finalData),
+    syncDecollisionState,
+    onSimulationRunningChange: setIsSimulationRunning,
+    sendMetrics,
+    isDraggingRef,
+    interactionActiveRef,
+  });
+  schedulerRef.current = scheduler;
 
   // Handle mouse leave to reset interaction states
   const handleMouseLeave = () => {
@@ -773,23 +612,11 @@ const DotVisualization = forwardRef((props, ref) => {
   }, []);
 
 
-  // Cancel any ongoing decollision animation, preserving current positions
+  // Cancel any ongoing decollision animation
   const cancelDecollision = useCallback(() => {
-    cancelDecollisionWithInvariants({
-      simulation: decollisionSimRef.current,
-      debugLog,
-      livePositions: liveTransitionDataRef.current,
-      snapshotPositions: decollisionSnapshotRef.current,
-      syncDecollisionState,
-      clearDecollisionState: () => {
-        decollisionSimRef.current = null;
-        decollisionSnapshotRef.current = null;
-        pendingDecollisionRef.current = false;
-        liveTransitionDataRef.current = null;
-        pendingInteractionFlushRef.current = false;
-      }
-    });
-  }, [debugLog, syncDecollisionState]);
+    schedulerRef.current?.cancelSimulation();
+    liveTransitionDataRef.current = null;
+  }, []);
 
   // Get current positions (including any in-progress decollision positions)
   const getCurrentPositions = useCallback(() => {
@@ -811,6 +638,8 @@ const DotVisualization = forwardRef((props, ref) => {
     getZoomTransform: () => zoomManager.current?.getCurrentTransform(),
     cancelDecollision,
     getCurrentPositions,
+    decollideForConstraint: (key) => schedulerRef.current?.decollideForConstraint(key),
+    getSchedulerPhase: () => schedulerRef.current?.phase,
   }), [zoomToVisible, getFitTransform, setZoomTransform, visibleDotCount, updateVisibleDotCount, cancelDecollision, getCurrentPositions]);
 
   // Auto-fit to visible region
@@ -919,7 +748,7 @@ const DotVisualization = forwardRef((props, ref) => {
             onBackgroundClick={onBackgroundClick}
             onDragStart={onDragStart}
             isZooming={isZooming}
-            isDecollisioning={enableDecollisioning}
+            isDecollisioning={isSimulationRunning}
           />
         </g>
       )}
@@ -967,7 +796,7 @@ const DotVisualization = forwardRef((props, ref) => {
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
             debug={debug}
-            isDecollisioning={enableDecollisioning}
+            isDecollisioning={isSimulationRunning}
           />
         )}
         <ClusterLabels
