@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle, useMemo, forwardRef } from 'react';
 import * as d3 from 'd3';
-// resolvePositionsForKey removed — cache logic now in useDecollisionCache hook
+import { planCacheTransition } from './useDecollisionCache.js';
 import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
@@ -180,6 +180,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const didInitialAutoFitRef = useRef(false);
   const autoZoomTimeoutRef = useRef(null);
   // (scope/constraint key tracking is now inside the decollisionCache hook)
+  const cacheRestoreFromRef = useRef(null); // pre-restore positions for transition animation
   const interactionActiveRef = useRef(false);
   const interactionIdleTimerRef = useRef(null);
 
@@ -283,40 +284,45 @@ const DotVisualization = forwardRef((props, ref) => {
       pendingDecollisionRef.current = true;
     }
 
-    // Resolve position cache: scope changes invalidate, constraint changes save/restore.
-    // Must happen during render (useMemo) because memoizedPositions are consumed below.
-    let seededFromSharedCache = false;
+    // ── Cache resolution ────────────────────────────────────────────────────
+    // Resolve cache state and build an action plan. This is the single place
+    // that decides what happens on constraint/scope transitions.
+    let cachePlan = null;
     if (sharedPositionCache) {
-      const resolved = sharedPositionCache.resolve(scopeKey, constraintKey, memoizedPositions.current);
-      if (resolved.source === 'cache') {
-        console.log('[cache] restored', resolved.positions.size, 'positions for constraint:', constraintKey || '(base)');
-        memoizedPositions.current.clear();
-        for (const [id, pos] of resolved.positions) {
-          memoizedPositions.current.set(id, { x: pos.x, y: pos.y });
-        }
-        seededFromSharedCache = true;
-      } else if (resolved.source === 'fresh') {
-        console.log('[cache] no cached positions for constraint:', constraintKey || '(base)', '— will decollide fresh');
-        memoizedPositions.current.clear();
-      }
-      // 'unchanged' → do nothing, keep current memoizedPositions
+      const resolution = sharedPositionCache.resolve(scopeKey, constraintKey);
+      cachePlan = planCacheTransition(resolution, {
+        currentOnScreen: dataRef.current,
+        validData,
+      });
     }
 
-    // Restore memoized positions when positions haven't changed (or when seeded from shared cache)
-    if ((!positionsChanged || seededFromSharedCache) && memoizedPositions.current.size > 0 && !positionsAreIntermediate) {
-      // If positions haven't changed and positions are stable, restore memoized decollisioned positions
-      // console.log('📍 Restoring memoized positions for', validData.length, 'dots');
-      processedValidData = validData.map(item => {
-        const memoizedPos = memoizedPositions.current.get(item.id);
-        if (memoizedPos) {
-          return { ...item, x: memoizedPos.x, y: memoizedPos.y };
-        }
-        return item;
-      });
-    } else {
-      if (positionsAreIntermediate) {
-        // console.log('📍 Positions are intermediate - using raw positions from simulation');
+    // ── Apply plan to memoized positions ──────────────────────────────────
+    if (cachePlan?.type === 'animate') {
+      // Exact hit: we'll animate to these positions (no physics).
+      // Seed memoizedPositions so subsequent unchanged renders use them.
+      cacheRestoreFromRef.current = cachePlan;
+      memoizedPositions.current.clear();
+      for (const item of cachePlan.to) {
+        memoizedPositions.current.set(item.id, { x: item.x, y: item.y });
       }
+    } else if (cachePlan?.type === 'decollide') {
+      // Seed from base or clear for fresh. Decollision effect will run physics.
+      memoizedPositions.current.clear();
+      if (cachePlan.positions) {
+        for (const [id, pos] of cachePlan.positions) {
+          memoizedPositions.current.set(id, { x: pos.x, y: pos.y });
+        }
+      }
+    }
+
+    // ── Restore memoized positions into processedData ─────────────────────
+    const hasMemoized = memoizedPositions.current.size > 0;
+    const shouldRestore = (!positionsChanged || cachePlan?.type === 'decollide') && hasMemoized && !positionsAreIntermediate;
+    if (shouldRestore) {
+      processedValidData = validData.map(item => {
+        const pos = memoizedPositions.current.get(item.id);
+        return pos ? { ...item, x: pos.x, y: pos.y } : item;
+      });
     }
 
     // Auto-zoom to new content if enabled (using ZoomManager)
@@ -345,7 +351,10 @@ const DotVisualization = forwardRef((props, ref) => {
     // Conditional rendering based on update type:
     // - Incremental updates: Keep rendering stable positions while decollision runs
     // - Full renders: Render new data directly, show animation
-    if (shouldUseStablePositions(isIncrementalUpdate)) {
+    if (cachePlan?.type === 'animate') {
+      // Exact cache hit: keep current positions on screen.
+      // The decollision effect will animate from current → cached target.
+    } else if (shouldUseStablePositions(isIncrementalUpdate)) {
       // Incremental: Don't update processedData yet, keep rendering stable old positions
       // The decollision effect will update both stablePositions and processedData when complete
     } else {
@@ -632,6 +641,42 @@ const DotVisualization = forwardRef((props, ref) => {
 
     const fnDotSize = (item) => {
       return getDotSize(item, dotStylesRef.current, defaultSize);
+    }
+
+    // Cache restore: pure transition, no physics needed.
+    // The cached positions are already decollided — just animate to them.
+    const cacheRestore = cacheRestoreFromRef.current;
+    cacheRestoreFromRef.current = null; // consume once
+    if (cacheRestore) {
+      let cancelled = false;
+      const { from, to } = cacheRestore;
+      const duration = 500;
+      const ease = transitionEasing || d3.easeCubicOut;
+      const timer = d3.timer((elapsed) => {
+        if (cancelled) { timer.stop(); return; }
+        const t = Math.min(1, ease(elapsed / duration));
+        const interpolated = to.map((target, i) => {
+          const source = from[i] || target;
+          return { ...target, x: source.x + (target.x - source.x) * t, y: source.y + (target.y - source.y) * t };
+        });
+        stableOnUpdateNodes(interpolated);
+        if (t >= 1) {
+          timer.stop();
+          syncDecollisionState(to);
+          if (sharedPositionCache) {
+            sharedPositionCache.store(constraintKey, to);
+          }
+          stableOnDecollisionComplete(to, pendingDecollisionRef.current);
+        }
+      });
+      decollisionSimRef.current = { stop: () => { cancelled = true; timer.stop(); } };
+      return () => {
+        cancelled = true;
+        timer.stop();
+        if (decollisionSimRef.current?.stop === timer.stop) {
+          decollisionSimRef.current = null;
+        }
+      };
     }
 
     // Build transition config for incremental updates

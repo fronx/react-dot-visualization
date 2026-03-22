@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { DecollisionPositionCache } from './DecollisionPositionCache.js';
 
 /**
- * Manages cached decollision positions across constraint changes.
+ * Pure decision logic for decollision position caching.
  *
  * Two key concepts:
  * - scopeKey: collection + checkpoint + sources. When scope changes, ALL cached
@@ -10,83 +10,118 @@ import { DecollisionPositionCache } from './DecollisionPositionCache.js';
  * - constraintKey: highlight + focus. Different constraints produce different
  *   dot sizes → different decollision layouts. The base state is "" (no constraint).
  *
- * On constraint change: save outgoing positions, restore incoming (if cached).
- * On scope change: clear everything.
- *
- * Call resolve() during render (before memoizedPositions are consumed).
- * Call store() when decollision completes.
+ * resolve() produces one of four outcomes:
+ *   unchanged     — same keys, nothing to do
+ *   exact         — incoming constraint was previously cached → pure transition
+ *   base-fallback — incoming constraint is new, base available → decollide from base
+ *   fresh         — nothing cached → decollide from raw positions
  */
-export function useDecollisionCache() {
-  const cacheRef = useRef(null);
-  if (!cacheRef.current) {
-    cacheRef.current = new DecollisionPositionCache();
+
+// ── Plan builder ──────────────────────────────────────────────────────────────
+//
+// Turns a resolve() result + current rendering state into a concrete action plan.
+// This is the single place that expresses what DotVisualization should do for
+// each cache outcome. The decollision effect just executes the plan.
+
+/**
+ * @param {object} resolution - from resolve()
+ * @param {object} context
+ * @param {Array} context.currentOnScreen - dataRef.current (what's rendered now)
+ * @param {Array} context.validData - incoming data with UMAP positions
+ * @returns {null | { type: 'animate', from, to } | { type: 'decollide', positions: Map|null }}
+ */
+export function planCacheTransition(resolution, { currentOnScreen, validData }) {
+  switch (resolution.source) {
+    case 'unchanged':
+      return null;
+
+    case 'exact':
+      // Exact cache hit: animate directly from current to cached positions.
+      // No physics needed — the cached positions are already decollided.
+      return {
+        type: 'animate',
+        from: currentOnScreen,
+        to: validData.map(item => {
+          const pos = resolution.positions.get(item.id);
+          return pos ? { ...item, x: pos.x, y: pos.y } : item;
+        }),
+      };
+
+    case 'base-fallback':
+      // New constraint, but base positions available: seed from base,
+      // then decollide with new dot sizes (physics needed).
+      return { type: 'decollide', positions: resolution.positions };
+
+    case 'fresh':
+      // Nothing cached: decollide from raw UMAP positions.
+      return { type: 'decollide', positions: null };
+
+    default:
+      return null;
+  }
+}
+
+// ── Cache manager ─────────────────────────────────────────────────────────────
+
+export class DecollisionCacheManager {
+  constructor() {
+    this.cache = new DecollisionPositionCache();
+    this._prevScopeKey = null;
+    this._prevConstraintKey = '';
   }
 
-  const prevScopeKeyRef = useRef(null);
-  const prevConstraintKeyRef = useRef('');
-
   /**
-   * Called during render to handle key transitions.
-   *
-   * @param {string} scopeKey - Dataset scope (collection, checkpoint, sources)
-   * @param {string} constraintKey - Dot size constraints (highlight, focus). "" = base.
-   * @param {Map} currentPositions - Current memoized positions (will be saved under outgoing key)
-   * @returns {{ positions: Map|null, source: 'cache'|'fresh'|'unchanged' }}
+   * Resolve cache state for a key transition. Call during render.
+   * @returns {{ positions: Map|null, source: 'exact'|'base-fallback'|'fresh'|'unchanged' }}
    */
-  function resolve(scopeKey, constraintKey, currentPositions) {
-    const cache = cacheRef.current;
-
+  resolve(scopeKey, constraintKey) {
     // Scope changed — invalidate everything
-    if (prevScopeKeyRef.current !== null && prevScopeKeyRef.current !== scopeKey) {
-      console.log('[cache] scope changed:', prevScopeKeyRef.current, '→', scopeKey, '— clearing all cached positions');
-      cache.clear();
-      prevScopeKeyRef.current = scopeKey;
-      prevConstraintKeyRef.current = constraintKey;
+    if (this._prevScopeKey !== null && this._prevScopeKey !== scopeKey) {
+      this.cache.clear();
+      this._prevScopeKey = scopeKey;
+      this._prevConstraintKey = constraintKey;
       return { positions: null, source: 'fresh' };
     }
-    prevScopeKeyRef.current = scopeKey;
+    this._prevScopeKey = scopeKey;
 
     // Constraint unchanged — no-op
-    if (prevConstraintKeyRef.current === constraintKey) {
+    if (this._prevConstraintKey === constraintKey) {
       return { positions: null, source: 'unchanged' };
     }
 
-    // Constraint changed — save outgoing, restore incoming
-    const prevConstraint = prevConstraintKeyRef.current;
-    prevConstraintKeyRef.current = constraintKey;
+    // Constraint changed — restore incoming (if cached).
+    // We don't save here — store() is the only writer, called when
+    // decollision completes with authoritative positions.
+    this._prevConstraintKey = constraintKey;
 
-    // Save current positions under the outgoing constraint
-    if (currentPositions.size > 0) {
-      const positions = Array.from(currentPositions.entries()).map(
-        ([id, pos]) => ({ id, x: pos.x, y: pos.y })
-      );
-      cache.store(prevConstraint, positions);
-    }
-
-    // Try to restore: exact match first, then fall back to base
-    const cached = cache.get(constraintKey);
+    // Exact match → pure transition (no physics)
+    const cached = this.cache.get(constraintKey);
     if (cached && cached.size > 0) {
-      return { positions: cached, source: 'cache' };
+      return { positions: cached, source: 'exact' };
     }
 
-    // No exact match — use base positions as starting point for decollision
-    const base = cache.get('');
+    // Base fallback → seed positions for decollision
+    const base = this.cache.get('');
     if (base && base.size > 0) {
-      return { positions: base, source: 'cache' };
+      return { positions: base, source: 'base-fallback' };
     }
 
     return { positions: null, source: 'fresh' };
   }
 
-  /**
-   * Called when decollision completes to cache the result.
-   *
-   * @param {string} constraintKey - The constraint key active during this decollision
-   * @param {Array<{id: string|number, x: number, y: number}>} positions - Final decollided positions
-   */
-  function store(constraintKey, positions) {
-    cacheRef.current.store(constraintKey, positions);
+  /** Store decollision result under the constraint it was computed for. */
+  store(constraintKey, positions) {
+    this.cache.store(constraintKey, positions);
   }
+}
 
-  return { resolve, store };
+// ── React hook ────────────────────────────────────────────────────────────────
+
+/** Returns a ref-stable DecollisionCacheManager. */
+export function useDecollisionCache() {
+  const ref = useRef(null);
+  if (!ref.current) {
+    ref.current = new DecollisionCacheManager();
+  }
+  return ref.current;
 }
