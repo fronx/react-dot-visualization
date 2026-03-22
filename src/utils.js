@@ -334,11 +334,14 @@ export function updateZoomExtentForData(zoomHandler, data, viewBox, svgRect, occ
   const baseScale = fitTransform.k;
   const requiredExtent = computeAbsoluteExtent(zoomExtent, baseScale);
 
-  // Only update if we need a more permissive extent (allow zooming out further)
+  // Update if we need a more permissive extent in either direction:
+  // - lower min → allow zooming out further (data spread wider)
+  // - higher max → allow zooming in further (data clustered tighter)
   const hasNoExtent = !currentExtent || currentExtent[0] === 0 && currentExtent[1] === Infinity;
-  const needsMorePermissive = requiredExtent[0] < currentExtent[0];
+  const needsWiderMin = requiredExtent[0] < currentExtent[0];
+  const needsWiderMax = requiredExtent[1] > currentExtent[1];
 
-  if (hasNoExtent || needsMorePermissive) {
+  if (hasNoExtent || needsWiderMin || needsWiderMax) {
     // Expand current extent to accommodate new data
     const newExtent = hasNoExtent ? requiredExtent : unionExtent(currentExtent, requiredExtent);
     setAbsoluteExtent(zoomHandler, newExtent);
