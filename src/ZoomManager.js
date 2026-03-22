@@ -52,7 +52,8 @@ export class ZoomManager {
     this.transform = options.initialTransform
       ? d3.zoomIdentity.translate(options.initialTransform.x, options.initialTransform.y).scale(options.initialTransform.k)
       : d3.zoomIdentity;
-    this.zoomHandler = d3.zoom();
+    this.zoomHandler = d3.zoom()
+      .clickDistance(5);
     this.baseScaleRef = options.initialTransform ? options.initialTransform.k : 1;
     this.viewBox = null;
     this.lastDataBounds = null;
