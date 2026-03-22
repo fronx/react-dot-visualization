@@ -253,3 +253,142 @@ describe('planCacheTransition', () => {
     expect(plan.positions).toBeNull();
   });
 });
+
+// ── Cache as memoizedPositions replacement ──────────────────────────────────
+//
+// These tests verify the invariant that makes memoizedPositions redundant:
+// after store() is called, cache.get(constraintKey) provides the same data
+// that memoizedPositions would have, at every point the data effect needs it.
+
+describe('cache readability after store (memoizedPositions replacement invariant)', () => {
+  const SCOPE = 'collection:test';
+  const rawUMAP = [pos('a', 0, 0), pos('b', 1, 1), pos('c', 2, 2)];
+  const baseDecollided = [pos('a', 0.1, 0.1), pos('b', 1.2, 1.2), pos('c', 2.3, 2.3)];
+  const hlDecollided = [pos('a', 0.5, 0.5), pos('b', 3, 3), pos('c', 2.3, 2.3)];
+
+  it('after base decollision completes, cache.get("") has positions for unchanged re-renders', () => {
+    const mgr = new DecollisionCacheManager();
+    // First render: resolve initializes scope
+    mgr.resolve(SCOPE, '');
+    // Decollision completes:
+    mgr.store('', baseDecollided);
+    // Subsequent unchanged resolve (unrelated re-render trigger):
+    const r = mgr.resolve(SCOPE, '');
+    expect(r.source).toBe('unchanged');
+    // The caller needs positions — cache.get must provide them
+    const cached = mgr.cache.get('');
+    expect(cached).not.toBeNull();
+    expect(cached.get('a')).toEqual({ x: 0.1, y: 0.1 });
+    expect(cached.get('b')).toEqual({ x: 1.2, y: 1.2 });
+  });
+
+  it('after constraint decollision completes, cache.get(key) has positions for unchanged re-renders', () => {
+    const mgr = new DecollisionCacheManager();
+    mgr.resolve(SCOPE, '');
+    mgr.store('', baseDecollided);
+    // Activate highlight:
+    mgr.resolve(SCOPE, 'hl:x');
+    mgr.store('hl:x', hlDecollided);
+    // Unrelated re-render:
+    const r = mgr.resolve(SCOPE, 'hl:x');
+    expect(r.source).toBe('unchanged');
+    // cache.get must have the highlight-decollided positions
+    const cached = mgr.cache.get('hl:x');
+    expect(cached).not.toBeNull();
+    expect(cached.get('b')).toEqual({ x: 3, y: 3 });
+  });
+
+  it('cache.size > 0 matches hasMemoizedPositions semantics after base store', () => {
+    const mgr = new DecollisionCacheManager();
+    mgr.resolve(SCOPE, '');
+    expect(mgr.cache.size).toBe(0); // nothing stored yet
+    mgr.store('', baseDecollided);
+    expect(mgr.cache.size).toBeGreaterThan(0); // has base → "skip-cached"
+  });
+
+  it('cache.size > 0 after constraint switch with base-fallback (before constraint store)', () => {
+    // This is the Render A scenario: constraint just changed, base was seeded,
+    // but the new constraint hasn't been decollided yet.
+    // memoizedPositions would have base positions (seeded by cachePlan).
+    // cache must also have something (base entry) so skip-cached works.
+    const mgr = new DecollisionCacheManager();
+    mgr.resolve(SCOPE, '');
+    mgr.store('', baseDecollided);
+    // Constraint changes — resolve returns base-fallback
+    const r = mgr.resolve(SCOPE, 'hl:new');
+    expect(r.source).toBe('base-fallback');
+    // cache still has the base entry even though 'hl:new' isn't stored yet
+    expect(mgr.cache.size).toBeGreaterThan(0);
+    expect(mgr.cache.has('')).toBe(true);
+    expect(mgr.cache.has('hl:new')).toBe(false);
+  });
+
+  it('cache.size === 0 after scope change (matches empty memoizedPositions on remount)', () => {
+    const mgr = new DecollisionCacheManager();
+    mgr.resolve(SCOPE, '');
+    mgr.store('', baseDecollided);
+    mgr.store('hl:x', hlDecollided);
+    expect(mgr.cache.size).toBe(2);
+    // Scope changes (e.g., refreshNonce)
+    mgr.resolve('collection:other', '');
+    expect(mgr.cache.size).toBe(0);
+  });
+
+  it('store() and resolve() in completion callback order: both available before next read', () => {
+    // Simulates the exact completion callback sequence:
+    // 1. syncDecollisionState (would write memoizedPositions)
+    // 2. store(constraintKey, finalData)
+    // 3. React re-renders → data effect → resolve() returns unchanged → needs cache.get()
+    const mgr = new DecollisionCacheManager();
+    mgr.resolve(SCOPE, '');
+    mgr.store('', baseDecollided);
+    mgr.resolve(SCOPE, 'hl:x');
+    // --- decollision runs ---
+    // Completion: store is called
+    mgr.store('hl:x', hlDecollided);
+    // React re-renders, data effect runs:
+    const r = mgr.resolve(SCOPE, 'hl:x');
+    expect(r.source).toBe('unchanged');
+    // Position restore reads from cache:
+    const cached = mgr.cache.get('hl:x');
+    expect(cached.get('a')).toEqual({ x: 0.5, y: 0.5 });
+    expect(cached.get('b')).toEqual({ x: 3, y: 3 });
+  });
+
+  it('cachePlan.to already carries exact-hit positions (no cache.get needed)', () => {
+    // For 'animate' plans, the positions are in the plan itself.
+    // Verify planCacheTransition embeds the right positions in .to
+    const mgr = new DecollisionCacheManager();
+    mgr.resolve(SCOPE, '');
+    mgr.store('', baseDecollided);
+    mgr.resolve(SCOPE, 'hl:x');
+    mgr.store('hl:x', hlDecollided);
+    // Deactivate → exact hit
+    const resolution = mgr.resolve(SCOPE, '');
+    expect(resolution.source).toBe('exact');
+    const plan = planCacheTransition(resolution, {
+      currentOnScreen: hlDecollided, // what's on screen now
+      validData: rawUMAP,
+    });
+    expect(plan.type).toBe('animate');
+    // plan.to has base positions applied to validData
+    expect(plan.to[0]).toMatchObject({ id: 'a', x: 0.1, y: 0.1 });
+    expect(plan.to[1]).toMatchObject({ id: 'b', x: 1.2, y: 1.2 });
+  });
+
+  it('cachePlan.positions carries base-fallback positions directly', () => {
+    // For 'decollide' plans with base-fallback, positions is the base Map.
+    // Can be read directly without going through memoizedPositions.
+    const mgr = new DecollisionCacheManager();
+    mgr.resolve(SCOPE, '');
+    mgr.store('', baseDecollided);
+    const resolution = mgr.resolve(SCOPE, 'hl:new');
+    expect(resolution.source).toBe('base-fallback');
+    const plan = planCacheTransition(resolution, {
+      currentOnScreen: baseDecollided,
+      validData: rawUMAP,
+    });
+    expect(plan.type).toBe('decollide');
+    expect(plan.positions.get('a')).toEqual({ x: 0.1, y: 0.1 });
+  });
+});

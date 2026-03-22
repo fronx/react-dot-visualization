@@ -175,7 +175,6 @@ const DotVisualization = forwardRef((props, ref) => {
   const updateCountOnTransformChangeRef = useLatest(updateCountOnTransformChange);
 
   const dataRef = useRef([]);
-  const memoizedPositions = useRef(new Map()); // Store final positions after collision detection
   const previousDataRef = useRef([]);
   const didInitialAutoFitRef = useRef(false);
   const autoZoomTimeoutRef = useRef(null);
@@ -296,33 +295,27 @@ const DotVisualization = forwardRef((props, ref) => {
       });
     }
 
-    // ── Apply plan to memoized positions ──────────────────────────────────
+    // ── Apply cache plan ──────────────────────────────────────────────────
     if (cachePlan?.type === 'animate') {
       // Exact hit: we'll animate to these positions (no physics).
-      // Seed memoizedPositions so subsequent unchanged renders use them.
       cacheRestoreFromRef.current = cachePlan;
-      memoizedPositions.current.clear();
-      for (const item of cachePlan.to) {
-        memoizedPositions.current.set(item.id, { x: item.x, y: item.y });
-      }
-    } else if (cachePlan?.type === 'decollide') {
-      // Seed from base or clear for fresh. Decollision effect will run physics.
-      memoizedPositions.current.clear();
-      if (cachePlan.positions) {
-        for (const [id, pos] of cachePlan.positions) {
-          memoizedPositions.current.set(id, { x: pos.x, y: pos.y });
-        }
-      }
-    }
-
-    // ── Restore memoized positions into processedData ─────────────────────
-    const hasMemoized = memoizedPositions.current.size > 0;
-    const shouldRestore = (!positionsChanged || cachePlan?.type === 'decollide') && hasMemoized && !positionsAreIntermediate;
-    if (shouldRestore) {
+      // cachePlan.to already has positions applied to validData — use directly
+      processedValidData = cachePlan.to;
+    } else if (cachePlan?.type === 'decollide' && cachePlan.positions && !positionsAreIntermediate) {
+      // Seed from base positions. Decollision effect will run physics on top.
       processedValidData = validData.map(item => {
-        const pos = memoizedPositions.current.get(item.id);
+        const pos = cachePlan.positions.get(item.id);
         return pos ? { ...item, x: pos.x, y: pos.y } : item;
       });
+    } else if (!cachePlan && !positionsChanged && !positionsAreIntermediate && sharedPositionCache) {
+      // Unchanged re-render: restore decollided positions from cache
+      const cached = sharedPositionCache.cache.get(constraintKey);
+      if (cached && cached.size > 0) {
+        processedValidData = validData.map(item => {
+          const pos = cached.get(item.id);
+          return pos ? { ...item, x: pos.x, y: pos.y } : item;
+        });
+      }
     }
 
     // Auto-zoom to new content if enabled (using ZoomManager)
@@ -582,10 +575,6 @@ const DotVisualization = forwardRef((props, ref) => {
 
     // Only sync positions if we have data (meaning rendering actually happened)
     if (finalData) {
-      memoizedPositions.current.clear();
-      for (const node of finalData) {
-        memoizedPositions.current.set(node.id, { x: node.x, y: node.y });
-      }
       updateStablePositions(finalData, isIncrementalUpdate);
       setProcessedData(finalData);
     }
@@ -615,7 +604,7 @@ const DotVisualization = forwardRef((props, ref) => {
     const launchMode = chooseDecollisionLaunchMode({
       enableDecollisioning,
       positionsAreIntermediate,
-      hasMemoizedPositions: memoizedPositions.current.size > 0
+      hasMemoizedPositions: sharedPositionCache ? sharedPositionCache.cache.size > 0 : false
     });
 
     if (launchMode === 'skip-intermediate' || launchMode === 'skip-cached') {
@@ -713,7 +702,6 @@ const DotVisualization = forwardRef((props, ref) => {
       // Store decollision result in keyed cache under the constraint it was computed for
       if (sharedPositionCache) {
         sharedPositionCache.store(launchConstraintKey, finalData);
-        console.log('[cache] stored', finalData.length, 'positions for constraint:', launchConstraintKey || '(base)');
       }
 
       // Notify parent, including whether more work is pending
