@@ -57,7 +57,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     transitionDuration = 500,
     transitionEasing = d3.easeCubicOut,
     positionsAreIntermediate = false,
-    cacheKey = 'default',
+    scopeKey = 'default',
+    constraintKey = '',
     radiusOverrides = EMPTY_RADIUS_OVERRIDES,
     sharedPositionCache = null,
     initialTransform = null,
@@ -75,7 +76,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const dotStylesRef = useRef(dotStyles);
   const defaultSizeRef = useRef(defaultSize);
   const onDecollisionCompleteRef = useRef(onDecollisionComplete);
-  const prevCacheKeyRef = useRef(cacheKey);
+  const prevConstraintKeyRef = useRef(constraintKey);
   const cameraInitialized = useRef(false);
 
   // Camera state for zoom/pan persistence across renderer switches.
@@ -97,14 +98,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onDecollisionCompleteRef.current = onDecollisionComplete;
   }, [onDecollisionComplete]);
 
-  // Clear memoized positions when cache key changes
+  // Clear memoized positions when constraint key changes
   useEffect(() => {
-    if (prevCacheKeyRef.current !== cacheKey) {
+    if (prevConstraintKeyRef.current !== constraintKey) {
       memoizedPositions.current.clear();
       stablePositionsRef.current = [];
-      prevCacheKeyRef.current = cacheKey;
+      prevConstraintKeyRef.current = constraintKey;
     }
-  }, [cacheKey]);
+  }, [constraintKey]);
 
   // Validate and assign IDs
   const ensureIds = useCallback((d) =>
@@ -251,7 +252,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     };
   }, [
     data,
-    cacheKey,
+    constraintKey,
     enableDecollisioning,
     decollisionEngine,
     isIncrementalUpdate,

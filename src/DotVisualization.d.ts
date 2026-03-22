@@ -24,7 +24,7 @@ export interface DotVisualizationProps {
 }
 
 export interface DotVisualizationRef {
-  zoomToVisible: (duration?: number, easing?: any, dataOverride?: any[], marginOverride?: number | null, updateExtents?: boolean) => Promise<boolean>;
+  zoomToVisible: (duration?: number, easing?: any, dataOverride?: any[], marginOverride?: number | null, updateExtents?: boolean, maxScale?: number) => Promise<boolean>;
   getFitTransform: (dataOverride?: any[] | null, marginOverride?: number | null) => { x: number; y: number; k: number } | null;
   setZoomTransform: (transform: { x: number; y: number; k: number }, options?: { direct?: boolean }) => boolean;
   getVisibleDotCount: () => number;

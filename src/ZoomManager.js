@@ -289,7 +289,8 @@ export class ZoomManager {
       duration = 0,
       easing = d3.easeCubicInOut,
       updateExtents = true,
-      margin = this.fitMargin
+      margin = this.fitMargin,
+      maxScale = Infinity
     } = options;
 
     if (!this.zoomRef?.current || !this.viewBox || !data?.length) {
@@ -307,15 +308,35 @@ export class ZoomManager {
 
     if (!fit) return false;
 
-    const next = d3.zoomIdentity.translate(fit.x, fit.y).scale(fit.k);
+    // Cap the zoom scale if maxScale is set.
+    // When capping, recompute translation to center the data at the capped scale.
+    // (fit.x/y are computed as visCxVb - k*cx, so they're wrong if k was huge.)
+    let finalK = fit.k;
+    let finalX = fit.x;
+    let finalY = fit.y;
+    if (fit.k > maxScale) {
+      finalK = maxScale;
+      const cx = (bounds.minX + bounds.maxX) / 2;
+      const cy = (bounds.minY + bounds.maxY) / 2;
+      const [vbX, vbY, vbW, vbH] = this.viewBox;
+      const sx = rect.width / vbW;
+      const sy = rect.height / vbH;
+      const visWpx = Math.max(1, rect.width - (this.occludeLeft || 0) - (this.occludeRight || 0));
+      const visHpx = Math.max(1, rect.height - (this.occludeTop || 0) - (this.occludeBottom || 0));
+      const visCxVb = vbX + ((this.occludeLeft || 0) + visWpx / 2) / sx;
+      const visCyVb = vbY + ((this.occludeTop || 0) + visHpx / 2) / sy;
+      finalX = visCxVb - finalK * cx;
+      finalY = visCyVb - finalK * cy;
+    }
+    const next = d3.zoomIdentity.translate(finalX, finalY).scale(finalK);
 
     if (updateExtents) {
       // Update zoom extents to accommodate this zoom level
-      const newAbsExtent = computeAbsoluteExtent(this.zoomExtent, fit.k);
+      const newAbsExtent = computeAbsoluteExtent(this.zoomExtent, finalK);
       const oldAbsExtent = this.zoomHandler.scaleExtent();
       const widenedExtent = unionExtent(oldAbsExtent, newAbsExtent);
       setAbsoluteExtent(this.zoomHandler, widenedExtent);
-      this.baseScaleRef = fit.k;
+      this.baseScaleRef = finalK;
     }
 
     if (duration > 0) {

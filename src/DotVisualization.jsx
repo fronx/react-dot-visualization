@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback, useImperativeHandle, useMemo, forwardRef } from 'react';
 import * as d3 from 'd3';
+// resolvePositionsForKey removed — cache logic now in useDecollisionCache hook
 import ColoredDots from './ColoredDots.jsx';
 import InteractionLayer from './InteractionLayer.jsx';
 import ClusterLabels from './ClusterLabels.jsx';
@@ -51,7 +52,8 @@ const DotVisualization = forwardRef((props, ref) => {
     viewBoxSmoothingR = 0.5,
     viewBoxSmoothingQ = 3,
     viewBoxTransitionDuration = 1500,
-    cacheKey = 'default',
+    scopeKey = 'default',
+    constraintKey = '',
     zoomExtent = [0.5, 20],
     margin = 0.1,
     dotStroke = "#111",
@@ -177,7 +179,7 @@ const DotVisualization = forwardRef((props, ref) => {
   const previousDataRef = useRef([]);
   const didInitialAutoFitRef = useRef(false);
   const autoZoomTimeoutRef = useRef(null);
-  const prevCacheKeyRef = useRef(cacheKey);
+  // (scope/constraint key tracking is now inside the decollisionCache hook)
   const interactionActiveRef = useRef(false);
   const interactionIdleTimerRef = useRef(null);
 
@@ -195,26 +197,12 @@ const DotVisualization = forwardRef((props, ref) => {
   // Keep latest dotStyles without triggering decollision simulation restarts
   const dotStylesRef = useLatest(dotStyles);
 
-  // Clear memoized positions when cache key changes (application state change)
-  //
-  // Use case: If your application has state that affects dot sizes (e.g., selecting
-  // a subset of dots to highlight by making them larger), you can pass a cacheKey
-  // that encodes that state. When the state changes, this effect clears the
-  // memoizedPositions cache, allowing decollision to run fresh with the new sizes.
-  //
-  // Example: cacheKey="playlist:123:open" when playlist is selected, "default" otherwise
-  useEffect(() => {
-    if (prevCacheKeyRef.current !== cacheKey) {
-      memoizedPositions.current.clear();
-      prevCacheKeyRef.current = cacheKey;
-    }
-  }, [cacheKey]);
 
 
-  const zoomToVisible = useCallback(async (duration = 0, easing = d3.easeCubicInOut, dataOverride = null, marginOverride = null, updateExtents = true) => {
+  const zoomToVisible = useCallback(async (duration = 0, easing = d3.easeCubicInOut, dataOverride = null, marginOverride = null, updateExtents = true, maxScale = Infinity) => {
     if (!zoomManager.current) return false;
     const dataToUse = dataOverride || processedData;
-    const options = { duration, easing, updateExtents };
+    const options = { duration, easing, updateExtents, maxScale };
     if (marginOverride !== null) {
       options.margin = marginOverride;
     }
@@ -295,15 +283,23 @@ const DotVisualization = forwardRef((props, ref) => {
       pendingDecollisionRef.current = true;
     }
 
-    // Seed from shared cross-renderer cache on first mount so we immediately show
-    // decollisioned positions without a catch-up simulation.
+    // Resolve position cache: scope changes invalidate, constraint changes save/restore.
+    // Must happen during render (useMemo) because memoizedPositions are consumed below.
     let seededFromSharedCache = false;
-    if (sharedPositionCache?.current?.size > 0 && memoizedPositions.current.size === 0 && !positionsAreIntermediate) {
-      for (const item of validData) {
-        const cached = sharedPositionCache.current.get(item.id);
-        if (cached) memoizedPositions.current.set(item.id, { x: cached.x, y: cached.y });
+    if (sharedPositionCache) {
+      const resolved = sharedPositionCache.resolve(scopeKey, constraintKey, memoizedPositions.current);
+      if (resolved.source === 'cache') {
+        console.log('[cache] restored', resolved.positions.size, 'positions for constraint:', constraintKey || '(base)');
+        memoizedPositions.current.clear();
+        for (const [id, pos] of resolved.positions) {
+          memoizedPositions.current.set(id, { x: pos.x, y: pos.y });
+        }
+        seededFromSharedCache = true;
+      } else if (resolved.source === 'fresh') {
+        console.log('[cache] no cached positions for constraint:', constraintKey || '(base)', '— will decollide fresh');
+        memoizedPositions.current.clear();
       }
-      seededFromSharedCache = memoizedPositions.current.size > 0;
+      // 'unchanged' → do nothing, keep current memoizedPositions
     }
 
     // Restore memoized positions when positions haven't changed (or when seeded from shared cache)
@@ -363,7 +359,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Update visible dot count when data changes
     updateVisibleDotCount();
 
-  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate]);
+  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate, scopeKey, constraintKey]);
 
   // Initialize and set up zoom behavior with ZoomManager once.
   useEffect(() => {
@@ -652,6 +648,9 @@ const DotVisualization = forwardRef((props, ref) => {
     const isCatchUp = launchMode === 'run-catchup';
     const skipFrames = isCatchUp || isIncrementalUpdate;
 
+    // Capture the constraint key at launch time — the result belongs to this key,
+    // even if the constraint changes before the decollision completes.
+    const launchConstraintKey = constraintKey;
     let cancelled = false;
     const simulation = decollisioning(dataSnapshot, (nodes) => {
       if (cancelled) return;
@@ -666,12 +665,10 @@ const DotVisualization = forwardRef((props, ref) => {
       // Sync state using shared primitive
       syncDecollisionState(finalData);
 
-      // Write back to shared cache so the other renderer can seed from it on mount
-      if (sharedPositionCache?.current) {
-        sharedPositionCache.current.clear();
-        for (const node of finalData) {
-          sharedPositionCache.current.set(node.id, { x: node.x, y: node.y });
-        }
+      // Store decollision result in keyed cache under the constraint it was computed for
+      if (sharedPositionCache) {
+        sharedPositionCache.store(launchConstraintKey, finalData);
+        console.log('[cache] stored', finalData.length, 'positions for constraint:', launchConstraintKey || '(base)');
       }
 
       // Notify parent, including whether more work is pending
@@ -688,6 +685,7 @@ const DotVisualization = forwardRef((props, ref) => {
     return () => {
       cancelled = true;
       simulation.stop();
+
       if (decollisionSimRef.current === simulation) {
         decollisionSimRef.current = null;
       }
@@ -697,7 +695,7 @@ const DotVisualization = forwardRef((props, ref) => {
       }
       liveTransitionDataRef.current = null;
     };
-  }, [enableDecollisioning, decollisionEngine, processedData.length, isIncrementalUpdate, defaultSize, useCanvas, positionsAreIntermediate]);
+  }, [enableDecollisioning, decollisionEngine, processedData.length, isIncrementalUpdate, defaultSize, useCanvas, positionsAreIntermediate, constraintKey]);
 
 
   // Handle mouse leave to reset interaction states

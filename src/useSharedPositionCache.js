@@ -1,29 +1,22 @@
-import { useRef, useEffect } from 'react';
+import { useRef } from 'react';
+import { DecollisionPositionCache } from './DecollisionPositionCache.js';
 
 /**
- * Creates a shared position cache that survives renderer switches.
+ * Creates a shared, keyed position cache that survives renderer switches
+ * and constraint changes (focus, playlist, browser selection).
  *
- * When two renderers (e.g. R3F and SVG/Canvas) share this cache, the new renderer
- * immediately seeds its own memoizedPositions on mount — showing decollisioned positions
- * in the first frame without running a catch-up simulation.
- *
- * Each renderer automatically writes back to the cache when its decollision completes.
+ * Positions are stored per constraint key. When switching constraints,
+ * the cache can restore previously computed positions instantly
+ * instead of re-running decollision.
  *
  * Usage:
- *   const positionCache = useSharedPositionCache(cacheKey);
- *   <DotVisualization sharedPositionCache={positionCache} ... />
- *   <DotVisualizationR3F sharedPositionCache={positionCache} ... />
+ *   const positionCache = useSharedPositionCache();
+ *   <DotVisualization sharedPositionCache={positionCache} cacheKey={constraintKey} ... />
  */
-export function useSharedPositionCache(cacheKey = 'default') {
-  const cache = useRef(new Map());
-  const prevCacheKey = useRef(cacheKey);
-
-  useEffect(() => {
-    if (prevCacheKey.current !== cacheKey) {
-      cache.current.clear();
-      prevCacheKey.current = cacheKey;
-    }
-  }, [cacheKey]);
-
+export function useSharedPositionCache() {
+  const cache = useRef(null);
+  if (!cache.current) {
+    cache.current = new DecollisionPositionCache();
+  }
   return cache;
 }
