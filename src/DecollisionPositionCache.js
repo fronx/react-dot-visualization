@@ -3,26 +3,32 @@
  *
  * Different dot size constraints (focus, playlist, browser selection) produce
  * different decollision results. This cache stores each result so transitions
- * between states can animate to known-good positions instead of re-running
- * decollision.
+ * between states can restore known-good positions instead of re-running
+ * decollision from raw UMAP coordinates.
  *
- * Eviction: only the base ("") key is retained long-term. All other entries
- * are evicted when a new constraint is activated, since transient states
- * (specific selections) are cheap to recompute and unlikely to repeat exactly.
+ * The base key ("") is always protected — it's the clean, no-constraint layout
+ * that every other state transitions through. It's only invalidated on scope
+ * changes (collection, checkpoint, source filters) or node count changes.
+ *
+ * Transient entries (specific focus/highlight states) are capped to prevent
+ * unbounded growth. When the cap is exceeded, the oldest transient is evicted.
  */
+const MAX_TRANSIENT_ENTRIES = 5;
+
 export class DecollisionPositionCache {
   constructor() {
     /** @type {Map<string, Map<string|number, {x: number, y: number}>>} */
     this._entries = new Map();
   }
 
-  /** Store positions for a constraint key. */
+  /** Store positions for a constraint key. Evicts oldest transient if cap exceeded. */
   store(key, positions) {
     const map = new Map();
     for (const node of positions) {
       map.set(node.id, { x: node.x, y: node.y });
     }
     this._entries.set(key, map);
+    this._evictIfNeeded();
   }
 
   /** Retrieve cached positions for a constraint key, or null. */
@@ -35,18 +41,27 @@ export class DecollisionPositionCache {
     return this._entries.has(key);
   }
 
-  /**
-   * Evict transient entries, keeping only the base state.
-   * Call when switching to a new transient constraint.
-   */
-  evictTransient() {
-    const base = this._entries.get('');
-    this._entries.clear();
-    if (base) this._entries.set('', base);
-  }
-
-  /** Clear everything. */
+  /** Clear everything (scope invalidation). */
   clear() {
     this._entries.clear();
+  }
+
+  /** Number of cached entries (for diagnostics). */
+  get size() {
+    return this._entries.size;
+  }
+
+  /** @private Evict oldest transient entry if over cap. Base ("") is protected. */
+  _evictIfNeeded() {
+    const transientCount = this._entries.has('') ? this._entries.size - 1 : this._entries.size;
+    if (transientCount <= MAX_TRANSIENT_ENTRIES) return;
+
+    // Evict the oldest transient (first non-base key in insertion order)
+    for (const key of this._entries.keys()) {
+      if (key !== '') {
+        this._entries.delete(key);
+        break;
+      }
+    }
   }
 }

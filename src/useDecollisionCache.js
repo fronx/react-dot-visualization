@@ -63,19 +63,16 @@ export function useDecollisionCache() {
       cache.store(prevConstraint, positions);
     }
 
-    // Evict old transient entries (keep base)
-    if (constraintKey !== '') {
-      cache.evictTransient();
-      // Re-store the outgoing positions we just saved (evictTransient clears non-base)
-      if (currentPositions.size > 0 && prevConstraint !== '') {
-        // Don't bother re-storing a transient we just evicted — only base matters
-      }
-    }
-
-    // Try to restore cached positions for the incoming constraint
+    // Try to restore: exact match first, then fall back to base
     const cached = cache.get(constraintKey);
     if (cached && cached.size > 0) {
       return { positions: cached, source: 'cache' };
+    }
+
+    // No exact match — use base positions as starting point for decollision
+    const base = cache.get('');
+    if (base && base.size > 0) {
+      return { positions: base, source: 'cache' };
     }
 
     return { positions: null, source: 'fresh' };
