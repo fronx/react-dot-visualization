@@ -12,10 +12,14 @@ export function buildSpatialGrid(entries, { cellSize = 20, getBounds }) {
 
   for (const entry of entries) {
     const { minX, maxX, minY, maxY } = getBounds(entry);
+    if (!isFinite(minX) || !isFinite(maxX) || !isFinite(minY) || !isFinite(maxY)) continue;
     const minCellX = Math.floor(minX / cellSize);
     const maxCellX = Math.floor(maxX / cellSize);
     const minCellY = Math.floor(minY / cellSize);
     const maxCellY = Math.floor(maxY / cellSize);
+
+    // Skip entries spanning too many cells (degenerate coordinates)
+    if (maxCellX - minCellX > 1000 || maxCellY - minCellY > 1000) continue;
 
     for (let cellX = minCellX; cellX <= maxCellX; cellX++) {
       for (let cellY = minCellY; cellY <= maxCellY; cellY++) {
