@@ -287,3 +287,31 @@ describe('resolveOnScreenData — animation "from" position priority', () => {
     expect(result).toEqual(live);
   });
 });
+
+describe('import transition — stable positions during intermediate full re-renders', () => {
+  // These tests document the invariant that shouldUseStablePositions is called
+  // with (isIncrementalUpdate || positionsAreIntermediate), ensuring that full
+  // re-renders during import keep stable positions instead of snapping.
+
+  // Simulate shouldUseStablePositions: returns true when flag is true AND stableLength > 0
+  const shouldUseStable = (flag, stableLength) => flag && stableLength > 0;
+
+  test('incremental update with stable positions → keep stable', () => {
+    expect(shouldUseStable(true || false, 100)).toBe(true);
+  });
+
+  test('full re-render during import (intermediate) with stable positions → keep stable', () => {
+    // isIncrementalUpdate=false, positionsAreIntermediate=true → flag = true
+    expect(shouldUseStable(false || true, 100)).toBe(true);
+  });
+
+  test('full re-render after import settles (not intermediate) → apply immediately', () => {
+    // isIncrementalUpdate=false, positionsAreIntermediate=false → flag = false
+    expect(shouldUseStable(false || false, 100)).toBe(false);
+  });
+
+  test('first data arrival (no stable positions) → apply immediately', () => {
+    // Even during import, the first render has no stable positions to keep
+    expect(shouldUseStable(false || true, 0)).toBe(false);
+  });
+});

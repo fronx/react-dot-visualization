@@ -311,13 +311,18 @@ const DotVisualization = forwardRef((props, ref) => {
     dataRef.current = processedValidData;
 
     // Conditional rendering based on update type:
-    // - Incremental updates: Keep rendering stable positions while decollision runs
-    // - Full renders: Render new data directly, show animation
-    if (shouldUseStablePositions(isIncrementalUpdate)) {
-      // Incremental: Don't update processedData yet, keep rendering stable old positions
-      // The scheduler will update both stablePositions and processedData when complete
+    // - Incremental updates OR intermediate full re-renders: keep stable positions on screen
+    // - Settled full renders: apply immediately
+    //
+    // During import, periodic full re-renders arrive while positionsAreIntermediate is true.
+    // Without this guard, those full renders snap processedData to raw UMAP positions,
+    // causing a visual jump. By keeping stable positions, we let the scheduler handle
+    // the smooth transition when layout finally settles.
+    const keepStable = shouldUseStablePositions(isIncrementalUpdate || positionsAreIntermediate);
+    if (keepStable) {
+      // Keep rendering stable old positions — scheduler will transition when ready
     } else {
-      // Full render: Update immediately to show animation
+      // Full render with settled positions: apply immediately
       setProcessedData(processedValidData);
       processedDataRef.current = processedValidData;
       if (!isIncrementalUpdate) {

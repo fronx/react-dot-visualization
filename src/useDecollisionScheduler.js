@@ -94,13 +94,15 @@ export function useDecollisionScheduler({
    * @param {string} constraintKeyForLaunch - cache key for this simulation's result
    * @param {Map} overrides - radiusOverrides to use for dot sizes
    * @param {Function} onComplete - called with (finalData, constraintKey) on completion
+   * @param {object} [transitionConfig] - if provided, skip intermediate frames and animate from stablePositions to final
    */
-  const launchSimulation = useCallback((sourceData, constraintKeyForLaunch, overrides, onComplete) => {
+  const launchSimulation = useCallback((sourceData, constraintKeyForLaunch, overrides, onComplete, transitionConfig = null) => {
     if (!sourceData || sourceData.length === 0) return;
 
     cancelSimulation();
 
     const fnDotSize = makeDotSizeFn(overrides);
+    const skipFrames = transitionConfig?.enabled === true;
     let cancelled = false;
 
     stableOnSimulationRunningChange(true);
@@ -118,8 +120,8 @@ export function useDecollisionScheduler({
         stableSyncDecollisionState(finalData);
         onComplete(finalData, constraintKeyForLaunch);
       },
-      false, // skipIntermediateFrames — show live frames
-      null,  // transitionConfig
+      skipFrames,
+      transitionConfig,
       {
         engine: decollisionEngineRef.current,
         shouldPublishIntermediate: () => !(isDraggingRef.current || interactionActiveRef.current),
@@ -137,6 +139,17 @@ export function useDecollisionScheduler({
     const data = dataRef.current;
     if (!data || data.length === 0) return;
 
+    // If there are on-screen positions (e.g. stable positions from import), animate
+    // from them to the decollided result instead of showing raw physics frames.
+    // This gives a smooth transition when layout settles after incremental updates.
+    const onScreen = processedDataRef.current;
+    const transitionConfig = onScreen.length > 0 ? {
+      enabled: true,
+      stablePositions: onScreen,
+      duration: 350,
+      easing: d3.easeCubicOut,
+    } : null;
+
     // Base uses empty overrides (no constraint = uniform sizes)
     launchSimulation([...data], '', new Map(), (finalData) => {
       if (cache) {
@@ -153,8 +166,8 @@ export function useDecollisionScheduler({
       if (result.action?.type === 'launch-constraint') {
         launchConstraintRef.current?.(result.action.constraintKey);
       }
-    });
-  }, [dataRef, launchSimulation, cache, stableOnBaseReady]);
+    }, transitionConfig);
+  }, [dataRef, processedDataRef, launchSimulation, cache, stableOnBaseReady]);
 
   const launchConstraint = useCallback((key) => {
     const data = dataRef.current;
