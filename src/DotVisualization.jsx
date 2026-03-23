@@ -285,6 +285,14 @@ const DotVisualization = forwardRef((props, ref) => {
           const pos = cached.get(item.id);
           return pos ? { ...item, x: pos.x, y: pos.y } : item;
         });
+      } else if (processedDataRef.current.length > 0) {
+        // Cache cleared (e.g. scope change) but positions unchanged.
+        // Keep current decollided positions — they're still valid for this data.
+        const posMap = new Map(processedDataRef.current.map(p => [p.id, p]));
+        processedValidData = validData.map(item => {
+          const prev = posMap.get(item.id);
+          return prev ? { ...item, x: prev.x, y: prev.y } : item;
+        });
       }
     }
 
