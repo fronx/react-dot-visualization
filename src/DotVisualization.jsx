@@ -15,6 +15,30 @@ import { useDecollisionScheduler } from './useDecollisionScheduler.js';
 
 const EMPTY_RADIUS_OVERRIDES = new Map();
 
+/**
+ * Restore decollisioned x/y positions onto fresh data items.
+ *
+ * Priority: cache hit > previous processedData > raw input (no-op).
+ * The processedData fallback handles the case where the cache was just
+ * cleared (e.g. scopeKey changed) but the underlying positions are unchanged.
+ */
+export function restoreDecollisionedPositions(validData, cachedPositions, previousProcessedData) {
+  if (cachedPositions && cachedPositions.size > 0) {
+    return validData.map(item => {
+      const pos = cachedPositions.get(item.id);
+      return pos ? { ...item, x: pos.x, y: pos.y } : item;
+    });
+  }
+  if (previousProcessedData && previousProcessedData.length > 0) {
+    const posMap = new Map(previousProcessedData.map(p => [p.id, p]));
+    return validData.map(item => {
+      const prev = posMap.get(item.id);
+      return prev ? { ...item, x: prev.x, y: prev.y } : item;
+    });
+  }
+  return validData;
+}
+
 const DotVisualization = forwardRef((props, ref) => {
   const {
     data = [],
@@ -278,22 +302,11 @@ const DotVisualization = forwardRef((props, ref) => {
     // Uses constraintKeyRef (not constraintKey dep) because constraint transitions
     // are the scheduler's domain — this effect should not re-run on constraint changes.
     if (!positionsChanged && !positionsAreIntermediate && sharedPositionCache) {
-      const currentConstraintKey = constraintKeyRef.current;
-      const cached = sharedPositionCache.cache.get(currentConstraintKey);
-      if (cached && cached.size > 0) {
-        processedValidData = validData.map(item => {
-          const pos = cached.get(item.id);
-          return pos ? { ...item, x: pos.x, y: pos.y } : item;
-        });
-      } else if (processedDataRef.current.length > 0) {
-        // Cache cleared (e.g. scope change) but positions unchanged.
-        // Keep current decollided positions — they're still valid for this data.
-        const posMap = new Map(processedDataRef.current.map(p => [p.id, p]));
-        processedValidData = validData.map(item => {
-          const prev = posMap.get(item.id);
-          return prev ? { ...item, x: prev.x, y: prev.y } : item;
-        });
-      }
+      processedValidData = restoreDecollisionedPositions(
+        validData,
+        sharedPositionCache.cache.get(constraintKeyRef.current),
+        processedDataRef.current,
+      );
     }
 
     // Auto-zoom to new content if enabled (using ZoomManager)
