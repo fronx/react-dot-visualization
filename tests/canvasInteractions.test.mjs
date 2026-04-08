@@ -18,10 +18,10 @@ describe('Canvas Interactions', () => {
   
   test('buildSpatialIndex creates grid with correct dots', () => {
     const index = buildSpatialIndex(mockData, mockGetSize, mockTransform);
-    
-    assert(index.spatialGrid);
+
+    assert(index.grid);
     assert(index.cellSize);
-    assert(index.spatialGrid.size > 0);
+    assert(index.grid.size > 0);
   });
   
   test('findDotAtPosition finds correct dot', () => {
@@ -40,15 +40,16 @@ describe('Canvas Interactions', () => {
     assert.strictEqual(miss, null);
   });
   
-  test('findDotAtPosition respects dot radius', () => {
+  test('findDotAtPosition respects sensitivity zone (2x screen radius)', () => {
     const index = buildSpatialIndex(mockData, mockGetSize, mockTransform);
-    
-    // Should hit at edge of dot (radius = 5)
-    const hitEdge = findDotAtPosition(105, 100, index);
+
+    // screenRadius = 10 (getSizeFunc returns 10, used as radius), sensitivityRadius = 20
+    // Should hit within sensitivity zone
+    const hitEdge = findDotAtPosition(119, 100, index);
     assert.strictEqual(hitEdge, mockData[0]);
-    
-    // Should miss just outside radius
-    const missEdge = findDotAtPosition(106, 100, index);
+
+    // Should miss outside sensitivity zone (distance 21 > sensitivityRadius 20)
+    const missEdge = findDotAtPosition(121, 100, index);
     assert.strictEqual(missEdge, null);
   });
   
@@ -87,18 +88,18 @@ describe('Canvas Interactions', () => {
     assert.strictEqual(miss, null);
   });
   
-  test('findDotAtPosition returns topmost dot for overlaps', () => {
+  test('findDotAtPosition returns closest dot for overlaps', () => {
     // Create overlapping dots
     const overlappingData = [
       { id: 0, x: 100, y: 100 },
       { id: 1, x: 105, y: 105 }, // Overlaps with first
     ];
-    
+
     const index = buildSpatialIndex(overlappingData, mockGetSize, mockTransform);
-    
-    // Should return the last one in render order (topmost)
+
+    // Should return the closest dot (dot0 at distance ~2.83, dot1 at ~4.24)
     const hit = findDotAtPosition(102, 102, index);
-    assert.strictEqual(hit, overlappingData[1]);
+    assert.strictEqual(hit, overlappingData[0]);
   });
 });
 

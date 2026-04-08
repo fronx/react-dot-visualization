@@ -167,17 +167,18 @@ test('shouldAutoZoomToNewContent: bounds changed significantly, should auto-zoom
   assert.strictEqual(result, true, 'should auto-zoom when bounds have changed significantly');
 });
 
-test('shouldAutoZoomToNewContent: data extends beyond previous bounds but within visible area', () => {
+test('shouldAutoZoomToNewContent: bounds changed but content fits in dead zone — no auto-zoom', () => {
   const newData = [
     { x: -10, y: 20 }, // extends left beyond previous bounds
     { x: 30, y: 40 }
   ];
   const previousBounds = { minX: 0, maxX: 50, minY: 0, maxY: 50 };
   const viewBox = [0, 0, 100, 100];
-  const transform = { k: 1, x: 20, y: 20 }; // visible area is -20 to 80
-  
+  const transform = { k: 1, x: 20, y: 20 }; // visible area is 100x100
+
+  // Content ~56% of view → within 40%-95% dead zone → hysteresis prevents zoom
   const result = shouldAutoZoomToNewContent(newData, previousBounds, viewBox, transform);
-  assert.strictEqual(result, true, 'should auto-zoom when bounds have changed');
+  assert.strictEqual(result, false, 'should not auto-zoom when content fits in dead zone (56% of view)');
 });
 
 test('shouldAutoZoomToNewContent: data extends beyond visible area', () => {
@@ -309,11 +310,11 @@ test('shouldAutoZoomToNewContent: handles edge cases', () => {
     'should return false for empty data'
   );
   
-  // Missing parameters
+  // Null previousBounds = first data arrival → always zoom
   assert.strictEqual(
     shouldAutoZoomToNewContent([{ x: 0, y: 0 }], null, [0, 0, 1, 1], { k: 1, x: 0, y: 0 }),
-    false,
-    'should return false when previousBounds is null'
+    true,
+    'should return true when previousBounds is null (first data arrival)'
   );
   
   assert.strictEqual(
@@ -432,22 +433,28 @@ test('updateZoomExtentForData: updates extent when needed for larger data', () =
 });
 
 test('updateZoomExtentForData: does not update when extent is sufficient', () => {
-  const currentExtent = [0.1, 10]; // already permissive extent  
+  // Use large data spread so baseScale is small (~0.56), making requiredExtent
+  // fit within the already-permissive currentExtent.
+  // With data spread 0..500, dotSize=2: paddedRadius=8, bounds -8..508, dx=dy=516
+  // baseScale = 0.9 * min(1000/516, 1000/516) = 0.9 * 1.938 = 1.744
+  // requiredMin = 0.25 * 1.744 = 0.436, requiredMax = 10 * 1.744 = 17.44
+  // Current [0.1, 20] covers both → no update needed.
+  const currentExtent = [0.1, 20];
   const mockHandler = {
     scaleExtent: () => currentExtent
   };
-  
+
   const data = [
-    { x: 10, y: 10 },
-    { x: 20, y: 20 }  // small data
+    { x: 0, y: 0 },
+    { x: 500, y: 500 }
   ];
-  const viewBox = [0, 0, 100, 100];
-  const svgRect = { width: 100, height: 100 };
+  const viewBox = [0, 0, 1000, 1000];
+  const svgRect = { width: 1000, height: 1000 };
   const occlusion = { left: 0, right: 0, top: 0, bottom: 0 };
   const zoomExtent = [0.25, 10];
-  
+
   const updated = updateZoomExtentForData(mockHandler, data, viewBox, svgRect, occlusion, zoomExtent, 0.9);
-  
+
   assert.strictEqual(updated, false, 'should return false when extent is sufficient');
 });
 
@@ -467,20 +474,20 @@ test('updateZoomExtentForData: handles edge cases', () => {
 
 // --- boundsForData tests with dot sizes -----------------------------------
 
-test('boundsForData: uses maximum dot size for all bounds calculation', () => {
+test('boundsForData: uses 4x maximum dot size for padding (prevents giant dots filling screen)', () => {
   const data = [
     { x: 10, y: 10, size: 5 },  // smaller dot
     { x: 20, y: 20, size: 3 },  // smaller dot
   ];
-  
+
   const bounds = boundsForData(data);
-  const maxSize = 5; // largest dot size
-  
-  // All dots should be padded by the maximum radius
-  assert.strictEqual(bounds.minX, 10 - maxSize, 'minX should use maximum radius for all dots');
-  assert.strictEqual(bounds.minY, 10 - maxSize, 'minY should use maximum radius for all dots');
-  assert.strictEqual(bounds.maxX, 20 + maxSize, 'maxX should use maximum radius for all dots');
-  assert.strictEqual(bounds.maxY, 20 + maxSize, 'maxY should use maximum radius for all dots');
+  const paddedRadius = 5 * 4; // maxRadius * 4
+
+  // All dots should be padded by 4x the maximum radius
+  assert.strictEqual(bounds.minX, 10 - paddedRadius, 'minX should use 4x maximum radius');
+  assert.strictEqual(bounds.minY, 10 - paddedRadius, 'minY should use 4x maximum radius');
+  assert.strictEqual(bounds.maxX, 20 + paddedRadius, 'maxX should use 4x maximum radius');
+  assert.strictEqual(bounds.maxY, 20 + paddedRadius, 'maxY should use 4x maximum radius');
 });
 
 test('boundsForData: uses defaultSize parameter as fallback and finds maximum', () => {
@@ -488,31 +495,31 @@ test('boundsForData: uses defaultSize parameter as fallback and finds maximum', 
     { x: 10, y: 10 }, // no size property, should use defaultSize param = 4
     { x: 20, y: 20, size: 3 }, // has explicit size = 3
   ];
-  
+
   const bounds = boundsForData(data, 4); // defaultSize = 4
-  const maxSize = 4; // max between defaultSize(4) and explicit size(3)
-  
-  // All bounds should use the maximum size (4)
-  assert.strictEqual(bounds.minX, 10 - maxSize, 'should use max size: 10-4=6');
-  assert.strictEqual(bounds.minY, 10 - maxSize, 'should use max size: 10-4=6');
-  assert.strictEqual(bounds.maxX, 20 + maxSize, 'should use max size: 20+4=24');
-  assert.strictEqual(bounds.maxY, 20 + maxSize, 'should use max size: 20+4=24');
+  const paddedRadius = 4 * 4; // max(4, 3) = 4, then * 4
+
+  // All bounds should use 4x the maximum size
+  assert.strictEqual(bounds.minX, 10 - paddedRadius, 'should use 4x max size: 10-16=-6');
+  assert.strictEqual(bounds.minY, 10 - paddedRadius, 'should use 4x max size: 10-16=-6');
+  assert.strictEqual(bounds.maxX, 20 + paddedRadius, 'should use 4x max size: 20+16=36');
+  assert.strictEqual(bounds.maxY, 20 + paddedRadius, 'should use 4x max size: 20+16=36');
 });
 
-test('boundsForData: handles mixed dot sizes correctly using maximum', () => {
+test('boundsForData: handles mixed dot sizes correctly using 4x maximum', () => {
   const data = [
     { x: 0, y: 0, size: 1 },   // small dot
-    { x: 5, y: 5, size: 10 },  // large dot - its size should be used for all bounds
+    { x: 5, y: 5, size: 10 },  // large dot - its size determines padding
   ];
-  
+
   const bounds = boundsForData(data);
-  const maxSize = 10; // largest dot size
-  
-  // Both dots should be padded by the maximum radius (10)
-  assert.strictEqual(bounds.minX, 0 - maxSize, 'should use max radius: 0-10=-10');
-  assert.strictEqual(bounds.minY, 0 - maxSize, 'should use max radius: 0-10=-10');
-  assert.strictEqual(bounds.maxX, 5 + maxSize, 'should use max radius: 5+10=15');
-  assert.strictEqual(bounds.maxY, 5 + maxSize, 'should use max radius: 5+10=15');
+  const paddedRadius = 10 * 4; // maxRadius=10, * 4
+
+  // Both dots should be padded by 4x the maximum radius
+  assert.strictEqual(bounds.minX, 0 - paddedRadius, 'should use 4x max radius: 0-40=-40');
+  assert.strictEqual(bounds.minY, 0 - paddedRadius, 'should use 4x max radius: 0-40=-40');
+  assert.strictEqual(bounds.maxX, 5 + paddedRadius, 'should use 4x max radius: 5+40=45');
+  assert.strictEqual(bounds.maxY, 5 + paddedRadius, 'should use 4x max radius: 5+40=45');
 });
 
 test('boundsForData: handles empty data gracefully', () => {

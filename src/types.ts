@@ -42,6 +42,7 @@ export interface DotStyle {
   fill?: string;
   stroke?: string;
   strokeWidth?: number;
+  strokeDasharray?: number[]; // Canvas setLineDash pattern (e.g., [3, 3] for dashed)
   'stroke-width'?: number; // kebab-case variant for compatibility
   opacity?: number;
   r?: number; // SVG radius attribute

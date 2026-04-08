@@ -319,7 +319,13 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         canvasContext.arc(item.x, item.y, radius, 0, 2 * Math.PI);
         canvasContext.fill();
         if (effectiveStrokeWidth > 0) {
+          if (renderStyles.strokeDasharray) {
+            canvasContext.setLineDash(renderStyles.strokeDasharray);
+          }
           canvasContext.stroke();
+          if (renderStyles.strokeDasharray) {
+            canvasContext.setLineDash([]);
+          }
         }
       };
 

@@ -339,7 +339,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Without this guard, those full renders snap processedData to raw UMAP positions,
     // causing a visual jump. By keeping stable positions, we let the scheduler handle
     // the smooth transition when layout finally settles.
-    const keepStable = shouldUseStablePositions(isIncrementalUpdate || positionsAreIntermediate);
+    const keepStable = shouldUseStablePositions(isIncrementalUpdate || positionsAreIntermediate, constraintKeyRef.current, validData.length);
     if (keepStable) {
       // Keep rendering stable old positions — scheduler will transition when ready
     } else {
@@ -562,11 +562,11 @@ const DotVisualization = forwardRef((props, ref) => {
   const syncDecollisionState = useCallback((finalData) => {
     liveTransitionDataRef.current = null;
     if (finalData) {
-      updateStablePositions(finalData, isIncrementalUpdate);
+      updateStablePositions(finalData, constraintKeyRef.current);
       setProcessedData(finalData);
       processedDataRef.current = finalData;
     }
-  }, [isIncrementalUpdate]);
+  }, []);
 
   // ── Decollision scheduler ─────────────────────────────────────────────────
   // Replaces the old decollision useEffect. The scheduler owns the simulation
