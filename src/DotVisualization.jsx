@@ -287,6 +287,30 @@ const DotVisualization = forwardRef((props, ref) => {
     const positionsChanged = previousDataRef.current.length === 0 ||
       hasPositionsChanged(validData, previousDataRef.current);
 
+    // Diagnostic: detect size-only changes
+    const prevData = previousDataRef.current;
+    let sizeOnlyChange = false;
+    if (positionsChanged && prevData.length === validData.length && prevData.length > 0) {
+      sizeOnlyChange = true;
+      for (let i = 0; i < validData.length; i++) {
+        if (validData[i].id !== prevData[i].id ||
+            Math.round(validData[i].x * 100) !== Math.round(prevData[i].x * 100) ||
+            Math.round(validData[i].y * 100) !== Math.round(prevData[i].y * 100)) {
+          sizeOnlyChange = false;
+          break;
+        }
+      }
+    }
+    console.log('[lib:dataEffect]', {
+      positionsChanged,
+      sizeOnlyChange,
+      oldSize: prevData[0]?.size?.toFixed(4),
+      newSize: validData[0]?.size?.toFixed(4),
+      positionsAreIntermediate,
+      count: validData.length,
+      hasCachedPos: !!(sharedPositionCache?.cache.get(constraintKeyRef?.current)?.size > 0),
+    });
+
     let processedValidData = validData;
 
     // ── Scope change detection ──────────────────────────────────────────────
@@ -340,6 +364,14 @@ const DotVisualization = forwardRef((props, ref) => {
     // causing a visual jump. By keeping stable positions, we let the scheduler handle
     // the smooth transition when layout finally settles.
     const keepStable = shouldUseStablePositions(isIncrementalUpdate || positionsAreIntermediate, constraintKeyRef.current, validData.length);
+    console.log('[lib:dataEffect:commit]', {
+      keepStable,
+      cacheRestored: !positionsChanged && !positionsAreIntermediate,
+      willOverwrite: !keepStable,
+      rawX: validData[0]?.x?.toFixed(4),
+      processedX: processedValidData[0]?.x?.toFixed(4),
+      currentProcessedDataX: processedDataRef.current[0]?.x?.toFixed(4),
+    });
     if (keepStable) {
       // Keep rendering stable old positions — scheduler will transition when ready
     } else {
@@ -562,6 +594,11 @@ const DotVisualization = forwardRef((props, ref) => {
   const syncDecollisionState = useCallback((finalData) => {
     liveTransitionDataRef.current = null;
     if (finalData) {
+      console.log('[lib:syncDecollisionState]', {
+        count: finalData.length,
+        sampleX: finalData[0]?.x?.toFixed(4),
+        sampleSize: finalData[0]?.size?.toFixed(4),
+      });
       updateStablePositions(finalData, constraintKeyRef.current);
       setProcessedData(finalData);
       processedDataRef.current = finalData;
