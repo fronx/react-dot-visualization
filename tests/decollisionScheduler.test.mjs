@@ -7,7 +7,7 @@ import {
   onConstraintComplete,
   onColdStart,
 } from '../src/decollisionScheduler.js';
-import { resolveOnScreenData } from '../src/useDecollisionScheduler.js';
+import { resolveOnScreenData, validateCachedPositions } from '../src/useDecollisionScheduler.js';
 
 describe('decollision scheduler — phase transitions', () => {
   test('AWAITING_LAYOUT stays when intermediate is true', () => {
@@ -285,6 +285,104 @@ describe('resolveOnScreenData — animation "from" position priority', () => {
     const result = resolveOnScreenData(live, processed, raw);
     expect(result).not.toBe(live);
     expect(result).toEqual(live);
+  });
+});
+
+describe('validateCachedPositions — stale cache detection', () => {
+  test('returns null when cache is null', () => {
+    expect(validateCachedPositions(null, 100)).toBeNull();
+  });
+
+  test('returns positions when cache covers all data', () => {
+    const cached = new Map([['t1', { x: 1, y: 2 }], ['t2', { x: 3, y: 4 }]]);
+    expect(validateCachedPositions(cached, 2)).toBe(cached);
+  });
+
+  test('returns positions when cache has MORE entries than data (dots removed)', () => {
+    const cached = new Map([['t1', { x: 1, y: 2 }], ['t2', { x: 3, y: 4 }]]);
+    expect(validateCachedPositions(cached, 1)).toBe(cached);
+  });
+
+  test('returns null when cache has fewer entries than data (dots added)', () => {
+    const cached = new Map([['t1', { x: 1, y: 2 }]]);
+    expect(validateCachedPositions(cached, 5)).toBeNull();
+  });
+
+  test('returns positions when data length is 0 (no data yet)', () => {
+    const cached = new Map([['t1', { x: 1, y: 2 }]]);
+    expect(validateCachedPositions(cached, 0)).toBe(cached);
+  });
+});
+
+describe('discovery dots — stale cache triggers re-decollision', () => {
+  // Simulates what Trigger 2 does: validate cache, then call onConstraintRequest.
+  function simulateTrigger2({ constraintKey, cache, dataLength, activeKey = '' }) {
+    const cachedPositions = validateCachedPositions(
+      cache.get(constraintKey) ?? null,
+      dataLength
+    );
+    const baseCachedPositions = cache.get('') ?? null;
+    return onConstraintRequest(
+      PHASE.READY, constraintKey, cachedPositions, false, activeKey, baseCachedPositions
+    );
+  }
+
+  test('stale cache after discovery dots added → launches fresh simulation', () => {
+    // Cache was computed with 100 library dots, now we have 110 (10 discovery)
+    const cache = new Map();
+    const stalePositions = new Map(
+      Array.from({ length: 100 }, (_, i) => [`t${i}`, { x: i, y: i }])
+    );
+    cache.set('focus:seed1', stalePositions);
+
+    const result = simulateTrigger2({
+      constraintKey: 'focus:seed1',
+      cache,
+      dataLength: 110,
+      activeKey: 'focus:seed1',
+    });
+
+    expect(result.action).toEqual({
+      type: 'launch-constraint',
+      constraintKey: 'focus:seed1'
+    });
+  });
+
+  test('valid cache with all dots covered → animates from cache', () => {
+    const cache = new Map();
+    const validPositions = new Map(
+      Array.from({ length: 110 }, (_, i) => [`t${i}`, { x: i, y: i }])
+    );
+    cache.set('focus:seed1', validPositions);
+
+    const result = simulateTrigger2({
+      constraintKey: 'focus:seed1',
+      cache,
+      dataLength: 110,
+      activeKey: 'focus:seed1',
+    });
+
+    expect(result.action).toEqual({
+      type: 'animate-from-cache',
+      constraintKey: 'focus:seed1',
+      positions: validPositions,
+    });
+  });
+
+  test('no cache entry at all → launches fresh simulation', () => {
+    const cache = new Map();
+
+    const result = simulateTrigger2({
+      constraintKey: 'focus:seed1',
+      cache,
+      dataLength: 110,
+      activeKey: 'focus:seed1',
+    });
+
+    expect(result.action).toEqual({
+      type: 'launch-constraint',
+      constraintKey: 'focus:seed1'
+    });
   });
 });
 

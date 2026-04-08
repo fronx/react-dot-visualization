@@ -6,6 +6,34 @@ import { useLatest } from './useLatest.js';
 import { useStableCallback } from './useStableCallback.js';
 
 /**
+ * Check whether cached positions are stale relative to current data.
+ *
+ * The cache key only encodes constraint identity (which track is focused),
+ * not data identity (how many dots exist). When dots are added or removed,
+ * the same key may point to stale positions. This check catches that case
+ * by requiring the cache to cover all current data items.
+ *
+ * Returns the original positions if valid, or null (cache miss) if stale.
+ */
+export function validateCachedPositions(cachedPositions, dataLength) {
+  if (!cachedPositions) return null;
+  if (dataLength > 0 && cachedPositions.size < dataLength) return null;
+  return cachedPositions;
+}
+
+/**
+ * Build dot size function from radiusOverrides.
+ * For base decollision, overrides may be empty → all dots get defaultSize.
+ * For constraint decollision, overrides has per-dot sizes for larger dots.
+ */
+export function makeDotSizeFn(overrides, defaultSize) {
+  return (item) => {
+    const override = overrides?.get(item.id);
+    return override !== undefined ? override : (item.size || defaultSize);
+  };
+}
+
+/**
  * Resolve the current on-screen positions for animation "from" state.
  * Priority: live transition data (mid-simulation) > processedData (last commit) > raw data.
  */
@@ -77,18 +105,6 @@ export function useDecollisionScheduler({
   }, [stableOnSimulationRunningChange]);
 
   /**
-   * Build dot size function from radiusOverrides (a prop, guaranteed current).
-   * For base decollision, radiusOverrides may be empty → all dots get defaultSize.
-   * For constraint decollision, radiusOverrides has per-dot overrides for larger dots.
-   */
-  const makeDotSizeFn = useCallback((overrides) => {
-    return (item) => {
-      const override = overrides?.get(item.id);
-      return override !== undefined ? override : (item.size || defaultSizeRef.current);
-    };
-  }, [defaultSizeRef]);
-
-  /**
    * Launch a decollision simulation.
    * @param {Array} sourceData - data to decollide (caller provides, not read from dataRef)
    * @param {string} constraintKeyForLaunch - cache key for this simulation's result
@@ -101,7 +117,7 @@ export function useDecollisionScheduler({
 
     cancelSimulation();
 
-    const fnDotSize = makeDotSizeFn(overrides);
+    const fnDotSize = makeDotSizeFn(overrides, defaultSizeRef.current);
     const skipFrames = transitionConfig?.enabled === true;
     let cancelled = false;
 
@@ -130,7 +146,7 @@ export function useDecollisionScheduler({
     );
 
     simulationRef.current = simulation;
-  }, [cancelSimulation, makeDotSizeFn, stableOnUpdateNodes, stableSyncDecollisionState, stableOnSimulationRunningChange, decollisionEngineRef, isDraggingRef, interactionActiveRef, sendMetricsRef]);
+  }, [cancelSimulation, defaultSizeRef, stableOnUpdateNodes, stableSyncDecollisionState, stableOnSimulationRunningChange, decollisionEngineRef, isDraggingRef, interactionActiveRef, sendMetricsRef]);
 
   // Ref to break circular dependency: launchBase → launchConstraint → processAction → launchBase
   const launchConstraintRef = useRef(null);
@@ -205,7 +221,13 @@ export function useDecollisionScheduler({
     return resolveOnScreenData(liveTransitionDataRef.current, processedDataRef.current, dataRef.current);
   }, [liveTransitionDataRef, processedDataRef, dataRef]);
 
-  const animateFromCache = useCallback((key, positions) => {
+  /**
+   * Animate dots from current on-screen positions to target positions.
+   * @param {Map} positions - target positions keyed by dot id
+   * @param {number} duration - animation duration in ms
+   * @param {Function} onComplete - called with (finalData) when animation finishes
+   */
+  const animateToPositions = useCallback((positions, duration, onComplete) => {
     const data = dataRef.current;
     if (!data || data.length === 0) return;
 
@@ -218,7 +240,6 @@ export function useDecollisionScheduler({
       return pos ? { ...item, x: pos.x, y: pos.y } : item;
     });
 
-    const duration = 500;
     const ease = d3.easeCubicOut;
     let cancelled = false;
 
@@ -237,71 +258,30 @@ export function useDecollisionScheduler({
       if (t >= 1) {
         timer.stop();
         simulationRef.current = null;
-        activeConstraintKeyRef.current = key;
         stableSyncDecollisionState(target);
-        stableOnConstraintReady(target, key);
+        onComplete(target);
       }
     });
 
     simulationRef.current = {
       stop() { cancelled = true; timer.stop(); }
     };
-  }, [dataRef, getOnScreenData, cancelSimulation, stableOnUpdateNodes, stableSyncDecollisionState, stableOnConstraintReady]);
+  }, [dataRef, getOnScreenData, cancelSimulation, stableOnUpdateNodes, stableSyncDecollisionState]);
 
-  // Ref to access processAction from animateToBase completion
+  // Ref to access processAction from animate-to-base completion
   const processActionRef = useRef(null);
 
-  const animateToBase = useCallback((positions) => {
-    const data = dataRef.current;
-    if (!data || data.length === 0) return;
-
-    // Capture "from" BEFORE cancelling — liveTransitionDataRef is cleared on cancel
-    const from = getOnScreenData();
-    cancelSimulation();
-
-    const target = data.map(item => {
-      const pos = positions.get(item.id);
-      return pos ? { ...item, x: pos.x, y: pos.y } : item;
-    });
-    const duration = 350; // slightly faster than full animate
-    const ease = d3.easeCubicOut;
-    let cancelled = false;
-
-    const timer = d3.timer((elapsed) => {
-      if (cancelled) { timer.stop(); return; }
-      const t = Math.min(1, ease(elapsed / duration));
-      const interpolated = target.map((targetItem, i) => {
-        const source = from[i] || targetItem;
-        return {
-          ...targetItem,
-          x: source.x + (targetItem.x - source.x) * t,
-          y: source.y + (targetItem.y - source.y) * t,
-        };
-      });
-      stableOnUpdateNodes(interpolated);
-      if (t >= 1) {
-        timer.stop();
-        simulationRef.current = null;
-        activeConstraintKeyRef.current = '';
-        stableSyncDecollisionState(target);
-
-        // Now process queued constraint
-        const queued = queuedConstraintRef.current;
-        if (queued != null) {
-          queuedConstraintRef.current = null;
-          const cachedPositions = cache?.cache.get(queued) ?? null;
-          const result = onConstraintRequest(phaseRef.current, queued, cachedPositions, false, '', null);
-          processActionRef.current?.(result.action);
-        }
-      }
-    });
-
-    simulationRef.current = {
-      stop() { cancelled = true; timer.stop(); }
-    };
-  }, [dataRef, getOnScreenData, cancelSimulation, stableOnUpdateNodes, stableSyncDecollisionState, cache]);
-
-  // Process actions returned by the pure state machine
+  // Dispatch actions returned by the pure state machine to side effects.
+  //
+  // REENTRANT: 'animate-to-base' completion re-enters this dispatcher.
+  // Constraint-to-constraint transitions always pass through base visually:
+  //
+  //   Trigger 2 → onConstraintRequest → [animate-to-base, queue-constraint]
+  //   → animation ends → processActionRef.current → onConstraintRequest
+  //   → launch-constraint (or animate-from-cache)
+  //
+  // The queued constraint is consumed before re-dispatch (queuedConstraintRef
+  // is nulled first), so re-entrancy is bounded to one level.
   const processAction = useCallback((action) => {
     if (!action) return;
     if (Array.isArray(action)) {
@@ -316,10 +296,23 @@ export function useDecollisionScheduler({
         launchConstraint(action.constraintKey);
         break;
       case 'animate-from-cache':
-        animateFromCache(action.constraintKey, action.positions);
+        animateToPositions(action.positions, 500, (target) => {
+          activeConstraintKeyRef.current = action.constraintKey;
+          stableOnConstraintReady(target, action.constraintKey);
+        });
         break;
       case 'animate-to-base':
-        animateToBase(action.positions);
+        animateToPositions(action.positions, 350, () => {
+          activeConstraintKeyRef.current = '';
+          // Process queued constraint
+          const queued = queuedConstraintRef.current;
+          if (queued != null) {
+            queuedConstraintRef.current = null;
+            const cachedPositions = cache?.cache.get(queued) ?? null;
+            const result = onConstraintRequest(phaseRef.current, queued, cachedPositions, false, '', null);
+            processActionRef.current?.(result.action);
+          }
+        });
         break;
       case 'cancel-base':
       case 'cancel-constraint':
@@ -329,7 +322,7 @@ export function useDecollisionScheduler({
         queuedConstraintRef.current = action.constraintKey;
         break;
     }
-  }, [launchBase, launchConstraint, animateFromCache, animateToBase, cancelSimulation]);
+  }, [launchBase, launchConstraint, animateToPositions, cancelSimulation, stableOnConstraintReady, cache]);
 
   processActionRef.current = processAction;
 
@@ -358,12 +351,25 @@ export function useDecollisionScheduler({
   // ── Trigger 2: radiusOverrides changes → constraint decollision ───────
   // This fires on the render where radiusOverrides has already been updated
   // as a prop. The sizes are guaranteed correct — no timing games.
+  //
+  // Full input surface (deps marked *, refs marked →):
+  //   * radiusOverrides    — the trigger (dep, reference equality)
+  //   → constraintKeyRef   — which constraint to request
+  //   → dataRef            — current data length for cache staleness check
+  //   → simulationRef      — whether a simulation is running
+  //   → phaseRef           — current scheduler phase
+  //   → activeConstraintKeyRef — which constraint is currently active
+  //   * cache              — position cache (dep, stable ref)
+  //   * processAction      — action dispatcher (dep)
   useEffect(() => {
     if (radiusOverrides === prevRadiusOverridesRef.current) return;
     prevRadiusOverridesRef.current = radiusOverrides;
 
     const key = constraintKeyRef.current;
-    const cachedPositions = cache?.cache.get(key) ?? null;
+    const cachedPositions = validateCachedPositions(
+      cache?.cache.get(key) ?? null,
+      dataRef.current?.length ?? 0
+    );
     const baseCachedPositions = cache?.cache.get('') ?? null;
     const isRunning = simulationRef.current != null && phaseRef.current === PHASE.READY;
     const activeKey = activeConstraintKeyRef.current;

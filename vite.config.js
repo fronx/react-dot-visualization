@@ -5,5 +5,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 3011
+  },
+  test: {
+    include: [
+      'src/__tests__/**/*.{test,spec}.{js,mjs}',
+      'tests/decollisionScheduler.test.mjs',
+    ],
   }
 })
