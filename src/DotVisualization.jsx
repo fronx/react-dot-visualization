@@ -16,6 +16,51 @@ import { useDecollisionScheduler } from './useDecollisionScheduler.js';
 const EMPTY_RADIUS_OVERRIDES = new Map();
 
 /**
+ * Pure decision logic extracted from the data effect.
+ *
+ * Given new data, previous data, cache state, and flags, determines
+ * what processedData should be committed. This is the core logic that
+ * decides whether to restore decollisioned positions or use raw input.
+ *
+ * @param {Object} params
+ * @param {Array} params.validData - New data with raw positions
+ * @param {Array} params.previousData - Data from the previous render (for change detection)
+ * @param {boolean} params.positionsAreIntermediate - Whether layout is still running
+ * @param {Map|null} params.cachedPositions - Decollisioned positions from cache
+ * @param {Array} params.previousProcessedData - Last committed processedData
+ * @param {Function} params.hasPositionsChangedFn - Position comparison function
+ * @returns {{ processedData: Array, positionsChanged: boolean }}
+ */
+export function resolveDataEffectPositions({
+  validData,
+  previousData,
+  positionsAreIntermediate,
+  cachedPositions,
+  previousProcessedData,
+  hasPositionsChangedFn,
+  hasCache,
+}) {
+  const positionsChanged = previousData.length === 0 ||
+    hasPositionsChangedFn(validData, previousData);
+
+  let processedData = validData;
+
+  // When positions haven't changed and layout is settled, restore
+  // decollisioned positions from cache to prevent snapping to raw UMAP.
+  // The hasCache guard preserves the original behavior: without a cache
+  // system, raw positions are used (no fallback to previousProcessedData).
+  if (!positionsChanged && !positionsAreIntermediate && hasCache) {
+    processedData = restoreDecollisionedPositions(
+      validData,
+      cachedPositions,
+      previousProcessedData,
+    );
+  }
+
+  return { processedData, positionsChanged };
+}
+
+/**
  * Restore decollisioned x/y positions onto fresh data items.
  *
  * Priority: cache hit > previous processedData > raw input (no-op).
@@ -283,12 +328,6 @@ const DotVisualization = forwardRef((props, ref) => {
       return;
     }
 
-    // Check if positions have changed compared to original input data
-    const positionsChanged = previousDataRef.current.length === 0 ||
-      hasPositionsChanged(validData, previousDataRef.current);
-
-    let processedValidData = validData;
-
     // ── Scope change detection ──────────────────────────────────────────────
     // Clear cache on scope changes (collection/checkpoint switch, refresh).
     // Constraint transitions are handled by the scheduler, not this effect.
@@ -296,18 +335,16 @@ const DotVisualization = forwardRef((props, ref) => {
       sharedPositionCache.checkScope(scopeKey);
     }
 
-    // ── Unchanged re-render: restore cached positions ───────────────────────
-    // When React re-renders without actual position changes, restore decollided
-    // positions from cache to prevent snapping to raw UMAP coords.
-    // Uses constraintKeyRef (not constraintKey dep) because constraint transitions
-    // are the scheduler's domain — this effect should not re-run on constraint changes.
-    if (!positionsChanged && !positionsAreIntermediate && sharedPositionCache) {
-      processedValidData = restoreDecollisionedPositions(
-        validData,
-        sharedPositionCache.cache.get(constraintKeyRef.current),
-        processedDataRef.current,
-      );
-    }
+    // ── Position resolution: detect changes, restore cache if unchanged ────
+    const { processedData: processedValidData } = resolveDataEffectPositions({
+      validData,
+      previousData: previousDataRef.current,
+      positionsAreIntermediate,
+      cachedPositions: sharedPositionCache?.cache.get(constraintKeyRef.current) ?? null,
+      previousProcessedData: processedDataRef.current,
+      hasPositionsChangedFn: hasPositionsChanged,
+      hasCache: !!sharedPositionCache,
+    });
 
     // Auto-zoom to new content if enabled (using ZoomManager)
     // Skip auto-zoom during incremental updates - viewBox smoothing handles it
