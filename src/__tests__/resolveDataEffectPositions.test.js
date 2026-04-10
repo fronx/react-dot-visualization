@@ -50,7 +50,6 @@ describe('resolveDataEffectPositions — size-only change regression', () => {
   ];
 
   it('BUG: old hasPositionsChanged treats size-only change as position change', () => {
-    // Confirm the old function would have returned true for size-only changes
     expect(hasPositionsChangedWithSize(newDataWithSizeChange, previousData)).toBe(true);
   });
 
@@ -59,8 +58,6 @@ describe('resolveDataEffectPositions — size-only change regression', () => {
   });
 
   it('BUG REPRODUCTION: size-only change overwrites decollisioned positions with raw UMAP', () => {
-    // With the old comparison, the data effect skips cache restore
-    // and commits raw positions — this is the visual snap the user sees
     const { processedData, positionsChanged } = resolveDataEffectPositions({
       validData: newDataWithSizeChange,
       previousData,
@@ -68,11 +65,9 @@ describe('resolveDataEffectPositions — size-only change regression', () => {
       cachedPositions: decollisionedCache,
       previousProcessedData,
       hasPositionsChangedFn: hasPositionsChangedWithSize,
-      hasCache: true,
     });
 
     expect(positionsChanged).toBe(true);
-    // Raw positions committed — decollisioned positions lost!
     expect(processedData[0].x).toBe(rawX);
     expect(processedData[0].x).not.toBe(decollisionedX);
   });
@@ -85,15 +80,12 @@ describe('resolveDataEffectPositions — size-only change regression', () => {
       cachedPositions: decollisionedCache,
       previousProcessedData,
       hasPositionsChangedFn: hasPositionsChanged,
-      hasCache: true,
     });
 
     expect(positionsChanged).toBe(false);
-    // Decollisioned positions preserved!
     expect(processedData[0].x).toBe(decollisionedX);
     expect(processedData[0].y).toBe(20.05);
     expect(processedData[1].x).toBe(30.03);
-    // Size from the new data is preserved (not overwritten by cache)
     expect(processedData[0].size).toBe(savedSize);
   });
 
@@ -105,7 +97,6 @@ describe('resolveDataEffectPositions — size-only change regression', () => {
       cachedPositions: null,
       previousProcessedData,
       hasPositionsChangedFn: hasPositionsChanged,
-      hasCache: true,
     });
 
     expect(processedData[0].x).toBe(decollisionedX);
@@ -126,11 +117,9 @@ describe('resolveDataEffectPositions — position changes still detected', () =>
       cachedPositions: cache,
       previousProcessedData: [dot('a', 12.0, 22.0, 0.5)],
       hasPositionsChangedFn: hasPositionsChanged,
-      hasCache: true,
     });
 
     expect(positionsChanged).toBe(true);
-    // New raw positions committed — cache is stale for new layout
     expect(processedData[0].x).toBe(15.0);
     expect(processedData[0].y).toBe(25.0);
   });
@@ -147,10 +136,8 @@ describe('resolveDataEffectPositions — position changes still detected', () =>
       cachedPositions: cache,
       previousProcessedData: [dot('a', 12.0, 22.0, 0.5)],
       hasPositionsChangedFn: hasPositionsChanged,
-      hasCache: true,
     });
 
-    // During intermediate, raw positions are used (layout still running)
     expect(processedData[0].x).toBe(10.0);
   });
 
@@ -165,55 +152,9 @@ describe('resolveDataEffectPositions — position changes still detected', () =>
       cachedPositions: cache,
       previousProcessedData: [],
       hasPositionsChangedFn: hasPositionsChanged,
-      hasCache: true,
     });
 
     expect(positionsChanged).toBe(true);
     expect(processedData[0].x).toBe(10.0);
-  });
-});
-
-describe('resolveDataEffectPositions — hasCache guard prevents stale fallback', () => {
-  const dot = (id, x, y, size) => ({ id, x, y, size });
-
-  it('without hasCache, unchanged data falls back to previousProcessedData (stale constraint positions)', () => {
-    // After healing animation completes, processedDataRef has base positions.
-    // But if hasCache is false/missing, the function should NOT restore from
-    // previousProcessedData — it should use raw validData instead.
-    const basePositions = [dot('a', 10.0, 20.0, 0.5)];
-    const constraintPositions = [dot('a', 12.0, 22.0, 0.5)];
-
-    // hasCache=false: no cache system → use raw positions, don't fall back
-    const { processedData } = resolveDataEffectPositions({
-      validData: basePositions,
-      previousData: basePositions,
-      positionsAreIntermediate: false,
-      cachedPositions: null,
-      previousProcessedData: constraintPositions,
-      hasPositionsChangedFn: hasPositionsChanged,
-      hasCache: false,
-    });
-
-    // Should use raw validData, NOT fall back to stale constraint positions
-    expect(processedData[0].x).toBe(10.0);
-    expect(processedData[0].x).not.toBe(12.0);
-  });
-
-  it('with hasCache, unchanged data restores from previousProcessedData when cache misses', () => {
-    const rawPositions = [dot('a', 10.0, 20.0, 0.5)];
-    const decollisionedPositions = [dot('a', 10.05, 20.03, 0.5)];
-
-    const { processedData } = resolveDataEffectPositions({
-      validData: rawPositions,
-      previousData: rawPositions,
-      positionsAreIntermediate: false,
-      cachedPositions: null,
-      previousProcessedData: decollisionedPositions,
-      hasPositionsChangedFn: hasPositionsChanged,
-      hasCache: true,
-    });
-
-    // With cache system present, fallback to previousProcessedData is safe
-    expect(processedData[0].x).toBe(10.05);
   });
 });

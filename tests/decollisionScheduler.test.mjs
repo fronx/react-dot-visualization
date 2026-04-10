@@ -387,6 +387,96 @@ describe('discovery dots — stale cache triggers re-decollision', () => {
   });
 });
 
+describe('scope change → playlist healing regression', () => {
+  // Bug: scope change (collection switch) clears the position cache.
+  // The scheduler never re-runs base decollision to repopulate it.
+  // When the user later selects then deselects a playlist, the scheduler
+  // can't animate-from-cache back to base — it falls through to
+  // launch-constraint, which runs decollision. But decollision is
+  // repulsive-only: it pushes dots apart but can't pull them together.
+  // The gaps from the playlist's enlarged dots remain.
+
+  function simulateTrigger2({ constraintKey, cache, dataLength, activeKey = '' }) {
+    const cachedPositions = validateCachedPositions(
+      cache.get(constraintKey) ?? null,
+      dataLength
+    );
+    const baseCachedPositions = cache.get('') ?? null;
+    return onConstraintRequest(
+      PHASE.READY, constraintKey, cachedPositions, false, activeKey, baseCachedPositions
+    );
+  }
+
+  test('without scope change: deselect animates from cached base (healing works)', () => {
+    const cache = new Map();
+    const basePositions = new Map(
+      Array.from({ length: 100 }, (_, i) => [`t${i}`, { x: i, y: i }])
+    );
+    const constraintPositions = new Map(
+      Array.from({ length: 100 }, (_, i) => [`t${i}`, { x: i + 0.5, y: i + 0.5 }])
+    );
+    cache.set('', basePositions);
+    cache.set('hl:a,b', constraintPositions);
+
+    // Deselect playlist → should animate from constraint back to base
+    const result = simulateTrigger2({
+      constraintKey: '',
+      cache,
+      dataLength: 100,
+      activeKey: 'hl:a,b',
+    });
+
+    assert.deepStrictEqual(result.action, {
+      type: 'animate-from-cache',
+      constraintKey: '',
+      positions: basePositions,
+    });
+  });
+
+  test('after scope change + base re-decollision: deselect animates from base', () => {
+    const cache = new Map();
+
+    // Step 1: base decollision completes for old scope
+    const oldBasePositions = new Map(
+      Array.from({ length: 100 }, (_, i) => [`t${i}`, { x: i, y: i }])
+    );
+    cache.set('', oldBasePositions);
+
+    // Step 2: scope change clears everything (simulates checkScope)
+    cache.clear();
+
+    // Step 3: data effect triggers decollideForConstraint('') after scope change.
+    // Base re-decollision runs and repopulates the cache.
+    const newBasePositions = new Map(
+      Array.from({ length: 100 }, (_, i) => [`t${i}`, { x: i + 0.01, y: i + 0.01 }])
+    );
+    cache.set('', newBasePositions);
+
+    // Step 4: user selects playlist → constraint decollision runs, stores result
+    const constraintPositions = new Map(
+      Array.from({ length: 100 }, (_, i) => [`t${i}`, { x: i + 0.5, y: i + 0.5 }])
+    );
+    cache.set('hl:a,b', constraintPositions);
+
+    // Step 5: user deselects playlist → should animate to base
+    const result = simulateTrigger2({
+      constraintKey: '',
+      cache,
+      dataLength: 100,
+      activeKey: 'hl:a,b',
+    });
+
+    // With base cache repopulated, deselect animates smoothly to base.
+    // Without it, launch-constraint would run — but decollision is
+    // repulsive-only and can't close gaps left by enlarged dots.
+    assert.deepStrictEqual(result.action, {
+      type: 'animate-from-cache',
+      constraintKey: '',
+      positions: newBasePositions,
+    });
+  });
+});
+
 describe('import transition — stable positions during intermediate full re-renders', () => {
   // These tests document the invariant that shouldUseStablePositions is called
   // with (isIncrementalUpdate || positionsAreIntermediate), ensuring that full

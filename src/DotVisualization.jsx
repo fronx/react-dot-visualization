@@ -38,7 +38,6 @@ export function resolveDataEffectPositions({
   cachedPositions,
   previousProcessedData,
   hasPositionsChangedFn,
-  hasCache,
 }) {
   const positionsChanged = previousData.length === 0 ||
     hasPositionsChangedFn(validData, previousData);
@@ -49,7 +48,7 @@ export function resolveDataEffectPositions({
   // decollisioned positions from cache to prevent snapping to raw UMAP.
   // The hasCache guard preserves the original behavior: without a cache
   // system, raw positions are used (no fallback to previousProcessedData).
-  if (!positionsChanged && !positionsAreIntermediate && hasCache) {
+  if (!positionsChanged && !positionsAreIntermediate) {
     processedData = restoreDecollisionedPositions(
       validData,
       cachedPositions,
@@ -332,7 +331,15 @@ const DotVisualization = forwardRef((props, ref) => {
     // Clear cache on scope changes (collection/checkpoint switch, refresh).
     // Constraint transitions are handled by the scheduler, not this effect.
     if (sharedPositionCache) {
-      sharedPositionCache.checkScope(scopeKey);
+      const scopeChanged = sharedPositionCache.checkScope(scopeKey);
+      // When scope changes, the base cache entry is lost. Request a base
+      // re-decollision so that future constraint deselections can animate
+      // back to base positions. Without this, deselection falls through to
+      // launch-constraint — but decollision is repulsive-only and can't
+      // close gaps left by enlarged playlist dots.
+      if (scopeChanged && schedulerRef.current) {
+        schedulerRef.current.decollideForConstraint('');
+      }
     }
 
     // ── Position resolution: detect changes, restore cache if unchanged ────
@@ -343,7 +350,6 @@ const DotVisualization = forwardRef((props, ref) => {
       cachedPositions: sharedPositionCache?.cache.get(constraintKeyRef.current) ?? null,
       previousProcessedData: processedDataRef.current,
       hasPositionsChangedFn: hasPositionsChanged,
-      hasCache: !!sharedPositionCache,
     });
 
     // Auto-zoom to new content if enabled (using ZoomManager)
