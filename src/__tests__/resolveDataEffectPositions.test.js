@@ -158,3 +158,66 @@ describe('resolveDataEffectPositions — position changes still detected', () =>
     expect(processedData[0].x).toBe(10.0);
   });
 });
+
+describe('resolveDataEffectPositions — R9: data shrunk preserves on-screen positions', () => {
+  it('keeps decollisioned positions when dots are removed', () => {
+    const previousData = [dot('a', 1, 2), dot('b', 3, 4), dot('c', 5, 6)];
+    const previousProcessed = [dot('a', 1.1, 2.1), dot('b', 3.1, 4.1), dot('c', 5.1, 6.1)];
+    // dot 'c' removed — data shrunk
+    const newData = [dot('a', 1, 2), dot('b', 3, 4)];
+
+    const { processedData } = resolveDataEffectPositions({
+      validData: newData,
+      previousData,
+      positionsAreIntermediate: false,
+      cachedPositions: null,
+      previousProcessedData: previousProcessed,
+      hasPositionsChangedFn: hasPositionsChanged,
+    });
+
+    // Remaining dots keep their decollisioned (on-screen) positions
+    expect(processedData[0].x).toBe(1.1);
+    expect(processedData[0].y).toBe(2.1);
+    expect(processedData[1].x).toBe(3.1);
+    expect(processedData[1].y).toBe(4.1);
+  });
+
+  it('does NOT preserve positions when existing dots moved (import refine)', () => {
+    const previousData = [dot('a', 1, 2), dot('b', 3, 4)];
+    const previousProcessed = [dot('a', 1.1, 2.1), dot('b', 3.1, 4.1)];
+    // Same count, but positions changed — import refine
+    const newData = [dot('a', 2, 3), dot('b', 4, 5)];
+
+    const { processedData } = resolveDataEffectPositions({
+      validData: newData,
+      previousData,
+      positionsAreIntermediate: false,
+      cachedPositions: null,
+      previousProcessedData: previousProcessed,
+      hasPositionsChangedFn: hasPositionsChanged,
+    });
+
+    // New refined positions committed, not stale decollisioned
+    expect(processedData[0].x).toBe(2);
+    expect(processedData[1].x).toBe(4);
+  });
+
+  it('does NOT preserve positions during intermediate layout', () => {
+    const previousData = [dot('a', 1, 2), dot('b', 3, 4), dot('c', 5, 6)];
+    const previousProcessed = [dot('a', 1.1, 2.1), dot('b', 3.1, 4.1), dot('c', 5.1, 6.1)];
+    const newData = [dot('a', 1, 2), dot('b', 3, 4)];
+
+    const { processedData } = resolveDataEffectPositions({
+      validData: newData,
+      previousData,
+      positionsAreIntermediate: true,
+      cachedPositions: null,
+      previousProcessedData: previousProcessed,
+      hasPositionsChangedFn: hasPositionsChanged,
+    });
+
+    // During intermediate layout, raw positions are committed
+    expect(processedData[0].x).toBe(1);
+    expect(processedData[1].x).toBe(3);
+  });
+});

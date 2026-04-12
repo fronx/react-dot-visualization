@@ -56,6 +56,21 @@ export function resolveDataEffectPositions({
     );
   }
 
+  // ── R9: Data shrunk — keep on-screen positions, let scheduler animate ──
+  // When dots are removed (data shrunk, not positions moved), preserve
+  // current decollisioned positions for remaining dots. The scheduler's
+  // Trigger 2 will animate the constraint-to-base transition smoothly.
+  // Safe for imports: import operations only add dots, never remove them.
+  const dataShrunk = positionsChanged && previousData.length > 0
+    && validData.length < previousData.length;
+  if (dataShrunk && !positionsAreIntermediate) {
+    processedData = restoreDecollisionedPositions(
+      validData,
+      null, // skip cache — fall through to previousProcessedData
+      previousProcessedData,
+    );
+  }
+
   return { processedData, positionsChanged };
 }
 
