@@ -133,11 +133,12 @@ export class DecollisionCacheManager {
 
 // ── React hook ────────────────────────────────────────────────────────────────
 
-/** Returns a ref-stable DecollisionCacheManager. */
+/** @returns {DecollisionCacheManager} A ref-stable DecollisionCacheManager. */
 export function useDecollisionCache() {
+  /** @type {import('react').MutableRefObject<DecollisionCacheManager | null>} */
   const ref = useRef(null);
   if (!ref.current) {
     ref.current = new DecollisionCacheManager();
   }
-  return ref.current;
+  return /** @type {DecollisionCacheManager} */ (ref.current);
 }

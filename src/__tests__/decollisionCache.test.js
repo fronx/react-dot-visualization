@@ -39,6 +39,33 @@ describe('DecollisionPositionCache', () => {
     expect(cache.has('f:1')).toBe(false);
     expect(cache.has('f:6')).toBe(true);
   });
+
+  it('renameId moves position from old ID to new ID across all entries', () => {
+    const cache = new DecollisionPositionCache();
+    cache.store('', [pos('bc_1', 1, 2), pos('lib-2', 3, 4)]);
+    cache.store('focus:abc', [pos('bc_1', 5, 6), pos('lib-2', 7, 8)]);
+
+    cache.renameId('bc_1', 'lib-uuid-1');
+
+    // Base entry: old ID gone, new ID present
+    const base = cache.get('');
+    expect(base.has('bc_1')).toBe(false);
+    expect(base.get('lib-uuid-1')).toEqual({ x: 1, y: 2 });
+    expect(base.get('lib-2')).toEqual({ x: 3, y: 4 });
+
+    // Constraint entry: same rename
+    const constraint = cache.get('focus:abc');
+    expect(constraint.has('bc_1')).toBe(false);
+    expect(constraint.get('lib-uuid-1')).toEqual({ x: 5, y: 6 });
+  });
+
+  it('renameId is a no-op when old ID does not exist', () => {
+    const cache = new DecollisionPositionCache();
+    cache.store('', [pos('a', 1, 1)]);
+    cache.renameId('nonexistent', 'new-id');
+    expect(cache.get('').size).toBe(1);
+    expect(cache.get('').get('a')).toEqual({ x: 1, y: 1 });
+  });
 });
 
 // ── DecollisionCacheManager.resolve ───────────────────────────────────────────
@@ -374,6 +401,25 @@ describe('cache readability after store (memoizedPositions replacement invariant
     // plan.to has base positions applied to validData
     expect(plan.to[0]).toMatchObject({ id: 'a', x: 0.1, y: 0.1 });
     expect(plan.to[1]).toMatchObject({ id: 'b', x: 1.2, y: 1.2 });
+  });
+
+  it('renameId preserves decollided position for promoted discovery dot', () => {
+    // Scenario: discovery dot bc_1 is decollided at (5, 6) under focus:abc.
+    // User adopts the track → ID changes to lib-uuid. Without renameId,
+    // restoreDecollisionedPositions falls back to raw UMAP (0, 0).
+    const mgr = new DecollisionCacheManager();
+    mgr.resolve(SCOPE, '');
+    mgr.store('', [pos('a', 1, 1), pos('bc_1', 3, 3)]);
+    mgr.resolve(SCOPE, 'focus:abc');
+    mgr.store('focus:abc', [pos('a', 1.5, 1.5), pos('bc_1', 5, 6)]);
+
+    // Promote: rename in cache
+    mgr.cache.renameId('bc_1', 'lib-uuid');
+
+    // restoreDecollisionedPositions should find the promoted dot's position
+    const cached = mgr.cache.get('focus:abc');
+    expect(cached.get('lib-uuid')).toEqual({ x: 5, y: 6 });
+    expect(cached.has('bc_1')).toBe(false);
   });
 
   it('cachePlan.positions carries base-fallback positions directly', () => {

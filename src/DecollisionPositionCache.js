@@ -51,6 +51,17 @@ export class DecollisionPositionCache {
     return this._entries.size;
   }
 
+  /** Rename a dot ID across all cached entries (e.g. discovery → library promotion). */
+  renameId(oldId, newId) {
+    for (const positionMap of this._entries.values()) {
+      const pos = positionMap.get(oldId);
+      if (pos) {
+        positionMap.delete(oldId);
+        positionMap.set(newId, pos);
+      }
+    }
+  }
+
   /** @private Evict oldest transient entry if over cap. Base ("") is protected. */
   _evictIfNeeded() {
     const transientCount = this._entries.has('') ? this._entries.size - 1 : this._entries.size;
