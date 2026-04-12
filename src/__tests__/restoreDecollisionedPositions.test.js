@@ -56,4 +56,27 @@ describe('restoreDecollisionedPositions', () => {
     const result = restoreDecollisionedPositions(rawData, new Map(), decollided);
     expect(result[0].x).toBe(0.5);
   });
+
+  describe('dot count changes (R9)', () => {
+    it('preserves on-screen positions for existing dots when new dots are added', () => {
+      const existing = [item('a', 0.5, 0.3), item('b', 1.2, 1.1)];
+      const withNew = [item('a', 0, 0, 'red'), item('b', 1, 1, 'blue'), item('c', 5, 5)];
+      const result = restoreDecollisionedPositions(withNew, null, existing);
+      // Existing dots get their decollisioned positions
+      expect(result[0]).toEqual({ id: 'a', x: 0.5, y: 0.3, color: 'red' });
+      expect(result[1]).toEqual({ id: 'b', x: 1.2, y: 1.1, color: 'blue' });
+      // New dot keeps its raw position (not found in processedDataRef)
+      expect(result[2].id).toBe('c');
+      expect(result[2].x).toBe(5);
+      expect(result[2].y).toBe(5);
+    });
+
+    it('preserves on-screen positions for remaining dots when dots are removed', () => {
+      const existing = [item('a', 0.5, 0.3), item('b', 1.2, 1.1), item('c', 3, 3)];
+      const reduced = [item('a', 0, 0, 'red'), item('b', 1, 1, 'blue')];
+      const result = restoreDecollisionedPositions(reduced, null, existing);
+      expect(result[0]).toEqual({ id: 'a', x: 0.5, y: 0.3, color: 'red' });
+      expect(result[1]).toEqual({ id: 'b', x: 1.2, y: 1.1, color: 'blue' });
+    });
+  });
 });
