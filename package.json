@@ -1,6 +1,6 @@
 {
   "name": "react-dot-visualization",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Interactive dot visualization component with zoom, pan, and hover interactions",
   "main": "dist/index.js",
   "module": "dist/index.es.js",
