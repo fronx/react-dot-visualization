@@ -534,37 +534,36 @@ const DotVisualization = forwardRef((props, ref) => {
     }
   }, [zoomExtent, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
-  // Handle container resize - update container dimensions when window resizes
+  // Handle container resize. ResizeObserver fires on any size change of the
+  // SVG's layout box — window resize, parent flex/grid reflow, sibling
+  // appearing/disappearing — not just window-level events. Critical for
+  // hover correctness: `viewBox` is derived from `containerDimensions`, and
+  // a stale viewBox makes the spatial-index transform wrong, which displaces
+  // hit-tests against the visibly-painted dots. Pre-ResizeObserver code only
+  // listened on `window.resize`, which silently missed layout-only resizes.
   useEffect(() => {
-    if (!zoomRef.current || typeof window === 'undefined') {
-      return;
-    }
+    if (!zoomRef.current) return;
+    if (typeof ResizeObserver === 'undefined') return;
 
     const updateContainerDimensions = () => {
       const rect = zoomRef.current?.getBoundingClientRect?.();
-      if (rect && rect.width > 0 && rect.height > 0) {
-        const newDimensions = { width: rect.width, height: rect.height };
-
-        // Only update if dimensions actually changed
-        const dimensionsChanged = !containerDimensions ||
-          containerDimensions.width !== newDimensions.width ||
-          containerDimensions.height !== newDimensions.height;
-
-        if (dimensionsChanged) {
-          setContainerDimensions(newDimensions);
-        }
-      }
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      const next = { width: rect.width, height: rect.height };
+      // Functional setState avoids the stale-closure check on
+      // `containerDimensions` that the previous deps:[] effect had.
+      setContainerDimensions((prev) =>
+        prev && prev.width === next.width && prev.height === next.height ? prev : next
+      );
     };
 
-    // Initial measurement
+    // Initial measurement so we have dimensions before the first paint;
+    // the observer's first fire will follow shortly after attachment.
     updateContainerDimensions();
 
-    // Listen for window resize
-    window.addEventListener('resize', updateContainerDimensions);
+    const observer = new ResizeObserver(updateContainerDimensions);
+    observer.observe(zoomRef.current);
 
-    return () => {
-      window.removeEventListener('resize', updateContainerDimensions);
-    };
+    return () => observer.disconnect();
   }, []);
 
   // Re-render canvas when viewBox changes to fix distortion during resize
