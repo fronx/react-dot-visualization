@@ -482,6 +482,25 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     if (ctx) renderDots(ctx, getZoomTransform?.());
   }, [data, dotStyles, radiusOverrides, stroke, strokeWidth, defaultColor, defaultSize, defaultOpacity, useImages, useCanvas, customDotRenderer, isDecollisioning]);
 
+  // Hover-only repaint. Without this, canvas hover updates rely entirely on
+  // the pulse rAF loop, which is dormant when no dot has a `pulse` config —
+  // i.e. the canvas never repaints on hover for non-pulsing apps. Same paint
+  // mechanism (setupCanvas + renderDots) the pulse path uses, just triggered
+  // by hover state instead of rAF. Skipped during decollision so we don't
+  // race renderCanvasWithData(); skipped when the pulse loop is already
+  // running so we don't double-paint.
+  useEffect(() => {
+    if (!useCanvas) return;
+    if (isDecollisioning) return;
+    // Pulse loop is already redrawing each frame; skip to avoid dual writers.
+    let pulseDotCount = 0;
+    for (const [, style] of dotStyles) if (style?.pulse) pulseDotCount++;
+    if (pulseDotCount > 0) return;
+
+    const ctx = setupCanvas();
+    if (ctx) renderDots(ctx, getZoomTransform?.());
+  }, [hoveredDotId, useCanvas, isDecollisioning, dotStyles]);
+
 
 
   // Expose canvas rendering function and interaction methods to parent
