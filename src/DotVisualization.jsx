@@ -345,14 +345,23 @@ const DotVisualization = forwardRef((props, ref) => {
     // ── Scope change detection ──────────────────────────────────────────────
     // Clear cache on scope changes (collection/checkpoint switch, refresh).
     // Constraint transitions are handled by the scheduler, not this effect.
+    let scopeChangedThisRender = false;
     if (sharedPositionCache) {
-      const scopeChanged = sharedPositionCache.checkScope(scopeKey);
-      // When scope changes, the base cache entry is lost. Request a base
-      // re-decollision so that future constraint deselections can animate
-      // back to base positions. Without this, deselection falls through to
-      // launch-constraint — but decollision is repulsive-only and can't
-      // close gaps left by enlarged playlist dots.
-      if (scopeChanged && schedulerRef.current) {
+      scopeChangedThisRender = sharedPositionCache.checkScope(scopeKey);
+      if (scopeChangedThisRender && schedulerRef.current) {
+        // Order matters: the scheduler reads `dataRef.current` synchronously
+        // while resolving the constraint request. If we leave dataRef
+        // pointing at the previous render's processedValidData, the
+        // simulation seeds from a layout decollided against the OLD sizes —
+        // and since collision is repulsive-only, smaller new sizes find no
+        // overlap to resolve and dots stay spread out forever. Point dataRef
+        // at the raw input first so the seed reflects the new sizes.
+        dataRef.current = validData;
+        // When scope changes, the base cache entry is lost. Request a base
+        // re-decollision so that future constraint deselections can animate
+        // back to base positions. Without this, deselection falls through to
+        // launch-constraint — but decollision is repulsive-only and can't
+        // close gaps left by enlarged playlist dots.
         schedulerRef.current.decollideForConstraint('');
       }
     }
@@ -386,8 +395,14 @@ const DotVisualization = forwardRef((props, ref) => {
 
     // Store original input data for future comparisons
     previousDataRef.current = validData.map(item => ({ ...item })); // Deep copy!
-    // Store processed data for the scheduler to read
-    dataRef.current = processedValidData;
+    // For non-scope-change renders, point dataRef at the cache-restored
+    // positions so subsequent operations (hover hit-tests, constraint sims)
+    // see the visible layout, not raw UMAP. Scope-change renders set dataRef
+    // earlier — see the scope-change block above — so the just-launched
+    // base re-decollision can seed from raw input.
+    if (!scopeChangedThisRender) {
+      dataRef.current = processedValidData;
+    }
 
     // Conditional rendering based on update type:
     // - Incremental updates OR intermediate full re-renders: keep stable positions on screen
