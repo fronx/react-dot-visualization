@@ -125,6 +125,23 @@ export function onConstraintRequest(currentPhase, constraintKey, cachedPositions
     return { action: actions.length === 1 ? actions[0] : actions };
   }
 
+  // Empty constraint key with no cache (e.g. scope-change wipe followed by a
+  // request to re-decollide the base layout) → launch-base, not launch-
+  // constraint. `launchBase` builds a transitionConfig from the current
+  // on-screen state, so the animation interpolates positions from where the
+  // user can currently see the dots toward the freshly decollided layout —
+  // sizes (carried in the data items) snap to the new value at frame 0
+  // while x/y animate. `launchConstraint` has no transitionConfig and would
+  // fire raw simulation ticks instead, producing a rougher visual.
+  if (constraintKey === '') {
+    const actions = [];
+    if (isConstraintRunning) {
+      actions.push({ type: 'cancel-constraint' });
+    }
+    actions.push({ type: 'launch-base' });
+    return { action: actions.length === 1 ? actions[0] : actions };
+  }
+
   const actions = [];
   if (isConstraintRunning) {
     actions.push({ type: 'cancel-constraint' });
