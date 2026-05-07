@@ -1,6 +1,18 @@
+// Public surface for the package — the index advertises every renderer the
+// library offers (canvas / R3F / Sigma) so consumers can pick from a menu.
+//
+// The R3F and Sigma renderers are wrapped in `React.lazy` so they don't get
+// fetched + evaluated at module-evaluation time. Without this, every consumer
+// of `react-dot-visualization` (even canvas-only ones) drags in the full
+// three.js + @react-three/fiber + zustand chain — Vite dev doesn't tree-shake
+// at module level. Consumers using `<DotVisualizationR3F />` or
+// `<DotVisualizationSigma />` need a `<Suspense>` ancestor to handle the
+// brief load while the chunk is fetched.
+import { lazy } from 'react';
+
 export { default as DotVisualization } from './DotVisualization.jsx';
-export { default as DotVisualizationR3F } from './r3f/DotVisualizationR3F.jsx';
-export { default as DotVisualizationSigma } from './DotVisualizationSigma.jsx';
+export const DotVisualizationR3F = lazy(() => import('./r3f/DotVisualizationR3F.jsx'));
+export const DotVisualizationSigma = lazy(() => import('./DotVisualizationSigma.jsx'));
 export { default as ColoredDots } from './ColoredDots.jsx';
 export { default as InteractionLayer } from './InteractionLayer.jsx';
 export { default as ClusterLabels } from './ClusterLabels.jsx';
