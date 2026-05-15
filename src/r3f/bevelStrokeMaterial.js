@@ -10,8 +10,10 @@ import * as THREE from 'three';
  * uStrokeColor: RGB color of the stroke ring
  */
 const vertexShader = /* glsl */`
+  attribute float instanceAlpha;
   varying vec2 vUv;
   varying vec3 vColor;
+  varying float vAlpha;
   void main() {
     vUv = uv;
     #ifdef USE_INSTANCING_COLOR
@@ -19,6 +21,7 @@ const vertexShader = /* glsl */`
     #else
       vColor = vec3(1.0);
     #endif
+    vAlpha = instanceAlpha;
     gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
   }
 `;
@@ -28,13 +31,15 @@ const fragmentShader = /* glsl */`
   uniform vec3 uStrokeColor;
   varying vec2 vUv;
   varying vec3 vColor;
+  varying float vAlpha;
 
   void main() {
     vec2 c = vUv - 0.5;
     float dist = length(c) * 2.0;
 
     float edgeFalloff = fwidth(dist);
-    float alpha = 1.0 - smoothstep(1.0 - edgeFalloff, 1.0, dist);
+    float coverage = 1.0 - smoothstep(1.0 - edgeFalloff, 1.0, dist);
+    float alpha = coverage * vAlpha;
     if (alpha <= 0.0) discard;
 
     float strokeStart = 1.0 - uStrokeWidth;

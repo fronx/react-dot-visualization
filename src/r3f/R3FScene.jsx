@@ -327,6 +327,7 @@ export function R3FScene({
         hoveredId={hoveredId}
         hoverSizeMultiplier={hoverSizeMultiplier}
         hoverOpacity={hoverOpacity}
+        radiusOverrides={radiusOverrides}
       />
 
       <HoverDetector

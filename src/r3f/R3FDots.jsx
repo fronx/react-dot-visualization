@@ -30,6 +30,8 @@ const BASE_RADIUS = 1.0; // geometry radius in local space
  * - onDotClick(item, event)
  * - onBackgroundClick(event)
  */
+const EMPTY_RADIUS_OVERRIDES = new Map();
+
 export function R3FDots({
   data,
   dotStyles,
@@ -41,10 +43,12 @@ export function R3FDots({
   hoveredId,
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
+  radiusOverrides = EMPTY_RADIUS_OVERRIDES,
 }) {
   const meshRef = useRef(null);
   const ringMeshRef = useRef(null);
   const ringAlphaAttrRef = useRef(null);
+  const dotAlphaAttrRef = useRef(null);
   const dynamicDotsRef = useRef([]);
   const dynamicDotsByIdRef = useRef(new Map());
   const dotInfoByIdRef = useRef(new Map());
@@ -100,10 +104,29 @@ export function R3FDots({
     ringAlphaAttrRef.current = attr;
   }, [data.length, pulseDots]);
 
+  // (Re)attach per-instance alpha buffer to the dot geometry. Drives
+  // defaultOpacity, dotStyles.opacity, hoverOpacity, and pulse.opacityRange.
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) {
+      dotAlphaAttrRef.current = null;
+      return;
+    }
+    const count = data.length || 1;
+    const geom = mesh.geometry;
+    let attr = geom.getAttribute('instanceAlpha');
+    if (!attr || attr.array.length < count) {
+      attr = new THREE.InstancedBufferAttribute(new Float32Array(count).fill(1), 1);
+      geom.setAttribute('instanceAlpha', attr);
+    }
+    dotAlphaAttrRef.current = attr;
+  }, [data.length]);
+
   // Apply static instance attributes when data/style changes.
   useEffect(() => {
     const mesh = meshRef.current;
     const ringMesh = ringMeshRef.current;
+    const dotAlphaAttr = dotAlphaAttrRef.current;
     if (!mesh) return;
 
     const dynamicDots = [];
@@ -112,6 +135,7 @@ export function R3FDots({
     const activeHoveredId = hoveredIdRef.current;
     let needsMatrixUpdate = false;
     let needsColorUpdate = false;
+    let needsAlphaUpdate = false;
     let needsRingMatrixUpdate = false;
     let needsRingColorUpdate = false;
 
@@ -120,9 +144,16 @@ export function R3FDots({
       const isHovered = item.id === activeHoveredId;
       const pulse = pulseDots.get(item.id);
 
-      const baseSize = customStyle.r ?? item.size ?? defaultSize;
+      const baseSize = customStyle.r ?? radiusOverrides.get(item.id) ?? item.size ?? defaultSize;
       const scale = isHovered ? baseSize * hoverSizeMultiplier : baseSize;
       const fill = customStyle.fill || customStyle.color || item.color || defaultColor || '#7c6fff';
+
+      // Opacity resolution (mirrors Canvas):
+      //   customStyle.opacity wins over hover/default; pulse multiplier
+      //   composes on top in useFrame.
+      const baseOpacity = customStyle.opacity !== undefined
+        ? customStyle.opacity
+        : (isHovered ? hoverOpacity : defaultOpacity);
 
       _dummy.position.set(item.x, -item.y, 0);
       _dummy.scale.setScalar(scale);
@@ -134,11 +165,18 @@ export function R3FDots({
       mesh.setColorAt(i, _color);
       needsColorUpdate = true;
 
+      if (dotAlphaAttr) {
+        dotAlphaAttr.array[i] = baseOpacity;
+        needsAlphaUpdate = true;
+      }
+
       dotInfoById.set(item.id, {
         index: i,
         x: item.x,
         y: -item.y,
         baseScale: baseSize,
+        baseOpacity,
+        customOpacity: customStyle.opacity,
       });
 
       if (pulse) {
@@ -149,6 +187,7 @@ export function R3FDots({
           y: -item.y,
           baseScale: scale,
           baseFill: fill,
+          baseOpacity,
         };
         dynamicDots.push(dynamicDot);
         dynamicDotsById.set(item.id, dynamicDot);
@@ -176,13 +215,14 @@ export function R3FDots({
 
     if (needsMatrixUpdate) mesh.instanceMatrix.needsUpdate = true;
     if (needsColorUpdate && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    if (needsAlphaUpdate && dotAlphaAttr) dotAlphaAttr.needsUpdate = true;
     if (ringMesh && needsRingMatrixUpdate) {
       ringMesh.instanceMatrix.needsUpdate = true;
     }
     if (ringMesh && needsRingColorUpdate && ringMesh.instanceColor) {
       ringMesh.instanceColor.needsUpdate = true;
     }
-  }, [data, dotStyles, pulseDots, defaultColor, defaultSize, hoverSizeMultiplier]);
+  }, [data, dotStyles, pulseDots, defaultColor, defaultSize, defaultOpacity, hoverOpacity, hoverSizeMultiplier, radiusOverrides]);
 
   // Hover updates should only touch the previous and current hovered instances.
   useEffect(() => {
@@ -197,7 +237,9 @@ export function R3FDots({
     if (prevHoveredId !== null && prevHoveredId !== undefined) idsToUpdate.add(prevHoveredId);
     if (hoveredId !== null && hoveredId !== undefined) idsToUpdate.add(hoveredId);
 
+    const dotAlphaAttr = dotAlphaAttrRef.current;
     let needsMatrixUpdate = false;
+    let needsAlphaUpdate = false;
     idsToUpdate.forEach((id) => {
       const dotInfo = dotInfoByIdRef.current.get(id);
       if (!dotInfo) return;
@@ -213,20 +255,34 @@ export function R3FDots({
       mesh.setMatrixAt(dotInfo.index, _dummy.matrix);
       needsMatrixUpdate = true;
 
+      // customStyle.opacity, if explicit, wins over hover (matches Canvas).
+      if (dotAlphaAttr) {
+        const nextAlpha = dotInfo.customOpacity !== undefined
+          ? dotInfo.customOpacity
+          : (isHovered ? hoverOpacity : defaultOpacity);
+        dotInfo.baseOpacity = nextAlpha;
+        dotAlphaAttr.array[dotInfo.index] = nextAlpha;
+        needsAlphaUpdate = true;
+      }
+
       const dynamicDot = dynamicDotsByIdRef.current.get(id);
       if (dynamicDot) {
         dynamicDot.baseScale = scale;
+        dynamicDot.baseOpacity = dotInfo.baseOpacity;
       }
     });
 
     if (needsMatrixUpdate) {
       mesh.instanceMatrix.needsUpdate = true;
     }
+    if (needsAlphaUpdate && dotAlphaAttr) {
+      dotAlphaAttr.needsUpdate = true;
+    }
 
     hoveredIdRef.current = hoveredId;
     prevHoveredIdRef.current = hoveredId;
     prevHoverSizeMultiplierRef.current = hoverSizeMultiplier;
-  }, [hoveredId, hoverSizeMultiplier]);
+  }, [hoveredId, hoverSizeMultiplier, hoverOpacity, defaultOpacity]);
 
   // Animate only pulsing dots each frame. Phase + ring geometry are derived
   // from the shared hook+utility so behavior matches the Canvas renderer.
@@ -237,6 +293,7 @@ export function R3FDots({
     const mesh = meshRef.current;
     const ringMesh = ringMeshRef.current;
     const ringAlphaAttr = ringAlphaAttrRef.current;
+    const dotAlphaAttr = dotAlphaAttrRef.current;
     if (!mesh) return;
 
     // Screen-pixels per world unit (CSS pixels) at current camera distance.
@@ -251,12 +308,13 @@ export function R3FDots({
 
     let needsMatrixUpdate = false;
     let needsColorUpdate = false;
+    let needsAlphaUpdate = false;
     let needsRingMatrixUpdate = false;
     let needsRingAlphaUpdate = false;
     let needsRingColorUpdate = false;
 
     for (const dot of dynamicDots) {
-      const { id, index, x, y, baseScale, baseFill } = dot;
+      const { id, index, x, y, baseScale, baseFill, baseOpacity } = dot;
       const pulseState = getPulseState(id, baseFill);
 
       _dummy.position.set(x, y, 0);
@@ -269,6 +327,14 @@ export function R3FDots({
         _color.set(pulseState.color);
         mesh.setColorAt(index, _color);
         needsColorUpdate = true;
+      }
+
+      if (dotAlphaAttr) {
+        const nextAlpha = baseOpacity * pulseState.opacityMultiplier;
+        if (dotAlphaAttr.array[index] !== nextAlpha) {
+          dotAlphaAttr.array[index] = nextAlpha;
+          needsAlphaUpdate = true;
+        }
       }
 
       if (ringMesh) {
@@ -309,6 +375,7 @@ export function R3FDots({
 
     if (needsMatrixUpdate) mesh.instanceMatrix.needsUpdate = true;
     if (needsColorUpdate && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    if (needsAlphaUpdate && dotAlphaAttr) dotAlphaAttr.needsUpdate = true;
     if (ringMesh && needsRingMatrixUpdate) ringMesh.instanceMatrix.needsUpdate = true;
     if (ringMesh && needsRingColorUpdate && ringMesh.instanceColor) {
       ringMesh.instanceColor.needsUpdate = true;
