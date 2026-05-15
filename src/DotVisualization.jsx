@@ -118,7 +118,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onZoomEnd,
     onDecollisionComplete,
     sharedPositionCache = null,
-    enableDecollisioning = true, // unused by canvas renderer (scheduler handles it), kept for R3F compat
+    enableDecollisioning = true,
     decollisionEngine = 'auto',
     isIncrementalUpdate = false,
     transitionDuration = 350,
@@ -158,6 +158,7 @@ const DotVisualization = forwardRef((props, ref) => {
     hoverSizeMultiplier = 1.5,
     hoverOpacity = 1.0,
     useCanvas = false,
+    gpuPanZoom = false,
     debug = false,
     sendMetrics = false,
     initialTransform = null,
@@ -216,6 +217,14 @@ const DotVisualization = forwardRef((props, ref) => {
 
   const debugLog = useDebug(debug);
 
+  // GPU-pan/zoom: during an active gesture, apply CSS transforms to the
+  // canvas element instead of redrawing. The bitmap stays put on the GPU
+  // compositor and the browser shifts/scales it; once interaction goes
+  // idle (see markInteractionActive's settle path) we redraw at the final
+  // transform and reset CSS. Kept in a ref so the canvasRenderer closure
+  // created in the init effect picks up live values.
+  const gpuPanZoomRef = useLatest(gpuPanZoom);
+
   // Function to update visible dot count
   const updateVisibleDotCount = useCallback(() => {
     if (!processedData.length || !viewBox || !zoomManager.current) return;
@@ -265,6 +274,19 @@ const DotVisualization = forwardRef((props, ref) => {
     interactionIdleTimerRef.current = setTimeout(() => {
       interactionActiveRef.current = false;
       interactionIdleTimerRef.current = null;
+      // GPU mode: now that the gesture has settled, redraw the canvas at the
+      // current transform so the next gesture starts from a fresh baseline
+      // with no leftover CSS skew on the element.
+      if (gpuPanZoomRef.current && coloredDotsRef.current) {
+        const t = zoomManager.current?.getCurrentTransform();
+        if (t) {
+          if (liveTransitionDataRef.current) {
+            coloredDotsRef.current.renderCanvasWithData(liveTransitionDataRef.current, t);
+          } else {
+            coloredDotsRef.current.renderCanvasWithTransform(t);
+          }
+        }
+      }
     }, 120);
   }, []);
 
@@ -366,6 +388,21 @@ const DotVisualization = forwardRef((props, ref) => {
       }
     }
 
+    // ── Data count change → re-decollide ───────────────────────────────────
+    // Adding or removing dots invalidates the cached base layout: new dots
+    // sit at raw positions on top of existing ones. Seed from raw input so
+    // the sim resolves overlaps for the full set.
+    const prevLength = previousDataRef.current?.length ?? 0;
+    if (
+      !scopeChangedThisRender &&
+      schedulerRef.current &&
+      prevLength > 0 &&
+      prevLength !== validData.length
+    ) {
+      dataRef.current = validData;
+      schedulerRef.current.decollideForConstraint('');
+    }
+
     // ── Position resolution: detect changes, restore cache if unchanged ────
     const { processedData: processedValidData } = resolveDataEffectPositions({
       validData,
@@ -437,13 +474,21 @@ const DotVisualization = forwardRef((props, ref) => {
 
     // Create canvas renderer function
     const canvasRenderer = (transform) => {
-      if (coloredDotsRef.current) {
-        // Use live transition data if available (during decollision), otherwise fall back to normal render
-        if (liveTransitionDataRef.current) {
-          coloredDotsRef.current.renderCanvasWithData(liveTransitionDataRef.current, transform);
-        } else {
-          coloredDotsRef.current.renderCanvasWithTransform(transform);
-        }
+      if (!coloredDotsRef.current) return;
+
+      // GPU path: during an active gesture (or rapid wheel ticks), shift/scale
+      // the existing bitmap via CSS instead of redrawing. The compositor
+      // handles it on the GPU, so per-frame cost is independent of dot count.
+      // The settle redraw fires from markInteractionActive's 120ms idle timer.
+      if (gpuPanZoomRef.current && interactionActiveRef.current) {
+        if (coloredDotsRef.current.applyGpuTransform(transform)) return;
+      }
+
+      // Use live transition data if available (during decollision), otherwise fall back to normal render
+      if (liveTransitionDataRef.current) {
+        coloredDotsRef.current.renderCanvasWithData(liveTransitionDataRef.current, transform);
+      } else {
+        coloredDotsRef.current.renderCanvasWithTransform(transform);
       }
     };
 
@@ -665,6 +710,7 @@ const DotVisualization = forwardRef((props, ref) => {
     sendMetrics,
     isDraggingRef,
     interactionActiveRef,
+    enabled: enableDecollisioning,
   });
   schedulerRef.current = scheduler;
 

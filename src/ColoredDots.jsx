@@ -52,6 +52,9 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const debugLog = useDebug(debug);
   const canvasRef = useRef(null);
   const canvasDimensionsRef = useRef(null);
+  // Transform the bitmap was last drawn at. Used by applyGpuTransform to
+  // derive a CSS-only delta during pan/zoom interactions.
+  const lastDrawnTransformRef = useRef(null);
 
   // Style cache - invalidates when any style-affecting prop changes
   const styleCache = useCache([
@@ -183,6 +186,13 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     const dataToRender = customData || data;
     if (useCanvas && canvasContext) {
       const t = tOverride || { k: 1, x: 0, y: 0 };
+
+      // Drop any stale CSS transform left over from a prior gesture, and record
+      // the transform we're about to draw at as the new baseline for the next.
+      if (canvasRef.current) {
+        canvasRef.current.style.transform = '';
+      }
+      lastDrawnTransformRef.current = { x: t.x, y: t.y, k: t.k };
 
       // Reset to identity
       canvasContext.setTransform(1, 0, 0, 1, 0, 0);
@@ -526,11 +536,39 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         renderDots(ctx, transform, customData);
       }
     },
+    // GPU-pan/zoom: apply CSS transform on the canvas element so the existing
+    // bitmap is shifted/scaled on the compositor instead of redrawn. Returns
+    // false if no baseline yet (caller should redraw instead).
+    //
+    // Coordinates: the canvas lives inside `<foreignObject>`, so its own CSS
+    // pixel space equals viewBox units (the foreignObject width/height
+    // attributes define the inner HTML viewport size). The SVG viewBox→screen
+    // mapping is applied AFTER the CSS transform on the canvas, so we use the
+    // d3-zoom transform deltas directly — no cssW/vbW scaling here, or the
+    // SVG would apply it a second time.
+    applyGpuTransform: (currentTransform) => {
+      if (!useCanvas || !canvasRef.current) return false;
+      const base = lastDrawnTransformRef.current;
+      if (!base || !effectiveViewBox) return false;
+      const [vbX, vbY] = effectiveViewBox;
+      const s = currentTransform.k / base.k;
+      const tx = (currentTransform.x - vbX) - s * (base.x - vbX);
+      const ty = (currentTransform.y - vbY) - s * (base.y - vbY);
+      const el = canvasRef.current;
+      el.style.transformOrigin = '0 0';
+      el.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+      return true;
+    },
+    clearGpuTransform: () => {
+      if (canvasRef.current) {
+        canvasRef.current.style.transform = '';
+      }
+    },
     findDotAtPosition: (mouseX, mouseY) => {
       if (!useCanvas || !canvasRef.current?._spatialIndex) return null;
       return findDotAtPosition(mouseX, mouseY, canvasRef.current._spatialIndex);
     }
-  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition]);
+  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, effectiveViewBox]);
 
 
   useEffect(() => {

@@ -71,6 +71,7 @@ export function useDecollisionScheduler({
   sendMetrics = false,
   isDraggingRef,
   interactionActiveRef,
+  enabled = true,
 }) {
   const phaseRef = useRef(PHASE.AWAITING_LAYOUT);
   const simulationRef = useRef(null);
@@ -95,6 +96,8 @@ export function useDecollisionScheduler({
   const sendMetricsRef = useLatest(sendMetrics);
   const radiusOverridesRef = useLatest(radiusOverrides);
   const constraintKeyRef = useLatest(constraintKey);
+  const enabledRef = useLatest(enabled);
+  const prevEnabledRef = useRef(enabled);
 
   const cancelSimulation = useCallback(() => {
     if (simulationRef.current) {
@@ -288,6 +291,9 @@ export function useDecollisionScheduler({
       action.forEach(a => processAction(a));
       return;
     }
+    if (!enabledRef.current && action.type !== 'cancel-base' && action.type !== 'cancel-constraint') {
+      return;
+    }
     switch (action.type) {
       case 'launch-base':
         launchBase();
@@ -387,6 +393,30 @@ export function useDecollisionScheduler({
     const result = onConstraintRequest(phaseRef.current, key, cachedPositions, isRunning, activeKey, baseCachedPositions);
     processAction(result.action);
   }, [cache, processAction]);
+
+  // ── enabled toggle ────────────────────────────────────────────────────
+  // false → true: re-decollide from current raw positions.
+  // true → false: cancel any running sim and snap visible positions to raw input.
+  useEffect(() => {
+    const prev = prevEnabledRef.current;
+    prevEnabledRef.current = enabled;
+    if (prev === enabled) return;
+
+    if (!enabled) {
+      cancelSimulation();
+      const raw = dataRef.current;
+      if (raw && raw.length > 0) {
+        const snapshot = raw.map(item => ({ ...item }));
+        stableOnUpdateNodes(snapshot);
+        stableSyncDecollisionState(snapshot);
+      }
+      return;
+    }
+
+    if (dataRef.current?.length > 0) {
+      launchBase();
+    }
+  }, [enabled, cancelSimulation, dataRef, stableOnUpdateNodes, stableSyncDecollisionState, launchBase]);
 
   // Cleanup on unmount
   useEffect(() => {

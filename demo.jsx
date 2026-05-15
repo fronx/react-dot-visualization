@@ -19,10 +19,10 @@ const App = () => {
   const [showHoverImages, setShowHoverImages] = useState(false); // Show hover image switching
   const [debug, setDebug] = useState(false); // Debug mode to show background click area
   const [visibleDotCount, setVisibleDotCount] = useState(0);
-  const [totalDotCount, setTotalDotCount] = useState(1000); // Start with 1,000 dots
+  const [totalDotCount, setTotalDotCount] = useState(50000);
   const [enableDecollision, setEnableDecollision] = useState(false); // Default off
-  const [enablePositionTransitions, setEnablePositionTransitions] = useState(false); // Default off
   const [useCanvasRendering, setUseCanvasRendering] = useState(true); // Default off - canvas immediate mode
+  const [gpuPanZoom, setGpuPanZoom] = useState(false);
   const containerRef = useRef(null);
   const vizRef = useRef(null);
 
@@ -289,26 +289,20 @@ const App = () => {
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
               <input
                 type="checkbox"
-                checked={enablePositionTransitions}
-                onChange={(e) => {
-                  setEnablePositionTransitions(e.target.checked);
-                  // Force data refresh to apply new setting immediately
-                  const newData = generateDots(totalDotCount);
-                  if (newData.length > 0) {
-                    setData(newData);
-                  }
-                }}
+                checked={useCanvasRendering}
+                onChange={(e) => setUseCanvasRendering(e.target.checked)}
               />
-              Enable Position Transitions
+              Canvas Rendering (Immediate Mode)
             </label>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
               <input
                 type="checkbox"
-                checked={useCanvasRendering}
-                onChange={(e) => setUseCanvasRendering(e.target.checked)}
+                checked={gpuPanZoom}
+                onChange={(e) => setGpuPanZoom(e.target.checked)}
+                disabled={!useCanvasRendering}
               />
-              Canvas Rendering (Immediate Mode)
+              GPU Pan/Zoom (CSS-composite during gesture)
             </label>
 
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', marginBottom: '8px' }}>
@@ -488,8 +482,8 @@ const App = () => {
           imageProvider={imageProvider}
           hoverImageProvider={hoverImageProvider}
           enableDecollisioning={enableDecollision}
-          enablePositionTransitions={enablePositionTransitions}
           useCanvas={useCanvasRendering}
+          gpuPanZoom={gpuPanZoom}
           debug={debug}
         />
       </div>
