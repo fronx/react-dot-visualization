@@ -31,6 +31,14 @@ function classifyWheelGesture(event) {
   return 'scroll-pan';
 }
 
+// Final safety net before a transform reaches the SVG attribute or d3-zoom's
+// internal state. Once a non-finite value lands in either, every subsequent
+// wheel event reads it back as `this.transform` and propagates the corruption,
+// spamming "<g> attribute transform: Expected number" errors.
+function isFiniteTransform(t) {
+  return t != null && Number.isFinite(t.x) && Number.isFinite(t.y) && Number.isFinite(t.k);
+}
+
 export class ZoomManager {
   constructor(options = {}) {
     // Required references
@@ -128,6 +136,7 @@ export class ZoomManager {
       const newTransform = d3.zoomIdentity
         .translate(t.x - event.deltaX * scaleX, t.y - event.deltaY * scaleY)
         .scale(t.k);
+      if (!isFiniteTransform(newTransform)) return;
       this.applyTransformViaZoomHandler(newTransform);
     } else {
       // Zoom toward cursor
@@ -153,6 +162,7 @@ export class ZoomManager {
         )
         .scale(newK);
 
+      if (!isFiniteTransform(newTransform)) return;
       this.applyTransformViaZoomHandler(newTransform);
     }
   }
@@ -177,13 +187,17 @@ export class ZoomManager {
    * Apply transform to both SVG and canvas synchronously (prevents flicker)
    */
   applyTransformSync(transform) {
+    // Drop bad transforms here rather than poisoning this.transform / the SVG
+    // attribute. Once stored, every wheel event would read the NaN back as
+    // `t = this.transform` and keep emitting it.
+    if (!isFiniteTransform(transform)) return;
     this.transform = transform;
-    
+
     // 1) Update SVG layer
     if (this.contentRef?.current) {
       this.contentRef.current.setAttribute("transform", transform.toString());
     }
-    
+
     // 2) Update canvas layer in SAME frame
     if (this.useCanvas && this.canvasRenderer) {
       this.canvasRenderer(transform);
@@ -194,6 +208,7 @@ export class ZoomManager {
    * Apply transform via d3 zoom handler (for programmatic zoom final states)
    */
   applyTransformViaZoomHandler(transform) {
+    if (!isFiniteTransform(transform)) return;
     if (this.zoomRef?.current && this.zoomHandler) {
       d3.select(this.zoomRef.current).call(this.zoomHandler.transform, transform);
       this.transform = transform;
