@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useMemo, useRef, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
 import { getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
@@ -32,8 +32,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     hoverImageProvider,
     visibleDotCount = null,
     useCanvas = false,
+    renderMargin = 0,
     getZoomTransform = null,
     effectiveViewBox = null,
+    containerDimensions = null,
     debug = false,
     onHover,
     onLeave,
@@ -55,6 +57,51 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Transform the bitmap was last drawn at. Used by applyGpuTransform to
   // derive a CSS-only delta during pan/zoom interactions.
   const lastDrawnTransformRef = useRef(null);
+
+  // Canvas covers a region slightly larger than the visible viewBox so the
+  // GPU-pan CSS shift can reveal pre-drawn dots at the edges. The SVG clips
+  // the overflow until then.
+  //
+  // We cap by bitmap *memory* rather than by margin directly: the requested
+  // renderMargin is honored when it fits in the budget, otherwise we silently
+  // shrink it so the canvas stays within reach of the browser's per-element
+  // memory limits. Without this, a Retina 4K display + margin=1.0 would try
+  // to allocate ~1.2 GB of bitmap and crash the tab.
+  const MAX_BITMAP_BYTES = 256 * 1024 * 1024;
+  const extendedViewBox = useMemo(() => {
+    if (!effectiveViewBox) return null;
+    const requested = renderMargin || 0;
+    if (requested === 0) return effectiveViewBox;
+
+    let m = requested;
+    if (containerDimensions) {
+      const dpr = (typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1) * 2;
+      const visiblePixels = containerDimensions.width * dpr * containerDimensions.height * dpr;
+      const maxAreaMultiplier = (MAX_BITMAP_BYTES / 4) / visiblePixels;
+      if (maxAreaMultiplier > 1) {
+        const maxLinear = Math.sqrt(maxAreaMultiplier);
+        const maxM = (maxLinear - 1) / 2;
+        if (m > maxM) {
+          m = Math.max(0, maxM);
+          debugLog(`renderMargin ${requested} capped to ${m.toFixed(2)} by ${(MAX_BITMAP_BYTES / 1024 / 1024).toFixed(0)} MB bitmap budget`);
+        }
+      } else {
+        m = 0;
+        debugLog(`renderMargin disabled: viewport alone exceeds bitmap budget`);
+      }
+    }
+    const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+    // Snap the canvas's SVG-coord position and size to integers so the
+    // foreignObject (and the canvas inside it) doesn't start at a fractional
+    // SVG coordinate. Fractional SVG coords map to fractional screen pixels
+    // via the viewBox→element scale, which is a known source of consistent
+    // 1–2 px offsets when CSS transforms are applied.
+    const minX = Math.round(vbX - m * vbW);
+    const minY = Math.round(vbY - m * vbH);
+    const maxX = Math.round(vbX + (1 + m) * vbW);
+    const maxY = Math.round(vbY + (1 + m) * vbH);
+    return [minX, minY, maxX - minX, maxY - minY];
+  }, [effectiveViewBox, renderMargin, containerDimensions, debugLog]);
 
   // Style cache - invalidates when any style-affecting prop changes
   const styleCache = useCache([
@@ -199,11 +246,11 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       // Re-apply base viewBox transform
       let viewBoxScale = 1;
       let canvasDPR = 1;
-      if (effectiveViewBox && canvasDimensionsRef.current) {
+      if (extendedViewBox && canvasDimensionsRef.current) {
         const { width, height } = canvasDimensionsRef.current;
         const dpr = (window.devicePixelRatio || 1) * 2;
         canvasDPR = dpr; // Store DPR for accurate pixel calculations
-        const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+        const [vbX, vbY, vbW, vbH] = extendedViewBox;
         const scaleX = (width / vbW) * dpr;
         const scaleY = (height / vbH) * dpr;
         viewBoxScale = scaleX; // Store for ring calculations (includes DPR)
@@ -214,14 +261,15 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       // Now apply zoom
       canvasContext.transform(t.k, 0, 0, t.k, t.x, t.y);
       // Clear in viewBox coords after full transform reset
-      if (effectiveViewBox) {
-        const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+      if (extendedViewBox) {
+        const [vbX, vbY, vbW, vbH] = extendedViewBox;
         canvasContext.clearRect(vbX, vbY, vbW, vbH);
       }
 
-      // Build spatial index for mouse interaction in CSS pixel space
-      // Only rebuild when data/transform actually change (use cheap checks only)
-      const cssTransform = transformToCSSPixels(t, effectiveViewBox, canvasDimensionsRef.current);
+      // Build spatial index for mouse interaction in CSS pixel space.
+      // Use extendedViewBox so canvas-local mouse positions in the margin map
+      // correctly — the canvas covers the extended area, not just the visible one.
+      const cssTransform = transformToCSSPixels(t, extendedViewBox, canvasDimensionsRef.current);
 
       // Track last state - use ONLY cheap O(1) checks to minimize per-frame overhead
       const lastState = canvasRef.current._lastSpatialIndexState;
@@ -339,8 +387,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         }
       };
 
-      // Viewport culling: calculate visible bounds to skip off-screen dots
-      const [vbX, vbY, vbW, vbH] = effectiveViewBox || [0, 0, 100, 100];
+      // Viewport culling: skip dots outside the canvas's covered area.
+      // Uses extendedViewBox so the margin gets populated with pre-drawn dots
+      // (so GPU-pan can reveal them at the edges without redrawing).
+      const [vbX, vbY, vbW, vbH] = extendedViewBox || [0, 0, 100, 100];
       const visibleBounds = {
         left: (vbX - t.x) / t.k,
         right: (vbX + vbW - t.x) / t.k,
@@ -431,10 +481,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     canvas.width = width * effectiveDpr;
     canvas.height = height * effectiveDpr;
 
-    // Set up coordinate system to match the viewBox
-    // Canvas pixels should map 1:1 to viewBox units, scaled by DPR for crisp rendering
-    if (effectiveViewBox) {
-      const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+    // Set up coordinate system to cover the extended viewBox so dots in the
+    // GPU-pan margin land inside the canvas bitmap, not clipped off the edge.
+    if (extendedViewBox) {
+      const [vbX, vbY, vbW, vbH] = extendedViewBox;
 
       // Scale from canvas pixels to viewBox coordinates
       const scaleX = (width / vbW) * effectiveDpr;
@@ -449,8 +499,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     }
 
     // Clear canvas in viewBox coordinates
-    if (effectiveViewBox) {
-      const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+    if (extendedViewBox) {
+      const [vbX, vbY, vbW, vbH] = extendedViewBox;
       context.clearRect(vbX, vbY, vbW, vbH);
     } else {
       context.clearRect(0, 0, width, height);
@@ -468,14 +518,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
 
 
 
-  // Reset canvas dimensions cache when viewBox changes (for resize handling)
+  // Reset canvas dimensions cache when the extended viewBox changes (resize
+  // or renderMargin change — both alter the canvas's on-screen size).
   useEffect(() => {
-    if (useCanvas && effectiveViewBox) {
-      // Clear cached dimensions so they get recalculated with new container size
+    if (useCanvas && extendedViewBox) {
       canvasDimensionsRef.current = null;
       debugLog('Canvas dimensions cache cleared for viewBox change');
     }
-  }, [effectiveViewBox, useCanvas]);
+  }, [extendedViewBox, useCanvas]);
 
   // Canvas rendering for data/style changes (NOT zoom, NOT hover)
   // Note: hoveredDotId, hoverSizeMultiplier, hoverOpacity intentionally excluded from deps
@@ -546,11 +596,15 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     // mapping is applied AFTER the CSS transform on the canvas, so we use the
     // d3-zoom transform deltas directly — no cssW/vbW scaling here, or the
     // SVG would apply it a second time.
+    //
+    // The origin we subtract is the *canvas's* viewBox origin, which is the
+    // extendedViewBox top-left when renderMargin > 0 (the canvas covers a
+    // slightly larger area than the visible viewBox).
     applyGpuTransform: (currentTransform) => {
       if (!useCanvas || !canvasRef.current) return false;
       const base = lastDrawnTransformRef.current;
-      if (!base || !effectiveViewBox) return false;
-      const [vbX, vbY] = effectiveViewBox;
+      if (!base || !extendedViewBox) return false;
+      const [vbX, vbY] = extendedViewBox;
       const s = currentTransform.k / base.k;
       const tx = (currentTransform.x - vbX) - s * (base.x - vbX);
       const ty = (currentTransform.y - vbY) - s * (base.y - vbY);
@@ -568,7 +622,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       if (!useCanvas || !canvasRef.current?._spatialIndex) return null;
       return findDotAtPosition(mouseX, mouseY, canvasRef.current._spatialIndex);
     }
-  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, effectiveViewBox]);
+  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, extendedViewBox]);
 
 
   useEffect(() => {
@@ -598,16 +652,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   });
 
   if (useCanvas) {
-    // Position foreignObject at origin, but make it large enough to cover viewBox area
-    // This way the canvas coordinate system matches the D3 zoom coordinate system
-    const viewBoxX = effectiveViewBox ? effectiveViewBox[0] : 0;
-    const viewBoxY = effectiveViewBox ? effectiveViewBox[1] : 0;
-    const viewBoxW = effectiveViewBox ? effectiveViewBox[2] : 1000;
-    const viewBoxH = effectiveViewBox ? effectiveViewBox[3] : 1000;
+    // The foreignObject covers the *extended* viewBox so the canvas inside it
+    // includes a margin around the visible area. The SVG's viewBox stays at
+    // the visible region, so anything outside it gets clipped — until GPU-pan
+    // shifts the canvas and reveals the pre-rendered margin at the edges.
+    const vb = extendedViewBox || [0, 0, 1000, 1000];
 
-    // Canvas should start at viewBox origin and span the viewBox dimensions
     return (
-      <foreignObject x={viewBoxX} y={viewBoxY} width={viewBoxW} height={viewBoxH}>
+      <foreignObject x={vb[0]} y={vb[1]} width={vb[2]} height={vb[3]}>
         <canvas
           ref={canvasRef}
           {...canvasInteractionHandlers}
@@ -615,6 +667,11 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
             width: '100%',
             height: '100%',
             display: 'block',
+            // Keep the canvas permanently on its own compositor layer so that
+            // toggling `style.transform` between empty and a value during
+            // GPU-pan/zoom doesn't trigger a layer promotion/demotion, which
+            // can shift the canvas by 1–2 px on settle.
+            willChange: 'transform',
             pointerEvents: useCanvas ? 'auto' : 'none' // Enable interactions for canvas mode
           }}
         />

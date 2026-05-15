@@ -484,6 +484,7 @@ const App = () => {
           enableDecollisioning={enableDecollision}
           useCanvas={useCanvasRendering}
           gpuPanZoom={gpuPanZoom}
+          renderMargin={gpuPanZoom ? 1.0 : 0}
           debug={debug}
         />
       </div>

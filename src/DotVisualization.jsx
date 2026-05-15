@@ -159,6 +159,7 @@ const DotVisualization = forwardRef((props, ref) => {
     hoverOpacity = 1.0,
     useCanvas = false,
     gpuPanZoom = false,
+    renderMargin = 0,
     debug = false,
     sendMetrics = false,
     initialTransform = null,
@@ -836,6 +837,7 @@ const DotVisualization = forwardRef((props, ref) => {
       style={{
         width: '100%',
         height: '100%',
+        overflow: 'hidden',
         ...style
       }}
       onMouseLeave={handleMouseLeave}
@@ -882,6 +884,7 @@ const DotVisualization = forwardRef((props, ref) => {
             customDotRenderer={customDotRenderer}
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
+            renderMargin={renderMargin}
             getZoomTransform={() => zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
             debug={debug}
             effectiveViewBox={effectiveViewBox}
