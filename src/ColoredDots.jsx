@@ -73,6 +73,10 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     onContextMenu,
     onDragStart,
     isZooming = false,
+    isInteractionActive = null,
+    blockHoverDuringInteraction = false,
+    pausePulseDuringInteraction = false,
+    interactionActive = false,
     customDotRenderer = null,
     isDecollisioning = false
   } = props;
@@ -150,14 +154,18 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Note: We can't pass liveTransitionDataRef here since it's in DotVisualization, not ColoredDots
   // Instead, the pulse callback will use whatever data is currently in the 'data' prop
   // This is acceptable because pulse animations are visual effects that don't need frame-perfect sync
+  const pulseEnabled = !(pausePulseDuringInteraction && interactionActive);
   const getPulseMultipliers = usePulseAnimation(dotStyles, useCanvas ? () => {
     // During decollision, DotVisualization pushes live positions directly via
     // renderCanvasWithData(). Skip pulse-triggered redraws to avoid dual writers
     // competing between processedData and live transition frames.
     if (isDecollisioning) return;
+    // renderDots wipes the CSS transform; defer to settle (pulse appears
+    // frozen mid-gesture, resumes when the idle timer repaints).
+    if (gpuPanZoom && isInteractionActive?.()) return;
     const ctx = setupCanvas();
     if (ctx) renderDots(ctx, getZoomTransform?.());
-  } : null, debug);
+  } : null, debug, pulseEnabled);
 
   const getColor = (item, index) => {
     if (item.color) return item.color;
@@ -664,6 +672,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     // Decollision path owns canvas writes through renderCanvasWithData().
     // Skipping this effect avoids flicker from stale processedData redraws.
     if (isDecollisioning) return;
+    // renderDots wipes the CSS transform; defer to settle.
+    if (gpuPanZoom && isInteractionActive?.()) return;
 
     debugLog('Canvas effect render:', { dataLength: data.length, isDecollisioning });
     const ctx = setupCanvas();
@@ -680,6 +690,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   useEffect(() => {
     if (!useCanvas) return;
     if (isDecollisioning) return;
+    // renderDots wipes the CSS transform; defer to settle.
+    if (gpuPanZoom && isInteractionActive?.()) return;
     // Pulse loop is already redrawing each frame; skip to avoid dual writers.
     let pulseDotCount = 0;
     for (const [, style] of dotStyles) if (style?.pulse) pulseDotCount++;
@@ -855,6 +867,8 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   const canvasInteractionHandlers = useCanvasInteractions({
     enabled: useCanvas,
     isZooming,
+    isInteractionActive,
+    blockHoverDuringInteraction,
     getSpatialIndex: () => canvasRef.current?._spatialIndex,
     getTransform: () => canvasRef.current?._cssTransform,
     onHover,

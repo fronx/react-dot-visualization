@@ -101,6 +101,14 @@ export const findDotAtPosition = (mouseX, mouseY, transform, spatialIndex) => {
  * @param {Object} config - Configuration object
  * @param {boolean} config.enabled - Whether interactions are enabled
  * @param {boolean} config.isZooming - Whether currently zooming (blocks interactions)
+ * @param {Function} [config.isInteractionActive] - Getter for the d3-zoom interaction
+ *   gate (true during pan/zoom gestures, false 32ms after the last event). Paired
+ *   with `blockHoverDuringInteraction`.
+ * @param {boolean} [config.blockHoverDuringInteraction] - When true, hover/leave
+ *   dispatch is suppressed while `isInteractionActive()` returns true. Lets the
+ *   consumer make pan/zoom and hover mutually exclusive — pairs with `gpuPanZoom`
+ *   when the host's hover handler is expensive (IPC lookups, deep React cascades)
+ *   and would otherwise jankify the gesture. Clicks still dispatch.
  * @param {Function} config.getSpatialIndex - Function to get current spatial index
  * @param {Function} config.getTransform - Function to get current CSS-pixel transform
  * @param {Function} config.onHover - Hover callback
@@ -118,6 +126,8 @@ export const useCanvasInteractions = (config) => {
   const {
     enabled = false,
     isZooming = false,
+    isInteractionActive = null,
+    blockHoverDuringInteraction = false,
     getSpatialIndex,
     getTransform,
     onHover,
@@ -172,9 +182,8 @@ export const useCanvasInteractions = (config) => {
   };
 
   const handleMouseMove = (event) => {
-    const { hitDot } = getMousePositionAndHit(event);
-
-    // Handle drag state if we're currently dragging
+    // Drag-state tracking must keep running so the click-vs-drag discriminator
+    // at mouseup stays correct — independent of the hover gate below.
     if (dragState.current) {
       const deltaX = Math.abs(event.clientX - dragState.current.startX);
       const deltaY = Math.abs(event.clientY - dragState.current.startY);
@@ -185,7 +194,12 @@ export const useCanvasInteractions = (config) => {
       }
     }
 
-    // Handle hover state
+    // Pan/zoom and hover are mutually exclusive when the consumer opts in.
+    // Hover state stays frozen for the duration — no onHover or onLeave fires —
+    // so the HUD doesn't blank on gesture start and re-populate on settle.
+    if (blockHoverDuringInteraction && isInteractionActive?.()) return;
+
+    const { hitDot } = getMousePositionAndHit(event);
     if (hitDot !== currentHoveredDot.current) {
       if (currentHoveredDot.current && onLeave) {
         onLeave(currentHoveredDot.current, event);

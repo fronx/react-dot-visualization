@@ -3,7 +3,7 @@ import * as d3 from 'd3';
 import { useFrameBudget } from './useFrameBudget';
 import { useDebug } from './useDebug.js';
 
-export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) => {
+export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false, enabled = true) => {
   // Use a ref for animation time — no React re-renders needed.
   // Canvas redraws are driven by onAnimationFrame(), and the returned
   // interpolation function reads timeRef.current at draw time.
@@ -61,7 +61,7 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
   debugLogRef.current = debugLog;
 
   useEffect(() => {
-    if (pulseDotCount === 0) return;
+    if (pulseDotCount === 0 || !enabled) return;
 
     const animate = (t) => {
       timeRef.current = t;
@@ -84,7 +84,7 @@ export const usePulseAnimation = (dotStyles, onAnimationFrame, debug = false) =>
 
     frameRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(frameRef.current);
-  }, [pulseDotCount]); // Only restart loop when pulse count changes
+  }, [pulseDotCount, enabled]);
 
   return (dotId, baseColor) => {
     const config = pulseDotConfigRef.current.get(dotId);

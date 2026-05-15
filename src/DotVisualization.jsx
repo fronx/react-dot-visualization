@@ -160,6 +160,8 @@ const DotVisualization = forwardRef((props, ref) => {
     useCanvas = false,
     gpuPanZoom = false,
     renderMargin = 0,
+    blockHoverDuringInteraction = false,
+    pausePulseDuringInteraction = false,
     debug = false,
     sendMetrics = false,
     initialTransform = null,
@@ -266,9 +268,17 @@ const DotVisualization = forwardRef((props, ref) => {
   const autoZoomTimeoutRef = useRef(null);
   const interactionActiveRef = useRef(false);
   const interactionIdleTimerRef = useRef(null);
+  // Mirror of `interactionActiveRef` as React state, flipped only on the
+  // rising and falling edges of a gesture — not per zoom event. Lets effects
+  // and hooks react to "interaction started/ended" without polling. Costs
+  // two re-renders per gesture; the ref is still the synchronous source.
+  const [interactionActive, setInteractionActive] = useState(false);
 
   const markInteractionActive = useCallback(() => {
-    interactionActiveRef.current = true;
+    if (!interactionActiveRef.current) {
+      interactionActiveRef.current = true;
+      setInteractionActive(true);
+    }
     if (interactionIdleTimerRef.current) {
       clearTimeout(interactionIdleTimerRef.current);
     }
@@ -280,6 +290,7 @@ const DotVisualization = forwardRef((props, ref) => {
     const SETTLE_IDLE_MS = 32;
     interactionIdleTimerRef.current = setTimeout(() => {
       interactionActiveRef.current = false;
+      setInteractionActive(false);
       interactionIdleTimerRef.current = null;
       // GPU mode: now that the gesture has settled, redraw the canvas at the
       // current transform so the next gesture starts from a fresh baseline
@@ -920,6 +931,9 @@ const DotVisualization = forwardRef((props, ref) => {
             useCanvas={useCanvas}
             gpuPanZoom={gpuPanZoom}
             renderMargin={renderMargin}
+            blockHoverDuringInteraction={blockHoverDuringInteraction}
+            pausePulseDuringInteraction={pausePulseDuringInteraction}
+            interactionActive={interactionActive}
             getZoomTransform={getZoomTransform}
             debug={debug}
             effectiveViewBox={effectiveViewBox}
@@ -930,6 +944,7 @@ const DotVisualization = forwardRef((props, ref) => {
             onBackgroundClick={onBackgroundClick}
             onDragStart={onDragStart}
             isZooming={isZooming}
+            isInteractionActive={() => interactionActiveRef.current}
             isDecollisioning={isSimulationRunning}
           />
         </g>
