@@ -11,9 +11,11 @@ import * as THREE from 'three';
  */
 const vertexShader = /* glsl */`
   attribute float instanceAlpha;
+  attribute float instanceFocus;
   varying vec2 vUv;
   varying vec3 vColor;
   varying float vAlpha;
+  varying float vFocus;
   void main() {
     vUv = uv;
     #ifdef USE_INSTANCING_COLOR
@@ -22,29 +24,50 @@ const vertexShader = /* glsl */`
       vColor = vec3(1.0);
     #endif
     vAlpha = instanceAlpha;
+    vFocus = instanceFocus;
     gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
   }
 `;
 
+// Focus-ring geometry constants (mirror utils/focusDotSizing.ts in fingertip):
+//   inner disc spans 0..INNER_END
+//   gap (transparent) spans INNER_END..GAP_END
+//   outer ring spans GAP_END..1.0
+//   OUTER_RATIO = 1 + GAP_RATIO(0.4) + RING_RATIO(0.3) = 1.7
 const fragmentShader = /* glsl */`
   uniform float uStrokeWidth;
   uniform vec3 uStrokeColor;
   varying vec2 vUv;
   varying vec3 vColor;
   varying float vAlpha;
+  varying float vFocus;
 
   void main() {
     vec2 c = vUv - 0.5;
     float dist = length(c) * 2.0;
-
     float edgeFalloff = fwidth(dist);
-    float coverage = 1.0 - smoothstep(1.0 - edgeFalloff, 1.0, dist);
+
+    float coverage;
+    vec3 color;
+
+    if (vFocus > 0.5) {
+      // Focus visual: inner disc + outer ring with transparent gap.
+      const float INNER_END = 1.0 / 1.7;        // ≈ 0.5882
+      const float GAP_END = 1.4 / 1.7;          // ≈ 0.8235
+      float innerCoverage = 1.0 - smoothstep(INNER_END - edgeFalloff, INNER_END + edgeFalloff, dist);
+      float ringInner = smoothstep(GAP_END - edgeFalloff, GAP_END + edgeFalloff, dist);
+      float ringOuter = 1.0 - smoothstep(1.0 - edgeFalloff, 1.0, dist);
+      coverage = max(innerCoverage, ringInner * ringOuter);
+      color = vColor;
+    } else {
+      coverage = 1.0 - smoothstep(1.0 - edgeFalloff, 1.0, dist);
+      float strokeStart = 1.0 - uStrokeWidth;
+      float strokeMix = smoothstep(strokeStart - edgeFalloff, strokeStart + edgeFalloff, dist);
+      color = mix(vColor, uStrokeColor, strokeMix);
+    }
+
     float alpha = coverage * vAlpha;
     if (alpha <= 0.0) discard;
-
-    float strokeStart = 1.0 - uStrokeWidth;
-    float strokeMix = smoothstep(strokeStart - edgeFalloff, strokeStart + edgeFalloff, dist);
-    vec3 color = mix(vColor, uStrokeColor, strokeMix);
 
     gl_FragColor = vec4(color, alpha);
     #include <colorspace_fragment>

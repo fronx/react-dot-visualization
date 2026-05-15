@@ -133,6 +133,8 @@ const App = () => {
       }
     });
     newStyles.set(item.id, {
+      focusRing: true,
+      r: 8, // bump the focused dot so the ring is visible at demo scale
       pulse: {
         duration: 1250,
         sizeRange: 0.3,

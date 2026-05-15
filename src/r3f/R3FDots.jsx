@@ -49,6 +49,7 @@ export function R3FDots({
   const ringMeshRef = useRef(null);
   const ringAlphaAttrRef = useRef(null);
   const dotAlphaAttrRef = useRef(null);
+  const dotFocusAttrRef = useRef(null);
   const dynamicDotsRef = useRef([]);
   const dynamicDotsByIdRef = useRef(new Map());
   const dotInfoByIdRef = useRef(new Map());
@@ -110,16 +111,25 @@ export function R3FDots({
     const mesh = meshRef.current;
     if (!mesh) {
       dotAlphaAttrRef.current = null;
+      dotFocusAttrRef.current = null;
       return;
     }
     const count = data.length || 1;
     const geom = mesh.geometry;
-    let attr = geom.getAttribute('instanceAlpha');
-    if (!attr || attr.array.length < count) {
-      attr = new THREE.InstancedBufferAttribute(new Float32Array(count).fill(1), 1);
-      geom.setAttribute('instanceAlpha', attr);
+    let alphaAttr = geom.getAttribute('instanceAlpha');
+    if (!alphaAttr || alphaAttr.array.length < count) {
+      alphaAttr = new THREE.InstancedBufferAttribute(new Float32Array(count).fill(1), 1);
+      geom.setAttribute('instanceAlpha', alphaAttr);
     }
-    dotAlphaAttrRef.current = attr;
+    dotAlphaAttrRef.current = alphaAttr;
+    // Per-instance focus flag: 1.0 = render as inner+outer-ring focus visual,
+    // 0.0 = normal disc + stroke. Defaults to 0.
+    let focusAttr = geom.getAttribute('instanceFocus');
+    if (!focusAttr || focusAttr.array.length < count) {
+      focusAttr = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+      geom.setAttribute('instanceFocus', focusAttr);
+    }
+    dotFocusAttrRef.current = focusAttr;
   }, [data.length]);
 
   // Apply static instance attributes when data/style changes.
@@ -127,6 +137,7 @@ export function R3FDots({
     const mesh = meshRef.current;
     const ringMesh = ringMeshRef.current;
     const dotAlphaAttr = dotAlphaAttrRef.current;
+    const dotFocusAttr = dotFocusAttrRef.current;
     if (!mesh) return;
 
     const dynamicDots = [];
@@ -136,6 +147,7 @@ export function R3FDots({
     let needsMatrixUpdate = false;
     let needsColorUpdate = false;
     let needsAlphaUpdate = false;
+    let needsFocusUpdate = false;
     let needsRingMatrixUpdate = false;
     let needsRingColorUpdate = false;
 
@@ -168,6 +180,14 @@ export function R3FDots({
       if (dotAlphaAttr) {
         dotAlphaAttr.array[i] = baseOpacity;
         needsAlphaUpdate = true;
+      }
+
+      if (dotFocusAttr) {
+        const focusValue = customStyle.focusRing ? 1 : 0;
+        if (dotFocusAttr.array[i] !== focusValue) {
+          dotFocusAttr.array[i] = focusValue;
+          needsFocusUpdate = true;
+        }
       }
 
       dotInfoById.set(item.id, {
@@ -216,6 +236,7 @@ export function R3FDots({
     if (needsMatrixUpdate) mesh.instanceMatrix.needsUpdate = true;
     if (needsColorUpdate && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     if (needsAlphaUpdate && dotAlphaAttr) dotAlphaAttr.needsUpdate = true;
+    if (needsFocusUpdate && dotFocusAttr) dotFocusAttr.needsUpdate = true;
     if (ringMesh && needsRingMatrixUpdate) {
       ringMesh.instanceMatrix.needsUpdate = true;
     }
