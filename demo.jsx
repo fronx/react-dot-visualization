@@ -2,6 +2,7 @@ import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { createRoot } from 'react-dom/client';
 import * as jdenticon from 'jdenticon';
 import DotVisualization from './src/DotVisualization.jsx';
+import DotVisualizationR3F from './src/r3f/DotVisualizationR3F.jsx';
 
 const App = () => {
   const [hoveredDot, setHoveredDot] = useState(null);
@@ -23,6 +24,7 @@ const App = () => {
   const [enableDecollision, setEnableDecollision] = useState(false); // Default off
   const [useCanvasRendering, setUseCanvasRendering] = useState(true); // Default off - canvas immediate mode
   const [gpuPanZoom, setGpuPanZoom] = useState(false);
+  const [renderer, setRenderer] = useState('canvas'); // 'canvas' | 'r3f'
   const containerRef = useRef(null);
   const vizRef = useRef(null);
 
@@ -119,7 +121,7 @@ const App = () => {
     setClickedDot(item);
     console.log('Clicked item:', item);
 
-    // Desaturate all other dots
+    // Desaturate all other dots and pulse the clicked one (fingertip-style).
     const newStyles = new Map();
     data.forEach(dot => {
       if (dot.id !== item.id) {
@@ -129,6 +131,15 @@ const App = () => {
           'stroke-width': '0.5'
         });
       }
+    });
+    newStyles.set(item.id, {
+      pulse: {
+        duration: 1250,
+        sizeRange: 0.3,
+        ringEffect: true,
+        ringTargetPixels: 42,
+        ringMinRatio: 3.0,
+      },
     });
     setDotStyles(newStyles);
   };
@@ -245,9 +256,31 @@ const App = () => {
     return hoverImageCache.get(id);
   } : undefined;
 
+  const tabButtonStyle = (active) => ({
+    padding: '8px 16px',
+    fontSize: '13px',
+    cursor: 'pointer',
+    background: active ? '#fff' : 'transparent',
+    border: '1px solid #ddd',
+    borderBottom: active ? '1px solid #fff' : '1px solid #ddd',
+    borderRadius: '4px 4px 0 0',
+    marginRight: '4px',
+    marginBottom: '-1px',
+    fontWeight: active ? 600 : 400,
+    color: active ? '#222' : '#666',
+  });
+
   return (
     <div className="demo">
       <h1>React Dot Visualization Demo</h1>
+      <div style={{ display: 'flex', borderBottom: '1px solid #ddd', marginBottom: 12 }}>
+        <button onClick={() => setRenderer('canvas')} style={tabButtonStyle(renderer === 'canvas')}>
+          Canvas / SVG
+        </button>
+        <button onClick={() => setRenderer('r3f')} style={tabButtonStyle(renderer === 'r3f')}>
+          R3F (WebGL)
+        </button>
+      </div>
       <div className="viz" ref={containerRef} style={{ position: 'relative', width: '100%', height: '60vh' }}>
         <div
           className="demo-left-panel"
@@ -458,35 +491,53 @@ const App = () => {
           </div>
 
         </div>
-        <DotVisualization
-          ref={vizRef}
-          data={data}
-          onHover={setHoveredDot}
-          onLeave={() => setHoveredDot(null)}
-          onClick={handleClick}
-          onBackgroundClick={handleBackgroundClick}
-          onZoomEnd={updateVisibleCount}
-          dotStyles={dotStyles}
-          defaultSize={getScaledDotSize()}
-          strokeWidth={getAdaptiveStrokeWidth()}
-          margin={0.05}
-          style={{ position: 'absolute', inset: 0 }}
-          occludeLeft={panelWidth}
-          autoFitToVisible
-          fitMargin={0.92}
-          autoZoomToNewContent={autoZoomEnabled}
-          autoZoomDuration={autoZoomDuration}
-          hoverSizeMultiplier={hoverSizeMultiplier}
-          hoverOpacity={hoverOpacity}
-          useImages={useImages}
-          imageProvider={imageProvider}
-          hoverImageProvider={hoverImageProvider}
-          enableDecollisioning={enableDecollision}
-          useCanvas={useCanvasRendering}
-          gpuPanZoom={gpuPanZoom}
-          renderMargin={gpuPanZoom ? 1.0 : 0}
-          debug={debug}
-        />
+        {renderer === 'canvas' ? (
+          <DotVisualization
+            ref={vizRef}
+            data={data}
+            onHover={setHoveredDot}
+            onLeave={() => setHoveredDot(null)}
+            onClick={handleClick}
+            onBackgroundClick={handleBackgroundClick}
+            onZoomEnd={updateVisibleCount}
+            dotStyles={dotStyles}
+            defaultSize={getScaledDotSize()}
+            strokeWidth={getAdaptiveStrokeWidth()}
+            margin={0.05}
+            style={{ position: 'absolute', inset: 0 }}
+            occludeLeft={panelWidth}
+            autoFitToVisible
+            fitMargin={0.92}
+            autoZoomToNewContent={autoZoomEnabled}
+            autoZoomDuration={autoZoomDuration}
+            hoverSizeMultiplier={hoverSizeMultiplier}
+            hoverOpacity={hoverOpacity}
+            useImages={useImages}
+            imageProvider={imageProvider}
+            hoverImageProvider={hoverImageProvider}
+            enableDecollisioning={enableDecollision}
+            useCanvas={useCanvasRendering}
+            gpuPanZoom={gpuPanZoom}
+            renderMargin={gpuPanZoom ? 1.0 : 0}
+            debug={debug}
+          />
+        ) : (
+          <DotVisualizationR3F
+            ref={vizRef}
+            data={data}
+            onHover={setHoveredDot}
+            onLeave={() => setHoveredDot(null)}
+            onClick={handleClick}
+            onBackgroundClick={handleBackgroundClick}
+            dotStyles={dotStyles}
+            defaultSize={getScaledDotSize()}
+            dotStrokeWidthFraction={0.1}
+            style={{ position: 'absolute', inset: 0 }}
+            hoverSizeMultiplier={hoverSizeMultiplier}
+            hoverOpacity={hoverOpacity}
+            enableDecollisioning={enableDecollision}
+          />
+        )}
       </div>
 
       {hoveredDot && (
