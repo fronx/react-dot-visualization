@@ -1,8 +1,17 @@
 import React, { useRef, useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import { useFrame } from '@react-three/fiber';
-import { createBevelStrokeMaterial, updateMaterialStroke } from './bevelStrokeMaterial.js';
-import * as d3 from 'd3';
+import {
+  createBevelStrokeMaterial,
+  updateMaterialStroke,
+  createPulseDiscMaterial,
+} from './bevelStrokeMaterial.js';
+import { usePulseAnimation } from '../usePulseAnimation.js';
+import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
+import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
+
+const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
+const TAN_HALF_FOV = Math.tan(CAMERA_FOV_RAD / 2);
 
 const _dummy = new THREE.Object3D();
 const _color = new THREE.Color();
@@ -35,6 +44,7 @@ export function R3FDots({
 }) {
   const meshRef = useRef(null);
   const ringMeshRef = useRef(null);
+  const ringAlphaAttrRef = useRef(null);
   const dynamicDotsRef = useRef([]);
   const dynamicDotsByIdRef = useRef(new Map());
   const dotInfoByIdRef = useRef(new Map());
@@ -42,18 +52,17 @@ export function R3FDots({
   const prevHoveredIdRef = useRef(hoveredId);
   const prevHoverSizeMultiplierRef = useRef(hoverSizeMultiplier);
 
-  // Per-dot pulse state: time reference and animation phase
-  const pulseTimeRef = useRef(0);
-
   const material = useMemo(
     () => createBevelStrokeMaterial(dotStroke || '#111', dotStrokeWidthFraction),
     [] // created once; uniforms updated below
   );
 
-  const ringMaterial = useMemo(() => {
-    const m = new THREE.MeshBasicMaterial({ transparent: true, opacity: 1, side: THREE.FrontSide });
-    return m;
-  }, []);
+  const ringMaterial = useMemo(() => createPulseDiscMaterial(), []);
+
+  // Shared pulse phase + frame budgeting with Canvas renderer. The interpolator
+  // returns {sizeMultiplier, opacityMultiplier, color, ringData} per dot.
+  // R3F drives painting via useFrame, so the rAF callback is a no-op.
+  const getPulseState = usePulseAnimation(dotStyles, undefined, false, true);
 
   // Update stroke uniforms when props change
   useEffect(() => {
@@ -72,6 +81,24 @@ export function R3FDots({
   useEffect(() => {
     hoveredIdRef.current = hoveredId;
   }, [hoveredId]);
+
+  // (Re)attach per-instance alpha buffer to the ring geometry when the
+  // instance count changes. Read in pulseDiscMaterial's vertex shader.
+  useEffect(() => {
+    const ringMesh = ringMeshRef.current;
+    if (!ringMesh) {
+      ringAlphaAttrRef.current = null;
+      return;
+    }
+    const count = data.length || 1;
+    const geom = ringMesh.geometry;
+    let attr = geom.getAttribute('instanceAlpha');
+    if (!attr || attr.array.length < count) {
+      attr = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+      geom.setAttribute('instanceAlpha', attr);
+    }
+    ringAlphaAttrRef.current = attr;
+  }, [data.length, pulseDots]);
 
   // Apply static instance attributes when data/style changes.
   useEffect(() => {
@@ -122,10 +149,6 @@ export function R3FDots({
           y: -item.y,
           baseScale: scale,
           baseFill: fill,
-          pulse,
-          colorInterpolator: pulse.pulseColor && !pulse.ringEffect
-            ? d3.interpolate(fill, pulse.pulseColor)
-            : null,
         };
         dynamicDots.push(dynamicDot);
         dynamicDotsById.set(item.id, dynamicDot);
@@ -205,77 +228,92 @@ export function R3FDots({
     prevHoverSizeMultiplierRef.current = hoverSizeMultiplier;
   }, [hoveredId, hoverSizeMultiplier]);
 
-  // Animate only pulsing dots each frame.
-  useFrame((_, delta) => {
+  // Animate only pulsing dots each frame. Phase + ring geometry are derived
+  // from the shared hook+utility so behavior matches the Canvas renderer.
+  useFrame((state) => {
     const dynamicDots = dynamicDotsRef.current;
     if (!dynamicDots.length) return;
 
     const mesh = meshRef.current;
     const ringMesh = ringMeshRef.current;
+    const ringAlphaAttr = ringAlphaAttrRef.current;
     if (!mesh) return;
 
-    pulseTimeRef.current += delta * 1000; // ms
-    const t = pulseTimeRef.current;
+    // Screen-pixels per world unit (CSS pixels) at current camera distance.
+    // Adaptive ring sizing wants viewBoxScale in canvas-pixel space and a
+    // separate canvasDPR — we feed pxPerWorldUnit_CSS * dpr as viewBoxScale
+    // and zoomScale = 1 (R3F bakes zoom into camera distance).
+    const heightCSS = state.size.height;
+    const camZ = state.camera.position.z;
+    const dpr = state.gl.getPixelRatio();
+    const pxPerWorldUnit_CSS = heightCSS / (2 * camZ * TAN_HALF_FOV);
+    const viewBoxScale = pxPerWorldUnit_CSS * dpr;
 
     let needsMatrixUpdate = false;
     let needsColorUpdate = false;
     let needsRingMatrixUpdate = false;
+    let needsRingAlphaUpdate = false;
+    let needsRingColorUpdate = false;
 
     for (const dot of dynamicDots) {
-      const { index, x, y, baseScale, pulse } = dot;
-      const duration = pulse.duration || 1250;
-      const sizeRange = pulse.sizeRange || 0.3;
-      const phase = (t % duration) / duration;
-
-      let pulseMul;
-      if (pulse.ringEffect) {
-        const sine = Math.sin(phase * Math.PI * 2);
-        pulseMul = pulse.pulseInward
-          ? 1 - (sizeRange * (sine + 1) / 2)
-          : 1 + (sizeRange * (sine + 1) / 2);
-      } else {
-        let eased;
-        if (phase < 0.5) eased = d3.easeQuadOut(phase * 2);
-        else eased = d3.easeQuadIn(1 - (phase - 0.5) * 2);
-        pulseMul = pulse.pulseInward ? 1 - sizeRange * eased : 1 + sizeRange * eased;
-      }
+      const { id, index, x, y, baseScale, baseFill } = dot;
+      const pulseState = getPulseState(id, baseFill);
 
       _dummy.position.set(x, y, 0);
-      _dummy.scale.setScalar(baseScale * pulseMul);
+      _dummy.scale.setScalar(baseScale * pulseState.sizeMultiplier);
       _dummy.updateMatrix();
       mesh.setMatrixAt(index, _dummy.matrix);
       needsMatrixUpdate = true;
 
-      // Pulse color interpolation only for non-ring pulses.
-      if (dot.colorInterpolator) {
-        let eased;
-        if (phase < 0.5) eased = d3.easeQuadOut(phase * 2);
-        else eased = d3.easeQuadIn(1 - (phase - 0.5) * 2);
-        _color.set(dot.colorInterpolator(eased));
+      if (pulseState.color && pulseState.color !== baseFill) {
+        _color.set(pulseState.color);
         mesh.setColorAt(index, _color);
         needsColorUpdate = true;
       }
 
-      if (ringMesh && pulse.ringEffect) {
-        const ringPhase = ((t + 400) % duration) / duration;
-        let ringScale = 0;
-        if (ringPhase <= 0.8) {
-          const normalized = ringPhase / 0.8;
-          ringScale = baseScale * pulseMul * (1 + normalized * 1.5);
+      if (ringMesh) {
+        const ringData = pulseState.ringData;
+        if (ringData) {
+          const ringRadius = calculateAdaptiveRingRadius({
+            radius: baseScale,
+            animationPhase: ringData.animationPhase,
+            viewBoxScale,
+            zoomScale: 1,
+            targetPixels: ringData.options?.targetPixels,
+            minRatio: ringData.options?.minRatio,
+            canvasDPR: dpr,
+          });
+          _dummy.position.set(x, y, -0.1);
+          _dummy.scale.setScalar(ringRadius);
+          _dummy.updateMatrix();
+          ringMesh.setMatrixAt(index, _dummy.matrix);
+          needsRingMatrixUpdate = true;
+
+          if (ringAlphaAttr) {
+            ringAlphaAttr.array[index] = ringData.opacity;
+            needsRingAlphaUpdate = true;
+          }
+
+          if (ringData.color) {
+            _ringColor.set(ringData.color);
+            ringMesh.setColorAt(index, _ringColor);
+            needsRingColorUpdate = true;
+          }
+        } else if (ringAlphaAttr && ringAlphaAttr.array[index] !== 0) {
+          // Pulse cycle gap: hide the ring instance.
+          ringAlphaAttr.array[index] = 0;
+          needsRingAlphaUpdate = true;
         }
-        _dummy.position.set(x, y, -0.1);
-        _dummy.scale.setScalar(ringScale);
-        _dummy.updateMatrix();
-        ringMesh.setMatrixAt(index, _dummy.matrix);
-        needsRingMatrixUpdate = true;
       }
     }
 
     if (needsMatrixUpdate) mesh.instanceMatrix.needsUpdate = true;
     if (needsColorUpdate && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    if (needsRingMatrixUpdate && ringMesh) {
-      ringMesh.instanceMatrix.needsUpdate = true;
+    if (ringMesh && needsRingMatrixUpdate) ringMesh.instanceMatrix.needsUpdate = true;
+    if (ringMesh && needsRingColorUpdate && ringMesh.instanceColor) {
+      ringMesh.instanceColor.needsUpdate = true;
     }
+    if (ringAlphaAttr && needsRingAlphaUpdate) ringAlphaAttr.needsUpdate = true;
   });
 
   const count = data.length || 1;
@@ -283,7 +321,7 @@ export function R3FDots({
 
   return (
     <>
-      {/* Ring layer (behind dots) */}
+      {/* Ring layer (behind dots) — SDF disc with per-instance alpha for fade-out */}
       {hasPulseRings && (
         <instancedMesh
           ref={ringMeshRef}
@@ -292,11 +330,11 @@ export function R3FDots({
           raycast={() => null}
           frustumCulled={false}
         >
-          <circleGeometry args={[BASE_RADIUS, 12]} />
+          <planeGeometry args={[BASE_RADIUS * 2, BASE_RADIUS * 2]} />
         </instancedMesh>
       )}
 
-      {/* Main dot layer */}
+      {/* Main dot layer — plane geometry; SDF shader defines the circular silhouette */}
       <instancedMesh
         ref={meshRef}
         args={[undefined, undefined, count]}
@@ -304,7 +342,7 @@ export function R3FDots({
         raycast={() => null}
         frustumCulled={false}
       >
-        <circleGeometry args={[BASE_RADIUS, 12]} />
+        <planeGeometry args={[BASE_RADIUS * 2, BASE_RADIUS * 2]} />
       </instancedMesh>
     </>
   );

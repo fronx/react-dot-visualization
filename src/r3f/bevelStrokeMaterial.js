@@ -33,11 +33,15 @@ const fragmentShader = /* glsl */`
     vec2 c = vUv - 0.5;
     float dist = length(c) * 2.0;
 
-    if (dist > 1.0) discard;
+    float edgeFalloff = fwidth(dist);
+    float alpha = 1.0 - smoothstep(1.0 - edgeFalloff, 1.0, dist);
+    if (alpha <= 0.0) discard;
 
     float strokeStart = 1.0 - uStrokeWidth;
-    vec3 color = dist > strokeStart ? uStrokeColor : vColor;
-    gl_FragColor = vec4(color, 1.0);
+    float strokeMix = smoothstep(strokeStart - edgeFalloff, strokeStart + edgeFalloff, dist);
+    vec3 color = mix(vColor, uStrokeColor, strokeMix);
+
+    gl_FragColor = vec4(color, alpha);
     #include <colorspace_fragment>
   }
 `;
@@ -51,6 +55,8 @@ export function createBevelStrokeMaterial(strokeColor = '#111', strokeWidth = 0.
       uStrokeWidth: { value: strokeWidth },
       uStrokeColor: { value: new THREE.Vector3(color.r, color.g, color.b) },
     },
+    transparent: true,
+    depthWrite: false,
   });
 }
 
@@ -58,4 +64,46 @@ export function updateMaterialStroke(material, strokeColor, strokeWidth) {
   const color = new THREE.Color(strokeColor);
   material.uniforms.uStrokeColor.value.set(color.r, color.g, color.b);
   material.uniforms.uStrokeWidth.value = strokeWidth;
+}
+
+const pulseDiscVertex = /* glsl */`
+  attribute float instanceAlpha;
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    vUv = uv;
+    #ifdef USE_INSTANCING_COLOR
+      vColor = instanceColor;
+    #else
+      vColor = vec3(1.0);
+    #endif
+    vAlpha = instanceAlpha;
+    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+  }
+`;
+
+const pulseDiscFragment = /* glsl */`
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vAlpha;
+  void main() {
+    vec2 c = vUv - 0.5;
+    float dist = length(c) * 2.0;
+    float edgeFalloff = fwidth(dist);
+    float coverage = 1.0 - smoothstep(1.0 - edgeFalloff, 1.0, dist);
+    float alpha = coverage * vAlpha;
+    if (alpha <= 0.0) discard;
+    gl_FragColor = vec4(vColor, alpha);
+    #include <colorspace_fragment>
+  }
+`;
+
+export function createPulseDiscMaterial() {
+  return new THREE.ShaderMaterial({
+    vertexShader: pulseDiscVertex,
+    fragmentShader: pulseDiscFragment,
+    transparent: true,
+    depthWrite: false,
+  });
 }

@@ -136,14 +136,18 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       return;
     }
 
-    if (!enableDecollisioning && memoizedPositions.current.size > 0) {
-      // Decollision disabled and we have cached results: restore them
-      const restored = valid.map(item => {
-        const memo = memoizedPositions.current.get(item.id);
-        return memo ? { ...item, x: memo.x, y: memo.y } : item;
-      });
-      stablePositionsRef.current = restored.map((node) => ({ ...node }));
-      setProcessedData(restored);
+    if (!enableDecollisioning) {
+      // Match Canvas: when decollision is disabled, render input positions as-is
+      // and never run a simulation. Restore memoized results if any so positions
+      // stay stable across re-renders.
+      const positioned = memoizedPositions.current.size > 0
+        ? valid.map(item => {
+            const memo = memoizedPositions.current.get(item.id);
+            return memo ? { ...item, x: memo.x, y: memo.y } : item;
+          })
+        : valid;
+      stablePositionsRef.current = positioned.map(node => ({ ...node }));
+      setProcessedData(positioned);
       return;
     }
 
@@ -179,18 +183,12 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       return;
     }
 
-    // Catch-up mode: renderer mounted fresh while global decollision phase already passed.
-    // Run silently (no intermediate frames) to avoid competing state updates.
-    const isCatchUp = !enableDecollisioning && memoizedPositions.current.size === 0;
-
     // Incremental updates keep rendering previously stable positions while decollision runs.
-    if (!isCatchUp) {
-      if (isIncrementalUpdate && stablePositionsRef.current.length > 0) {
-        setProcessedData(stablePositionsRef.current);
-      } else if (!isIncrementalUpdate) {
-        // Full renders stream intermediate positions.
-        setProcessedData(valid);
-      }
+    if (isIncrementalUpdate && stablePositionsRef.current.length > 0) {
+      setProcessedData(stablePositionsRef.current);
+    } else if (!isIncrementalUpdate) {
+      // Full renders stream intermediate positions.
+      setProcessedData(valid);
     }
 
     const fnDotSize = (item) => getDotSize(item, dotStylesRef.current, defaultSizeRef.current);
@@ -206,7 +204,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         }
       : null;
 
-    const skipFrames = isCatchUp || isIncrementalUpdate;
+    const skipFrames = isIncrementalUpdate;
     let cancelled = false;
     const sim = decollisioning(
       valid,
@@ -355,14 +353,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     >
       <Canvas
         style={{ position: 'absolute', inset: 0 }}
-        dpr={[1, 1.5]}
+        dpr={[1, 2]}
         camera={{
           fov: CAMERA_FOV_DEGREES,
           near: 0.01,
           far: 100000,
           position: [0, 0, 65],
         }}
-        gl={{ antialias: false, powerPreference: 'high-performance' }}
+        gl={{ antialias: true, powerPreference: 'high-performance' }}
       >
         <R3FScene
           data={processedData}
