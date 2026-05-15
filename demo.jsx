@@ -305,6 +305,12 @@ const App = () => {
           <button onClick={handleAddDots} style={{ padding: '6px 10px', cursor: 'pointer' }}>
             + Add 7 Gray Dots
           </button>
+          <button
+            onClick={() => vizRef.current?.zoomToVisible?.(500)}
+            style={{ padding: '6px 10px', cursor: 'pointer' }}
+          >
+            Zoom to fit
+          </button>
 
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid rgba(0,0,0,0.1)' }}>

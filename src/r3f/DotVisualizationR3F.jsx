@@ -11,8 +11,8 @@ import { Canvas } from '@react-three/fiber';
 import { R3FScene } from './R3FScene.jsx';
 import { decollisioning } from '../decollisioning.js';
 import { getDotSize } from '../dotUtils.js';
-import { computeFitZ, CAMERA_FOV_DEGREES } from './cameraUtils.js';
-import { boundsForData } from '../utils.js';
+import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
+import { boundsForData, computeFitTransformToVisible } from '../utils.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const EMPTY_RADIUS_OVERRIDES = new Map();
@@ -62,6 +62,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     radiusOverrides = EMPTY_RADIUS_OVERRIDES,
     sharedPositionCache = null,
     initialTransform = null,
+    occludeLeft = 0,
+    occludeRight = 0,
+    occludeTop = 0,
+    occludeBottom = 0,
     className = '',
     style = {},
     children,
@@ -280,10 +284,90 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     cameraStateRef.current = state;
   }, []);
 
+  // Convert a D3-equivalent {x, y, k} transform to a Three.js camera position.
+  const d3ToCamera = useCallback((transform, W, H) => {
+    const { x, y, k } = transform;
+    const cx = (W / 2 - x) / k;
+    const cy = -((H / 2 - y) / k);
+    const cz = H / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
+    return { x: cx, y: cy, z: Math.max(0.5, Math.min(5000, cz)) };
+  }, []);
+
+  // Compute D3-equivalent fit transform honoring occlusion. Shares the math
+  // with the Canvas renderer via computeFitTransformToVisible.
+  const computeFit = useCallback((dataToUse, margin) => {
+    if (!containerRef.current || !dataToUse?.length) return null;
+    const rect = containerRef.current.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const bounds = boundsForData(dataToUse, defaultSize);
+    // viewBox = [0, 0, W, H] makes sx = sy = 1 so the returned k is in
+    // px-per-world-unit directly (matches R3F's D3 transform convention).
+    const viewBox = [0, 0, rect.width, rect.height];
+    const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
+    return computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
+  }, [defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom]);
+
   // Imperative handle — implements the DotVisualization API surface
   useImperativeHandle(ref, () => ({
-    zoomToVisible: async () => {
-      cameraInitialized.current = false;
+    zoomToVisible: async (
+      duration = 0,
+      easing = d3.easeCubicInOut,
+      dataOverride = null,
+      marginOverride = null,
+      _updateExtents = true,
+      maxScale = Infinity
+    ) => {
+      if (!containerRef.current || !setCameraPositionRef.current) return false;
+      const dataToUse = dataOverride || processedData;
+      const margin = marginOverride ?? 0.9;
+      const fit = computeFit(dataToUse, margin);
+      if (!fit) return false;
+
+      const rect = containerRef.current.getBoundingClientRect();
+      const W = rect.width, H = rect.height;
+
+      // Cap k at maxScale; re-center bounds in visible region at the capped k.
+      let { k, x, y } = fit;
+      if (k > maxScale) {
+        k = maxScale;
+        const bounds = boundsForData(dataToUse, defaultSize);
+        const cx = (bounds.minX + bounds.maxX) / 2;
+        const cy = (bounds.minY + bounds.maxY) / 2;
+        const visWpx = Math.max(1, W - occludeLeft - occludeRight);
+        const visHpx = Math.max(1, H - occludeTop - occludeBottom);
+        x = occludeLeft + visWpx / 2 - k * cx;
+        y = occludeTop + visHpx / 2 - k * cy;
+      }
+
+      const target = d3ToCamera({ x, y, k }, W, H);
+
+      if (duration <= 0) {
+        setCameraPositionRef.current(target.x, target.y, target.z);
+        cameraStateRef.current = { ...target };
+        return true;
+      }
+
+      // Animated ease from current camera to target. Linear interpolation in
+      // camera-position space with the easing applied to t.
+      const startCam = cameraStateRef.current
+        ? { ...cameraStateRef.current }
+        : { x: target.x, y: target.y, z: target.z };
+      const t0 = performance.now();
+      return new Promise((resolve) => {
+        const tick = () => {
+          const elapsed = performance.now() - t0;
+          const t = Math.min(1, elapsed / duration);
+          const e = easing(t);
+          const cx = startCam.x + (target.x - startCam.x) * e;
+          const cy = startCam.y + (target.y - startCam.y) * e;
+          const cz = startCam.z + (target.z - startCam.z) * e;
+          setCameraPositionRef.current(cx, cy, cz);
+          cameraStateRef.current = { x: cx, y: cy, z: cz };
+          if (t < 1) requestAnimationFrame(tick);
+          else resolve(true);
+        };
+        requestAnimationFrame(tick);
+      });
     },
     getVisibleDotCount: () => processedData.length,
     getZoomTransform: () => {
@@ -296,43 +380,22 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       const k = H / (cam.z * 2 * Math.tan(CAMERA_FOV_RAD / 2));
       return {
         x: W / 2 - cam.x * k,
-        y: H / 2 + cam.y * k, // H/2 - (-cam.y) * k = H/2 + cam.y * k
+        y: H / 2 + cam.y * k,
         k,
       };
     },
     getFitTransform: (dataOverride = null, marginOverride = null) => {
-      if (!containerRef.current) return null;
       const dataToUse = dataOverride || processedData;
-      if (!dataToUse.length) return null;
-      const { width: W, height: H } = containerRef.current.getBoundingClientRect();
-      if (!W || !H) return null;
-
-      const bounds = boundsForData(dataToUse, defaultSize);
       const margin = marginOverride ?? 0.9;
-      const aspect = W / H;
-      const cz = computeFitZ(bounds.minX, bounds.maxX, bounds.minY, bounds.maxY, aspect, margin);
-      const cx = (bounds.minX + bounds.maxX) / 2;
-      const cy = -((bounds.minY + bounds.maxY) / 2); // negate: data Y is SVG (down+), world Y is up+
-
-      const k = H / (cz * 2 * Math.tan(CAMERA_FOV_RAD / 2));
-      return {
-        x: W / 2 - cx * k,
-        y: H / 2 + cy * k,
-        k,
-      };
+      return computeFit(dataToUse, margin);
     },
-    setZoomTransform: (transform, options = {}) => {
+    setZoomTransform: (transform, _options = {}) => {
       if (!containerRef.current || !setCameraPositionRef.current) return false;
-      const { x, y, k } = transform;
       const { width: W, height: H } = containerRef.current.getBoundingClientRect();
-      if (!W || !H || !k) return false;
-
-      // Convert D3 {x, y, k} to Three.js camera {x, y, z}
-      const cx = (W / 2 - x) / k;
-      const cy = -((H / 2 - y) / k);
-      const cz = H / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
-      setCameraPositionRef.current(cx, cy, Math.max(0.5, Math.min(5000, cz)));
-      cameraStateRef.current = { x: cx, y: cy, z: cz };
+      if (!W || !H || !transform.k) return false;
+      const target = d3ToCamera(transform, W, H);
+      setCameraPositionRef.current(target.x, target.y, target.z);
+      cameraStateRef.current = { ...target };
       return true;
     },
     updateVisibleDotCount: () => {},
@@ -343,7 +406,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       }
     },
     getCurrentPositions: () => processedData,
-  }), [processedData, defaultSize]);
+  }), [processedData, defaultSize, computeFit, d3ToCamera, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
   return (
     <div
