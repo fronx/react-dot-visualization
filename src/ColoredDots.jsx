@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useImperativeHandle, forwardRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useImperativeHandle, forwardRef } from 'react';
 import * as d3 from 'd3';
 import { getSyncedPosition, updateColoredDotAttributes } from './dotUtils.js';
 import ImagePatterns from './ImagePatterns.jsx';
@@ -57,6 +57,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
   // Transform the bitmap was last drawn at. Used by applyGpuTransform to
   // derive a CSS-only delta during pan/zoom interactions.
   const lastDrawnTransformRef = useRef(null);
+
+  // Backdrop layer: a low-res canvas covering the entire data bounding box.
+  // Sits behind the main canvas at all times; only visible when the user
+  // pans/zooms outside the area covered by the (higher-res) main bitmap.
+  // Its "baseline" is identity, so its CSS transform is just the current
+  // d3-zoom transform, adjusted for the canvas origin.
+  const backdropRef = useRef(null);
+  const [dataBBox, setDataBBox] = useState(null);
 
   // Canvas covers a region slightly larger than the visible viewBox so the
   // GPU-pan CSS shift can reveal pre-drawn dots at the edges. The SVG clips
@@ -271,40 +279,25 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       // correctly — the canvas covers the extended area, not just the visible one.
       const cssTransform = transformToCSSPixels(t, extendedViewBox, canvasDimensionsRef.current);
 
-      // Track last state - use ONLY cheap O(1) checks to minimize per-frame overhead
+      // Spatial index lives in DATA-space (see canvasInteractions.js), so the
+      // transform doesn't invalidate it — only dot positions themselves do.
+      // Decollision counts because dots are physically moving each frame.
       const lastState = canvasRef.current._lastSpatialIndexState;
-
-      // All checks are O(1): array length, array access, simple math, property reads
-      const transformK = Math.round(t.k * 1000) / 1000; // Round to avoid float precision
-      const transformX = Math.round(t.x);
-      const transformY = Math.round(t.y);
       const dataLength = dataToRender.length;
       const firstDotX = dataToRender[0]?.x;
       const firstDotY = dataToRender[0]?.y;
       const lastDotX = dataToRender[dataToRender.length - 1]?.x;
       const lastDotY = dataToRender[dataToRender.length - 1]?.y;
-      const canvasWidth = canvasDimensionsRef.current?.width;
-      const canvasHeight = canvasDimensionsRef.current?.height;
 
-      // Simple comparison - no expensive function calls, no indexOf(), no Map lookups
-      // During decollision/transitions, always rebuild since positions are changing every frame
       const shouldRebuildSpatialIndex = isDecollisioning || !lastState ||
         lastState.dataLength !== dataLength ||
         lastState.firstDotX !== firstDotX ||
         lastState.firstDotY !== firstDotY ||
         lastState.lastDotX !== lastDotX ||
-        lastState.lastDotY !== lastDotY ||
-        lastState.transformK !== transformK ||
-        lastState.transformX !== transformX ||
-        lastState.transformY !== transformY ||
-        lastState.canvasWidth !== canvasWidth ||
-        lastState.canvasHeight !== canvasHeight;
+        lastState.lastDotY !== lastDotY;
 
-      // Always rebuild spatial index when needed, including during decollision
-      // The spatial index must track the current visible positions (animated or final)
-      // to ensure hover detection works correctly during transitions
       if (shouldRebuildSpatialIndex) {
-        const spatialIndex = buildSpatialIndex(dataToRender, getSize, cssTransform);
+        const spatialIndex = buildSpatialIndex(dataToRender, getSize);
         if (spatialIndex) {
           canvasRef.current._spatialIndex = spatialIndex;
           canvasRef.current._lastSpatialIndexState = {
@@ -313,18 +306,18 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
             firstDotY,
             lastDotX,
             lastDotY,
-            transformK,
-            transformX,
-            transformY,
-            canvasWidth,
-            canvasHeight
           };
 
           if (debug && process.env.NODE_ENV === 'development' && Math.random() < 0.05) {
-            console.log('[ColoredDots] Rebuilt spatial index (data/transform changed)');
+            console.log('[ColoredDots] Rebuilt spatial index (data changed)');
           }
         }
       }
+
+      // Stash the current CSS-pixel transform every render so hover handlers
+      // can invert mouse coords into data-space at query time. Pointer write,
+      // not a rebuild.
+      canvasRef.current._cssTransform = cssTransform;
 
       // Canvas rendering: use unified styling logic
       const drawDot = (item, index) => {
@@ -527,6 +520,97 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     }
   }, [extendedViewBox, useCanvas]);
 
+  // Backdrop: render the full dataset once at low resolution, sized to the
+  // data bounding box. Updates only when data identity/length changes, so
+  // it's basically free during pan/zoom. The CSS transform applied during
+  // interaction mirrors the d3-zoom transform exactly (computed in the ref
+  // method below), keeping it pixel-aligned with the foreground.
+  useEffect(() => {
+    if (!useCanvas || !data || data.length === 0 || !backdropRef.current) {
+      return;
+    }
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let maxRadius = 0;
+    for (let i = 0; i < data.length; i++) {
+      const d = data[i];
+      if (typeof d.x !== 'number' || typeof d.y !== 'number') continue;
+      if (d.x < minX) minX = d.x;
+      if (d.x > maxX) maxX = d.x;
+      if (d.y < minY) minY = d.y;
+      if (d.y > maxY) maxY = d.y;
+      const r = (d.size || defaultSize) / 2;
+      if (r > maxRadius) maxRadius = r;
+    }
+    if (!isFinite(minX)) return;
+
+    // Expand the bbox by the largest dot radius so edges aren't clipped.
+    const pad = maxRadius * 2;
+    const bbox = {
+      minX: minX - pad,
+      minY: minY - pad,
+      width: Math.max(1, maxX - minX + 2 * pad),
+      height: Math.max(1, maxY - minY + 2 * pad),
+    };
+
+    // 2048 max dim gives 4× the spatial resolution of 1024 — fewer
+    // sub-pixel issues at zoom-out, at the cost of ~16 MB instead of 4 MB.
+    const MAX_DIM = 2048;
+    const aspect = bbox.width / bbox.height;
+    const bitW = aspect >= 1 ? MAX_DIM : Math.max(1, Math.round(MAX_DIM * aspect));
+    const bitH = aspect >= 1 ? Math.max(1, Math.round(MAX_DIM / aspect)) : MAX_DIM;
+
+    const canvas = backdropRef.current;
+    canvas.width = bitW;
+    canvas.height = bitH;
+    const ctx = canvas.getContext('2d');
+    const scaleX = bitW / bbox.width;
+    const scaleY = bitH / bbox.height;
+    ctx.setTransform(scaleX, 0, 0, scaleY, -bbox.minX * scaleX, -bbox.minY * scaleY);
+    ctx.clearRect(bbox.minX, bbox.minY, bbox.width, bbox.height);
+
+    // Enforce a minimum bitmap-pixel radius so naturally-tiny dots (e.g.,
+    // ~0.7 world units at 50k count) don't render at sub-pixel size on the
+    // backdrop. Without this, the backdrop bitmap is functionally empty —
+    // CSS-shrinking it during zoom-out then shows the page background
+    // through it, defeating the whole "always-on lower layer" contract.
+    const MIN_BITMAP_RADIUS = 1.5;
+    const minWorldRadius = MIN_BITMAP_RADIUS / Math.min(scaleX, scaleY);
+
+    // Simplified draw — no pulse rings, hover, or custom renderer. This is
+    // the "always visible at the edges" backdrop, not the primary surface.
+    for (let i = 0; i < data.length; i++) {
+      const d = data[i];
+      if (typeof d.x !== 'number' || typeof d.y !== 'number') continue;
+      const r = Math.max((d.size || defaultSize) / 2, minWorldRadius);
+      ctx.fillStyle = d.color || defaultColor || '#666';
+      ctx.globalAlpha = defaultOpacity;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, r, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    setDataBBox(bbox);
+
+    // Apply the current zoom transform to the backdrop NOW so it lands at
+    // the right place on first paint. Without this, the backdrop's CSS
+    // transform stays empty until the first user gesture — which means at
+    // mount, the backdrop sits at its raw foreignObject coords (in world
+    // units, often way outside the SVG viewBox) and is invisible.
+    if (typeof getZoomTransform === 'function') {
+      const transform = getZoomTransform();
+      if (transform && canvas) {
+        const s = transform.k;
+        const tx = transform.x + bbox.minX * (s - 1);
+        const ty = transform.y + bbox.minY * (s - 1);
+        canvas.style.transformOrigin = '0 0';
+        canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+      }
+    }
+
+    debugLog('Backdrop rendered:', { dots: data.length, bbox, bitmap: `${bitW}x${bitH}` });
+  }, [useCanvas, data, defaultSize, defaultColor, defaultOpacity, debugLog, getZoomTransform]);
+
   // Canvas rendering for data/style changes (NOT zoom, NOT hover)
   // Note: hoveredDotId, hoverSizeMultiplier, hoverOpacity intentionally excluded from deps
   // Hover changes are reflected in renderDots() via closure, but don't trigger full redraws
@@ -618,11 +702,62 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         canvasRef.current.style.transform = '';
       }
     },
+    // Backdrop's "baseline" is identity (drawn in world coords), so the CSS
+    // transform is just the current d3-zoom transform — adjusted for the
+    // backdrop canvas's origin in viewBox coords (dataBBox.minX/minY).
+    applyBackdropTransform: (transform) => {
+      const el = backdropRef.current;
+      if (!el || !dataBBox) return;
+      const s = transform.k;
+      const tx = transform.x + dataBBox.minX * (s - 1);
+      const ty = transform.y + dataBBox.minY * (s - 1);
+      el.style.transformOrigin = '0 0';
+      el.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
+    },
+    // True if the foreground bitmap no longer covers the visible viewport
+    // with a safety margin, or the scale has changed enough that the
+    // CSS-stretched bitmap is visibly blurry. When this returns false,
+    // skip the settle redraw — the GPU layer is already showing the correct
+    // content and a fresh paint isn't needed yet.
+    foregroundNeedsRedraw: (transform) => {
+      const base = lastDrawnTransformRef.current;
+      if (!base || !extendedViewBox || !effectiveViewBox) return true;
+
+      const s = transform.k / base.k;
+      // Scale change >10% — the CSS-stretched bitmap is too blurry at this
+      // zoom relative to its rendered resolution; refresh for crispness.
+      if (Math.abs(s - 1) > 0.10) return true;
+
+      const [exVbX, exVbY, exVbW, exVbH] = extendedViewBox;
+      const tx = (transform.x - exVbX) - s * (base.x - exVbX);
+      const ty = (transform.y - exVbY) - s * (base.y - exVbY);
+      // ViewBox extent of the foreground bitmap after the GPU CSS transform.
+      const bitmapLeft = exVbX + tx;
+      const bitmapTop = exVbY + ty;
+      const bitmapRight = exVbX + exVbW * s + tx;
+      const bitmapBottom = exVbY + exVbH * s + ty;
+
+      const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+      // Require a quarter-viewport safety strip between visible edges and
+      // bitmap edges — gives some pan headroom before the next redraw.
+      const safetyX = vbW * 0.25;
+      const safetyY = vbH * 0.25;
+
+      return (
+        vbX < bitmapLeft + safetyX ||
+        vbX + vbW > bitmapRight - safetyX ||
+        vbY < bitmapTop + safetyY ||
+        vbY + vbH > bitmapBottom - safetyY
+      );
+    },
     findDotAtPosition: (mouseX, mouseY) => {
-      if (!useCanvas || !canvasRef.current?._spatialIndex) return null;
-      return findDotAtPosition(mouseX, mouseY, canvasRef.current._spatialIndex);
+      if (!useCanvas) return null;
+      const index = canvasRef.current?._spatialIndex;
+      const transform = canvasRef.current?._cssTransform;
+      if (!index || !transform) return null;
+      return findDotAtPosition(mouseX, mouseY, transform, index);
     }
-  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, extendedViewBox]);
+  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, extendedViewBox, dataBBox]);
 
 
   useEffect(() => {
@@ -639,6 +774,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     enabled: useCanvas,
     isZooming,
     getSpatialIndex: () => canvasRef.current?._spatialIndex,
+    getTransform: () => canvasRef.current?._cssTransform,
     onHover,
     onLeave,
     onClick,
@@ -659,23 +795,47 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     const vb = extendedViewBox || [0, 0, 1000, 1000];
 
     return (
-      <foreignObject x={vb[0]} y={vb[1]} width={vb[2]} height={vb[3]}>
-        <canvas
-          ref={canvasRef}
-          {...canvasInteractionHandlers}
-          style={{
-            width: '100%',
-            height: '100%',
-            display: 'block',
-            // Keep the canvas permanently on its own compositor layer so that
-            // toggling `style.transform` between empty and a value during
-            // GPU-pan/zoom doesn't trigger a layer promotion/demotion, which
-            // can shift the canvas by 1–2 px on settle.
-            willChange: 'transform',
-            pointerEvents: useCanvas ? 'auto' : 'none' // Enable interactions for canvas mode
-          }}
-        />
-      </foreignObject>
+      <>
+        {/* Backdrop: low-res, full-dataset, drawn behind the main canvas.
+            Fills the edges when GPU-pan crosses the main canvas's margin.
+            Rendered first so it sits behind in SVG paint order. */}
+        {dataBBox && (
+          <foreignObject
+            x={dataBBox.minX}
+            y={dataBBox.minY}
+            width={dataBBox.width}
+            height={dataBBox.height}
+          >
+            <canvas
+              ref={backdropRef}
+              style={{
+                width: '100%',
+                height: '100%',
+                display: 'block',
+                willChange: 'transform',
+                pointerEvents: 'none',
+              }}
+            />
+          </foreignObject>
+        )}
+        <foreignObject x={vb[0]} y={vb[1]} width={vb[2]} height={vb[3]}>
+          <canvas
+            ref={canvasRef}
+            {...canvasInteractionHandlers}
+            style={{
+              width: '100%',
+              height: '100%',
+              display: 'block',
+              // Keep the canvas permanently on its own compositor layer so that
+              // toggling `style.transform` between empty and a value during
+              // GPU-pan/zoom doesn't trigger a layer promotion/demotion, which
+              // can shift the canvas by 1–2 px on settle.
+              willChange: 'transform',
+              pointerEvents: useCanvas ? 'auto' : 'none' // Enable interactions for canvas mode
+            }}
+          />
+        </foreignObject>
+      </>
     );
   }
 

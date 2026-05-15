@@ -272,6 +272,12 @@ const DotVisualization = forwardRef((props, ref) => {
     if (interactionIdleTimerRef.current) {
       clearTimeout(interactionIdleTimerRef.current);
     }
+    // ~2 frames. Short enough that the settle fires almost immediately when
+    // the user stops, so the bitmap is always near-current and the GPU layer
+    // only ever shows a small CSS delta. Long enough that natural inter-event
+    // gaps (~16 ms on trackpad/drag, faster than this) don't trip a settle
+    // mid-burst. No bifurcation for zoom vs pan — same window works for both.
+    const SETTLE_IDLE_MS = 32;
     interactionIdleTimerRef.current = setTimeout(() => {
       interactionActiveRef.current = false;
       interactionIdleTimerRef.current = null;
@@ -281,14 +287,23 @@ const DotVisualization = forwardRef((props, ref) => {
       if (gpuPanZoomRef.current && coloredDotsRef.current) {
         const t = zoomManager.current?.getCurrentTransform();
         if (t) {
-          if (liveTransitionDataRef.current) {
-            coloredDotsRef.current.renderCanvasWithData(liveTransitionDataRef.current, t);
-          } else {
-            coloredDotsRef.current.renderCanvasWithTransform(t);
+          coloredDotsRef.current.applyBackdropTransform?.(t);
+          // Skip the foreground redraw when the existing bitmap still covers
+          // the visible viewport and the scale hasn't changed much. Small pans
+          // at any zoom level stay within the over-rendered margin, so they
+          // don't need fresh content — the GPU layer already shows the right
+          // pixels and a redraw would just block input for ~30 ms.
+          const needsRedraw = coloredDotsRef.current.foregroundNeedsRedraw?.(t);
+          if (needsRedraw !== false) {
+            if (liveTransitionDataRef.current) {
+              coloredDotsRef.current.renderCanvasWithData(liveTransitionDataRef.current, t);
+            } else {
+              coloredDotsRef.current.renderCanvasWithTransform(t);
+            }
           }
         }
       }
-    }, 120);
+    }, SETTLE_IDLE_MS);
   }, []);
 
 
@@ -477,10 +492,17 @@ const DotVisualization = forwardRef((props, ref) => {
     const canvasRenderer = (transform) => {
       if (!coloredDotsRef.current) return;
 
+      // Backdrop layer (full-dataset low-res) stays glued to the current d3
+      // transform on every event in GPU mode, so when the foreground bitmap's
+      // margin is exhausted the user sees the backdrop fill the edge.
+      if (gpuPanZoomRef.current) {
+        coloredDotsRef.current.applyBackdropTransform?.(transform);
+      }
+
       // GPU path: during an active gesture (or rapid wheel ticks), shift/scale
       // the existing bitmap via CSS instead of redrawing. The compositor
       // handles it on the GPU, so per-frame cost is independent of dot count.
-      // The settle redraw fires from markInteractionActive's 120ms idle timer.
+      // The settle redraw fires from markInteractionActive's idle timer.
       if (gpuPanZoomRef.current && interactionActiveRef.current) {
         if (coloredDotsRef.current.applyGpuTransform(transform)) return;
       }

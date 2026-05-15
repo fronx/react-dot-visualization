@@ -1,65 +1,86 @@
 /**
- * Canvas interaction utilities for efficient mouse-to-dot collision detection
+ * Canvas interaction utilities for efficient mouse-to-dot collision detection.
+ *
+ * The spatial index lives in DATA-SPACE coordinates (the same frame the
+ * caller provides via `item.x` / `item.y`), so it is invariant under any
+ * camera transform — pan, zoom, and viewBox changes do not invalidate it,
+ * only data changes do. At query time the mouse position (CSS pixels)
+ * runs through the inverse zoom transform once to land in the same frame
+ * as the index.
  */
 import { useRef } from 'react';
 import { buildSpatialGrid, queryCell } from './spatialIndex.js';
 
 /**
- * Build a spatial hash grid for fast collision detection
- * @param {Array} data - Array of dot objects with x, y coordinates
- * @param {Function} getSizeFunc - Function to get dot size: (item) => size
- * @param {Object} transform - Current zoom transform {k, x, y}
- * @param {number} cellSize - Grid cell size in pixels (default: 20)
- * @returns {Object} Spatial index with grid and metadata
+ * Build a data-space spatial hash grid for hover hit-testing.
+ *
+ * @param {Array} data - Items with `x`/`y` in data-space coordinates.
+ * @param {Function} getSizeFunc - `(item, index) => radius` in data-space units.
+ * @param {Object} [options]
+ * @param {number} [options.cellSize] - Cell size in data-space units.
+ *   Defaults to 4 × mean dot radius — keeps per-cell occupancy bounded
+ *   when callers (like fingertip) scale dot radius as ~1/√N. Override
+ *   when dot radii vary by more than ~10× across the dataset.
+ * @returns {{ grid: Map, cellSize: number }} Spatial index.
  */
-export const buildSpatialIndex = (data, getSizeFunc, transform, cellSize = 20) => {
-  const entries = data.map((item, index) => {
-    const size = getSizeFunc(item, index);
-    const radius = size;
-
-    // Transform to screen coordinates (same as rendering)
-    const screenX = (item.x * transform.k) + transform.x;
-    const screenY = (item.y * transform.k) + transform.y;
-    const screenRadius = radius * transform.k;
-
-    return {
-      item,
-      screenX,
-      screenY,
-      screenRadius
-    };
-  });
+export const buildSpatialIndex = (data, getSizeFunc, options = {}) => {
+  const entries = new Array(data.length);
+  let radiusSum = 0;
+  let radiusCount = 0;
+  for (let i = 0; i < data.length; i++) {
+    const item = data[i];
+    const radius = getSizeFunc(item, i);
+    entries[i] = { item, dataX: item.x, dataY: item.y, dataRadius: radius };
+    if (Number.isFinite(radius)) {
+      radiusSum += radius;
+      radiusCount++;
+    }
+  }
+  const meanRadius = radiusCount > 0 ? radiusSum / radiusCount : 1;
+  const cellSize = options.cellSize ?? Math.max(1e-6, 4 * meanRadius);
 
   return buildSpatialGrid(entries, {
     cellSize,
-    getBounds: (entry) => ({
-      minX: entry.screenX - entry.screenRadius,
-      maxX: entry.screenX + entry.screenRadius,
-      minY: entry.screenY - entry.screenRadius,
-      maxY: entry.screenY + entry.screenRadius
-    })
+    // Index at the sensitivity zone (2× radius), not the body. A dot whose
+    // hover zone reaches into an adjacent cell is then still returned from
+    // that cell's `queryCell` — closing the screen-space-era bug where the
+    // index was scoped to body bounds while hits required 2×.
+    getBounds: (entry) => {
+      const reach = entry.dataRadius * 2;
+      return {
+        minX: entry.dataX - reach,
+        maxX: entry.dataX + reach,
+        minY: entry.dataY - reach,
+        maxY: entry.dataY + reach,
+      };
+    },
   });
 };
 
 /**
- * Find dot at mouse position using spatial index
- * @param {number} mouseX - Mouse X coordinate in canvas pixels
- * @param {number} mouseY - Mouse Y coordinate in canvas pixels
- * @param {Object} spatialIndex - Spatial index from buildSpatialIndex
- * @returns {Object|null} Hit dot item or null
+ * Find the dot under a mouse position.
+ *
+ * @param {number} mouseX - CSS pixels relative to the canvas.
+ * @param {number} mouseY - CSS pixels relative to the canvas.
+ * @param {{ k: number, x: number, y: number }} transform - The CSS-pixel-space
+ *   zoom transform (the same one used to draw the canvas content). Used to
+ *   invert the mouse position into data-space.
+ * @param {Object} spatialIndex - From `buildSpatialIndex`.
+ * @returns {Object|null} The hit `item`, or null.
  */
-export const findDotAtPosition = (mouseX, mouseY, spatialIndex) => {
-  if (!spatialIndex) return null;
-  const candidates = queryCell(spatialIndex, mouseX, mouseY);
+export const findDotAtPosition = (mouseX, mouseY, transform, spatialIndex) => {
+  if (!spatialIndex || !transform) return null;
+  const dataX = (mouseX - transform.x) / transform.k;
+  const dataY = (mouseY - transform.y) / transform.k;
+  const candidates = queryCell(spatialIndex, dataX, dataY);
 
-  // Find the closest dot within 2x the dot radius (sensitivity zone)
   let hitDot = null;
   let minDistanceSquared = Infinity;
   for (const candidate of candidates) {
-    const dx = mouseX - candidate.screenX;
-    const dy = mouseY - candidate.screenY;
+    const dx = dataX - candidate.dataX;
+    const dy = dataY - candidate.dataY;
     const distanceSquared = dx * dx + dy * dy;
-    const sensitivityRadius = candidate.screenRadius * 2;
+    const sensitivityRadius = candidate.dataRadius * 2;
     const sensitivityRadiusSquared = sensitivityRadius * sensitivityRadius;
 
     if (distanceSquared <= sensitivityRadiusSquared && distanceSquared < minDistanceSquared) {
@@ -72,11 +93,16 @@ export const findDotAtPosition = (mouseX, mouseY, spatialIndex) => {
 };
 
 /**
- * React hook for canvas mouse interactions
+ * React hook for canvas mouse interactions.
+ *
+ * `getTransform` returns the CSS-pixel-space zoom transform — the same
+ * frame `findDotAtPosition` inverts to find the data-space mouse point.
+ *
  * @param {Object} config - Configuration object
  * @param {boolean} config.enabled - Whether interactions are enabled
  * @param {boolean} config.isZooming - Whether currently zooming (blocks interactions)
  * @param {Function} config.getSpatialIndex - Function to get current spatial index
+ * @param {Function} config.getTransform - Function to get current CSS-pixel transform
  * @param {Function} config.onHover - Hover callback
  * @param {Function} config.onLeave - Leave callback
  * @param {Function} config.onClick - Click callback
@@ -93,6 +119,7 @@ export const useCanvasInteractions = (config) => {
     enabled = false,
     isZooming = false,
     getSpatialIndex,
+    getTransform,
     onHover,
     onLeave,
     onClick,
@@ -127,9 +154,10 @@ export const useCanvasInteractions = (config) => {
     }
 
     const spatialIndex = getSpatialIndex?.();
-    if (!spatialIndex) {
+    const transform = getTransform?.();
+    if (!spatialIndex || !transform) {
       if (debug) {
-        console.log('🔍 getMousePositionAndHit: no spatialIndex available');
+        console.log('🔍 getMousePositionAndHit: missing spatialIndex or transform');
       }
       return { cssX: null, cssY: null, hitDot: null };
     }
@@ -138,7 +166,7 @@ export const useCanvasInteractions = (config) => {
     const rect = canvas.getBoundingClientRect();
     const cssX = event.clientX - rect.left;
     const cssY = event.clientY - rect.top;
-    const hitDot = findDotAtPosition(cssX, cssY, spatialIndex);
+    const hitDot = findDotAtPosition(cssX, cssY, transform, spatialIndex);
 
     return { cssX, cssY, hitDot };
   };
