@@ -287,7 +287,6 @@ const DotVisualization = forwardRef((props, ref) => {
       if (gpuPanZoomRef.current && coloredDotsRef.current) {
         const t = zoomManager.current?.getCurrentTransform();
         if (t) {
-          coloredDotsRef.current.applyBackdropTransform?.(t);
           // Skip the foreground redraw when the existing bitmap still covers
           // the visible viewport and the scale hasn't changed much. Small pans
           // at any zoom level stay within the over-rendered margin, so they
@@ -301,6 +300,10 @@ const DotVisualization = forwardRef((props, ref) => {
               coloredDotsRef.current.renderCanvasWithTransform(t);
             }
           }
+          // Sync backdrop *after* any foreground redraw so its coverage
+          // check uses the fresh baseline. Typically hides the backdrop
+          // post-settle since the foreground now covers the viewport.
+          coloredDotsRef.current.syncBackdrop?.(t);
         }
       }
     }, SETTLE_IDLE_MS);
@@ -348,6 +351,13 @@ const DotVisualization = forwardRef((props, ref) => {
   const dotId = useCallback((layer, item) => {
     return `dot-${layer}-${item.id}`;
   }, []);
+
+  // Stable getter so children that use this in an effect dep list don't
+  // re-run on every parent render (zoomManager is a mutable ref).
+  const getZoomTransform = useCallback(
+    () => zoomManager.current?.getCurrentTransform() || d3.zoomIdentity,
+    []
+  );
 
   // Auto-generate IDs if missing
   const ensureIds = useCallback((data) => {
@@ -492,11 +502,13 @@ const DotVisualization = forwardRef((props, ref) => {
     const canvasRenderer = (transform) => {
       if (!coloredDotsRef.current) return;
 
-      // Backdrop layer (full-dataset low-res) stays glued to the current d3
-      // transform on every event in GPU mode, so when the foreground bitmap's
-      // margin is exhausted the user sees the backdrop fill the edge.
+      // Backdrop layer (full-dataset low-res) tracks the d3 transform on
+      // every event in GPU mode and shows itself only when the CSS-shifted
+      // foreground bitmap no longer covers the viewport. Hidden otherwise
+      // so its low-res dots don't bleed through the foreground's semi-
+      // transparent dots.
       if (gpuPanZoomRef.current) {
-        coloredDotsRef.current.applyBackdropTransform?.(transform);
+        coloredDotsRef.current.syncBackdrop?.(transform);
       }
 
       // GPU path: during an active gesture (or rapid wheel ticks), shift/scale
@@ -906,8 +918,9 @@ const DotVisualization = forwardRef((props, ref) => {
             customDotRenderer={customDotRenderer}
             visibleDotCount={visibleDotCount}
             useCanvas={useCanvas}
+            gpuPanZoom={gpuPanZoom}
             renderMargin={renderMargin}
-            getZoomTransform={() => zoomManager.current?.getCurrentTransform() || d3.zoomIdentity}
+            getZoomTransform={getZoomTransform}
             debug={debug}
             effectiveViewBox={effectiveViewBox}
             containerDimensions={containerDimensions}

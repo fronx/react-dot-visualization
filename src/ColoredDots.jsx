@@ -12,6 +12,31 @@ import { calculateAdaptiveRingRadius } from './pulseRingUtils.js';
 
 const EMPTY_RADIUS_OVERRIDES = new Map();
 
+// Shared canvas-dot painter. Used by both the high-res foreground (each
+// render frame, per visible dot) and the low-res backdrop bitmap, so stroke
+// width logic — including the `strokeWidthFraction` proportional override —
+// lives in exactly one place. Caller is responsible for any per-dot context
+// setup that isn't a fill/stroke (e.g. globalCompositeOperation for pulse
+// rings); this only paints the dot's body and outline.
+function drawDotOnContext(ctx, x, y, radius, opts) {
+  const { fill, stroke, strokeWidth, strokeWidthFraction, opacity, strokeDasharray } = opts;
+  ctx.globalAlpha = opacity;
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, 2 * Math.PI);
+  ctx.fill();
+  const effectiveStrokeWidth = strokeWidthFraction != null
+    ? radius * strokeWidthFraction
+    : strokeWidth;
+  if (stroke && effectiveStrokeWidth > 0) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = effectiveStrokeWidth;
+    if (strokeDasharray) ctx.setLineDash(strokeDasharray);
+    ctx.stroke();
+    if (strokeDasharray) ctx.setLineDash([]);
+  }
+}
+
 const ColoredDots = React.memo(forwardRef((props, ref) => {
   const {
     data = [],
@@ -32,6 +57,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     hoverImageProvider,
     visibleDotCount = null,
     useCanvas = false,
+    gpuPanZoom = false,
     renderMargin = 0,
     getZoomTransform = null,
     effectiveViewBox = null,
@@ -359,25 +385,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
           canvasContext.fill();
         }
 
-        // Draw main dot
-        canvasContext.globalAlpha = renderStyles.opacity;
-        canvasContext.fillStyle = renderStyles.fill;
-        canvasContext.strokeStyle = renderStyles.stroke;
-        const effectiveStrokeWidth = strokeWidthFraction != null ? radius * strokeWidthFraction : renderStyles.strokeWidth;
-        canvasContext.lineWidth = effectiveStrokeWidth;
-
-        canvasContext.beginPath();
-        canvasContext.arc(item.x, item.y, radius, 0, 2 * Math.PI);
-        canvasContext.fill();
-        if (effectiveStrokeWidth > 0) {
-          if (renderStyles.strokeDasharray) {
-            canvasContext.setLineDash(renderStyles.strokeDasharray);
-          }
-          canvasContext.stroke();
-          if (renderStyles.strokeDasharray) {
-            canvasContext.setLineDash([]);
-          }
-        }
+        drawDotOnContext(canvasContext, item.x, item.y, radius, {
+          fill: renderStyles.fill,
+          stroke: renderStyles.stroke,
+          strokeWidth: renderStyles.strokeWidth,
+          strokeWidthFraction,
+          opacity: renderStyles.opacity,
+          strokeDasharray: renderStyles.strokeDasharray,
+        });
       };
 
       // Viewport culling: skip dots outside the canvas's covered area.
@@ -470,9 +485,21 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     const MAX_MULT = 2;
     const effectiveDpr = dpr * MAX_MULT;
 
-    // Set canvas internal size 
-    canvas.width = width * effectiveDpr;
-    canvas.height = height * effectiveDpr;
+    // Set canvas internal size only when it actually changed. Writing to
+    // canvas.width — even with the same value — reallocates the backing
+    // store and wipes context state; with renderMargin=1.0 that's a
+    // hundreds-of-MB allocation per redraw. The setTransform + clearRect
+    // below handle state reset and pixel wipe without the alloc cost.
+    const targetW = Math.floor(width * effectiveDpr);
+    const targetH = Math.floor(height * effectiveDpr);
+    if (canvas.width !== targetW) canvas.width = targetW;
+    if (canvas.height !== targetH) canvas.height = targetH;
+
+    // Previously, the canvas.width assignment above always reset the context
+    // transform to identity. Now that we skip the assignment when dimensions
+    // match, do the reset explicitly so subsequent setTransform calls start
+    // from a known state.
+    context.setTransform(1, 0, 0, 1, 0, 0);
 
     // Set up coordinate system to cover the extended viewBox so dots in the
     // GPU-pan margin land inside the canvas bitmap, not clipped off the edge.
@@ -520,15 +547,14 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     }
   }, [extendedViewBox, useCanvas]);
 
-  // Backdrop: render the full dataset once at low resolution, sized to the
-  // data bounding box. Updates only when data identity/length changes, so
-  // it's basically free during pan/zoom. The CSS transform applied during
-  // interaction mirrors the d3-zoom transform exactly (computed in the ref
-  // method below), keeping it pixel-aligned with the foreground.
+  // Backdrop: compute the data bounding box. Setting dataBBox state is what
+  // mounts the <foreignObject> + <canvas> below — the drawing effect can't
+  // run until that canvas exists, so this effect *must not* gate on the ref.
+  // Skip entirely outside GPU pan/zoom mode: the backdrop is the fallback
+  // that fills the screen edges when the GPU-shifted foreground bitmap is
+  // exhausted, which only happens with the CSS-transform pan/zoom path.
   useEffect(() => {
-    if (!useCanvas || !data || data.length === 0 || !backdropRef.current) {
-      return;
-    }
+    if (!useCanvas || !gpuPanZoom || !data || data.length === 0) return;
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     let maxRadius = 0;
@@ -539,26 +565,58 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       if (d.x > maxX) maxX = d.x;
       if (d.y < minY) minY = d.y;
       if (d.y > maxY) maxY = d.y;
-      const r = (d.size || defaultSize) / 2;
+      // `size` is the dot radius (matches getSize / SVG `r` in the foreground).
+      const r = d.size || defaultSize;
       if (r > maxRadius) maxRadius = r;
     }
     if (!isFinite(minX)) return;
 
     // Expand the bbox by the largest dot radius so edges aren't clipped.
     const pad = maxRadius * 2;
-    const bbox = {
+    const next = {
       minX: minX - pad,
       minY: minY - pad,
       width: Math.max(1, maxX - minX + 2 * pad),
       height: Math.max(1, maxY - minY + 2 * pad),
     };
 
-    // 2048 max dim gives 4× the spatial resolution of 1024 — fewer
-    // sub-pixel issues at zoom-out, at the cost of ~16 MB instead of 4 MB.
-    const MAX_DIM = 2048;
+    // Skip the state update when nothing changed so we don't churn the
+    // imperative-handle deps and force the draw effect to re-run.
+    setDataBBox(prev =>
+      prev && prev.minX === next.minX && prev.minY === next.minY
+        && prev.width === next.width && prev.height === next.height
+        ? prev : next
+    );
+  }, [useCanvas, gpuPanZoom, data, defaultSize]);
+
+  // Backdrop: draw the full dataset once at low resolution. Runs after the
+  // canvas is mounted (gated on `dataBBox` to mount it, and on the ref to
+  // confirm the mount completed). Updates only when data/style or bbox
+  // change, so it's basically free during pan/zoom. The backdrop's visibility
+  // and CSS transform are managed by syncBackdrop on the imperative handle
+  // (called from canvasRenderer on every gesture event) — this effect just
+  // produces the bitmap; it does not position or reveal it.
+  useEffect(() => {
+    if (!useCanvas || !gpuPanZoom || !data || data.length === 0 || !dataBBox || !backdropRef.current) {
+      return;
+    }
+
+    const bbox = dataBBox;
+
+    // Memory budget for the backdrop bitmap. 64 MB ≈ 16 Mpx ≈ 4096² square,
+    // or wider/narrower bitmaps with the same total pixels — covers e.g.
+    // 5792×2896 for a 2:1 aspect. Independently chosen from the foreground's
+    // budget so apps can rely on it regardless of data shape.
+    const BACKDROP_BYTES_BUDGET = 64 * 1024 * 1024;
+    const MAX_PIXELS = BACKDROP_BYTES_BUDGET / 4;
+    const MAX_DIM_CAP = 8192;
     const aspect = bbox.width / bbox.height;
-    const bitW = aspect >= 1 ? MAX_DIM : Math.max(1, Math.round(MAX_DIM * aspect));
-    const bitH = aspect >= 1 ? Math.max(1, Math.round(MAX_DIM / aspect)) : MAX_DIM;
+    let bitH = Math.sqrt(MAX_PIXELS / aspect);
+    let bitW = bitH * aspect;
+    if (bitW > MAX_DIM_CAP) { bitW = MAX_DIM_CAP; bitH = bitW / aspect; }
+    if (bitH > MAX_DIM_CAP) { bitH = MAX_DIM_CAP; bitW = bitH * aspect; }
+    bitW = Math.max(1, Math.floor(bitW));
+    bitH = Math.max(1, Math.floor(bitH));
 
     const canvas = backdropRef.current;
     canvas.width = bitW;
@@ -577,39 +635,25 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     const MIN_BITMAP_RADIUS = 1.5;
     const minWorldRadius = MIN_BITMAP_RADIUS / Math.min(scaleX, scaleY);
 
-    // Simplified draw — no pulse rings, hover, or custom renderer. This is
-    // the "always visible at the edges" backdrop, not the primary surface.
+    // Simplified draw — no pulse rings, hover, custom renderer, or per-dot
+    // dotStyles. Stroke width is driven by the same logic as the foreground
+    // (see drawDotOnContext) so the two layers look consistent at any zoom.
     for (let i = 0; i < data.length; i++) {
       const d = data[i];
       if (typeof d.x !== 'number' || typeof d.y !== 'number') continue;
-      const r = Math.max((d.size || defaultSize) / 2, minWorldRadius);
-      ctx.fillStyle = d.color || defaultColor || '#666';
-      ctx.globalAlpha = defaultOpacity;
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, r, 0, 2 * Math.PI);
-      ctx.fill();
-    }
-
-    setDataBBox(bbox);
-
-    // Apply the current zoom transform to the backdrop NOW so it lands at
-    // the right place on first paint. Without this, the backdrop's CSS
-    // transform stays empty until the first user gesture — which means at
-    // mount, the backdrop sits at its raw foreignObject coords (in world
-    // units, often way outside the SVG viewBox) and is invisible.
-    if (typeof getZoomTransform === 'function') {
-      const transform = getZoomTransform();
-      if (transform && canvas) {
-        const s = transform.k;
-        const tx = transform.x + bbox.minX * (s - 1);
-        const ty = transform.y + bbox.minY * (s - 1);
-        canvas.style.transformOrigin = '0 0';
-        canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`;
-      }
+      // `size` is the dot radius (matches getSize / SVG `r` in the foreground).
+      const r = Math.max(d.size || defaultSize, minWorldRadius);
+      drawDotOnContext(ctx, d.x, d.y, r, {
+        fill: d.color || defaultColor || '#666',
+        stroke,
+        strokeWidth,
+        strokeWidthFraction,
+        opacity: defaultOpacity,
+      });
     }
 
     debugLog('Backdrop rendered:', { dots: data.length, bbox, bitmap: `${bitW}x${bitH}` });
-  }, [useCanvas, data, defaultSize, defaultColor, defaultOpacity, debugLog, getZoomTransform]);
+  }, [useCanvas, gpuPanZoom, data, dataBBox, defaultSize, defaultColor, defaultOpacity, stroke, strokeWidth, strokeWidthFraction, debugLog]);
 
   // Canvas rendering for data/style changes (NOT zoom, NOT hover)
   // Note: hoveredDotId, hoverSizeMultiplier, hoverOpacity intentionally excluded from deps
@@ -702,12 +746,50 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
         canvasRef.current.style.transform = '';
       }
     },
-    // Backdrop's "baseline" is identity (drawn in world coords), so the CSS
-    // transform is just the current d3-zoom transform — adjusted for the
-    // backdrop canvas's origin in viewBox coords (dataBBox.minX/minY).
-    applyBackdropTransform: (transform) => {
+    // Backdrop sync: hide the backdrop whenever the foreground bitmap (after
+    // its current CSS transform) fully covers the visible viewport. Showing
+    // both layers stacked makes the low-res backdrop dots bleed through the
+    // semi-transparent foreground dots — perceived as blur, especially with
+    // dense data. The backdrop is only useful at the edges/gaps where the
+    // foreground bitmap doesn't reach.
+    //
+    // When visible, the backdrop's CSS transform is just the d3-zoom
+    // transform, offset by the bitmap's origin in viewBox coords
+    // (dataBBox.minX/minY) — it was drawn in world coords with identity
+    // baseline, so no per-gesture redraw is needed.
+    syncBackdrop: (transform) => {
       const el = backdropRef.current;
       if (!el || !dataBBox) return;
+
+      // Default to hidden when we can't reason about coverage yet (e.g. the
+      // foreground hasn't drawn). Better to briefly not show the backdrop
+      // than to flash an unpositioned bitmap.
+      let covers = true;
+      const base = lastDrawnTransformRef.current;
+      if (base && extendedViewBox && effectiveViewBox) {
+        const s = transform.k / base.k;
+        const [exVbX, exVbY, exVbW, exVbH] = extendedViewBox;
+        const tx = (transform.x - exVbX) - s * (base.x - exVbX);
+        const ty = (transform.y - exVbY) - s * (base.y - exVbY);
+        const bitmapLeft = exVbX + tx;
+        const bitmapTop = exVbY + ty;
+        const bitmapRight = exVbX + exVbW * s + tx;
+        const bitmapBottom = exVbY + exVbH * s + ty;
+        const [vbX, vbY, vbW, vbH] = effectiveViewBox;
+        covers = (
+          vbX >= bitmapLeft &&
+          vbX + vbW <= bitmapRight &&
+          vbY >= bitmapTop &&
+          vbY + vbH <= bitmapBottom
+        );
+      }
+
+      if (covers) {
+        el.style.display = 'none';
+        return;
+      }
+
+      el.style.display = 'block';
       const s = transform.k;
       const tx = transform.x + dataBBox.minX * (s - 1);
       const ty = transform.y + dataBBox.minY * (s - 1);
@@ -757,7 +839,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
       if (!index || !transform) return null;
       return findDotAtPosition(mouseX, mouseY, transform, index);
     }
-  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, extendedViewBox, dataBBox]);
+  }), [useCanvas, setupCanvas, renderDots, findDotAtPosition, extendedViewBox, effectiveViewBox, dataBBox]);
 
 
   useEffect(() => {
@@ -797,9 +879,12 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
     return (
       <>
         {/* Backdrop: low-res, full-dataset, drawn behind the main canvas.
-            Fills the edges when GPU-pan crosses the main canvas's margin.
-            Rendered first so it sits behind in SVG paint order. */}
-        {dataBBox && (
+            Only relevant in GPU pan/zoom mode — outside that mode the
+            foreground always covers the visible viewport exactly, so the
+            backdrop would only add memory + render cost. Starts hidden;
+            syncBackdrop on the imperative handle shows it when the
+            CSS-shifted foreground bitmap no longer covers the viewport. */}
+        {gpuPanZoom && dataBBox && (
           <foreignObject
             x={dataBBox.minX}
             y={dataBBox.minY}
@@ -811,7 +896,7 @@ const ColoredDots = React.memo(forwardRef((props, ref) => {
               style={{
                 width: '100%',
                 height: '100%',
-                display: 'block',
+                display: 'none',
                 willChange: 'transform',
                 pointerEvents: 'none',
               }}
