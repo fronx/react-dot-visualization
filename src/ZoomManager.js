@@ -116,6 +116,11 @@ export class ZoomManager {
     // Convert screen pixels to viewBox units
     const rect = this.zoomRef.current.getBoundingClientRect();
     const vb = this.viewBox || [0, 0, 100, 100];
+    // Skip transform math when measurements are degenerate (container hidden / mid-resize);
+    // preventDefault above already stops the page from scrolling.
+    if (rect.width <= 0 || rect.height <= 0 || !Number.isFinite(vb[2]) || !Number.isFinite(vb[3])) {
+      return;
+    }
     const scaleX = vb[2] / rect.width;
     const scaleY = vb[3] / rect.height;
 
