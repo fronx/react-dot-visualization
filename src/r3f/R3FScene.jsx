@@ -196,13 +196,19 @@ function CameraInitializer({ data, initialized, initialTransform, onInit }) {
     initialized.current = true;
 
     if (initialTransform) {
-      // Restore from a saved D3 zoom transform (from Canvas renderer or previous session).
-      // Convert pixel-space D3 transform {x, y, k} to Three.js camera position.
+      // Restore from a saved D3 zoom transform produced by Canvas's
+      // ZoomManager or computed externally against the same convention
+      // (viewBox = [0, 0, 100*aspect, 100], where 100 matches
+      // DotVisualization's baseHeight). The Y inversion that turns SVG
+      // down-positive into Three.js up-positive is baked into the
+      // (y - vbH/2) sign — no extra negation here.
       const { x, y, k } = initialTransform;
       const { width: W, height: H } = size;
-      const cx = (W / 2 - x) / k;
-      const cy_world = -((H / 2 - y) / k); // negate: data Y is SVG (down+), world Y is up+
-      const cz = H / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
+      const vbH = 100;
+      const vbW = (W / H) * vbH;
+      const cx = (vbW / 2 - x) / k;
+      const cy_world = (y - vbH / 2) / k;
+      const cz = vbH / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
       camera.position.set(cx, cy_world, Math.max(0.5, Math.min(5000, cz)));
     } else {
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;

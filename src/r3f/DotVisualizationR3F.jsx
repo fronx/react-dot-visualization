@@ -17,6 +17,19 @@ import { boundsForData, computeFitTransformToVisible } from '../utils.js';
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const EMPTY_RADIUS_OVERRIDES = new Map();
 
+// Match DotVisualization's viewBox convention: height = 100, width = 100 *
+// (W/H). Data positions, initialTransform, and the {x, y, k} transforms
+// exchanged through the imperative handle all live in this space, so R3F
+// and Canvas can be used interchangeably and transformToCSSPixels works
+// the same way against either.
+const R3F_VIEWBOX_HEIGHT = 100;
+const viewBoxForContainer = (rect) => [
+  0,
+  0,
+  R3F_VIEWBOX_HEIGHT * (rect.width / rect.height),
+  R3F_VIEWBOX_HEIGHT,
+];
+
 /**
  * Drop-in replacement for DotVisualization using R3F (WebGL) rendering.
  *
@@ -71,7 +84,23 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     children,
   } = props;
 
-  const [processedData, setProcessedData] = useState([]);
+  // Initialize with the input data (filtered for finite coords) so the very
+  // first paint shows dots at their real positions. Without this seed,
+  // `processedData = []` on render 1 made R3FDots fall through to its
+  // `count = data.length || 1` path and render one identity-matrix instance
+  // at world origin — the "rogue centered dot" symptom.
+  const [processedData, setProcessedData] = useState(() => {
+    if (!data || data.length === 0) return [];
+    const out = [];
+    for (let i = 0; i < data.length; i += 1) {
+      const item = data[i];
+      if (typeof item.x === 'number' && typeof item.y === 'number'
+          && Number.isFinite(item.x) && Number.isFinite(item.y)) {
+        out.push(item.id !== undefined ? item : { ...item, id: i });
+      }
+    }
+    return out;
+  });
   const [hoveredId, setHoveredId] = useState(null);
 
   const decollisionSimRef = useRef(null);
@@ -284,25 +313,30 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     cameraStateRef.current = state;
   }, []);
 
-  // Convert a D3-equivalent {x, y, k} transform to a Three.js camera position.
+  // Convert a viewBox-space D3 transform {x, y, k} to a Three.js camera
+  // position. The transform lives in the same coordinate space Canvas's
+  // ZoomManager uses ([0, 0, 100*aspect, 100]); the camera-world frame
+  // numerically matches viewBox coords with Y negated when data is placed
+  // (`_dummy.position.set(item.x, -item.y, 0)` in R3FDots), so this conversion
+  // is the algebraic inverse of getZoomTransform below.
   const d3ToCamera = useCallback((transform, W, H) => {
     const { x, y, k } = transform;
-    const cx = (W / 2 - x) / k;
-    const cy = -((H / 2 - y) / k);
-    const cz = H / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
+    const vbH = R3F_VIEWBOX_HEIGHT;
+    const vbW = (W / H) * vbH;
+    const cx = (vbW / 2 - x) / k;
+    const cy = (y - vbH / 2) / k;
+    const cz = vbH / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
     return { x: cx, y: cy, z: Math.max(0.5, Math.min(5000, cz)) };
   }, []);
 
-  // Compute D3-equivalent fit transform honoring occlusion. Shares the math
-  // with the Canvas renderer via computeFitTransformToVisible.
+  // Compute the viewBox-space fit transform honoring occlusion. Shares the
+  // math + convention with Canvas's ZoomManager.
   const computeFit = useCallback((dataToUse, margin) => {
     if (!containerRef.current || !dataToUse?.length) return null;
     const rect = containerRef.current.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
     const bounds = boundsForData(dataToUse, defaultSize);
-    // viewBox = [0, 0, W, H] makes sx = sy = 1 so the returned k is in
-    // px-per-world-unit directly (matches R3F's D3 transform convention).
-    const viewBox = [0, 0, rect.width, rect.height];
+    const viewBox = viewBoxForContainer(rect);
     const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
     return computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
   }, [defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom]);
@@ -326,17 +360,24 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       const rect = containerRef.current.getBoundingClientRect();
       const W = rect.width, H = rect.height;
 
-      // Cap k at maxScale; re-center bounds in visible region at the capped k.
+      // Cap k at maxScale; re-center bounds in the visible (occlusion-aware)
+      // region at the capped k. Done in viewBox-space — mirrors the
+      // Canvas ZoomManager's matching block so behavior stays in lockstep.
       let { k, x, y } = fit;
       if (k > maxScale) {
         k = maxScale;
         const bounds = boundsForData(dataToUse, defaultSize);
         const cx = (bounds.minX + bounds.maxX) / 2;
         const cy = (bounds.minY + bounds.maxY) / 2;
+        const [vbX, vbY, vbW, vbH] = viewBoxForContainer(rect);
+        const sx = W / vbW;
+        const sy = H / vbH;
         const visWpx = Math.max(1, W - occludeLeft - occludeRight);
         const visHpx = Math.max(1, H - occludeTop - occludeBottom);
-        x = occludeLeft + visWpx / 2 - k * cx;
-        y = occludeTop + visHpx / 2 - k * cy;
+        const visCxVb = vbX + (occludeLeft + visWpx / 2) / sx;
+        const visCyVb = vbY + (occludeTop + visHpx / 2) / sy;
+        x = visCxVb - k * cx;
+        y = visCyVb - k * cy;
       }
 
       const target = d3ToCamera({ x, y, k }, W, H);
@@ -375,12 +416,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       if (!cam || !containerRef.current) return null;
       const { width: W, height: H } = containerRef.current.getBoundingClientRect();
       if (!W || !H) return null;
-      // Convert Three.js camera position to D3-equivalent zoom transform {x, y, k}.
-      // cam.y is world Y (up+), which is the negation of data Y (down+).
-      const k = H / (cam.z * 2 * Math.tan(CAMERA_FOV_RAD / 2));
+      // Inverse of d3ToCamera: return the viewBox-space {x, y, k} that
+      // Canvas's ZoomManager would produce for the same camera position.
+      const vbH = R3F_VIEWBOX_HEIGHT;
+      const vbW = (W / H) * vbH;
+      const k = vbH / (cam.z * 2 * Math.tan(CAMERA_FOV_RAD / 2));
       return {
-        x: W / 2 - cam.x * k,
-        y: H / 2 + cam.y * k,
+        x: vbW / 2 - cam.x * k,
+        y: cam.y * k + vbH / 2,
         k,
       };
     },
