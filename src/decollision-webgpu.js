@@ -1,9 +1,13 @@
 const WORKGROUP_SIZE = 64;
-const PARAM_BYTES = 32;
+const PARAM_BYTES = 48;        // 12 × 4 bytes; matches Params struct in WGSL
+const SCAN_PARAM_BYTES = 16;   // 2 × u32 padded for uniform alignment
 const INITIAL_RADIUS = 10;
 const INITIAL_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const DEFAULT_VELOCITY_DECAY = 0.4; // Matches d3.forceSimulation default
-let shaderSourcePromise = null;
+const GRID_BOUNDS_MARGIN_CELLS = 8; // Inflate data bbox by this many cellSize units
+const MAX_CELLS_PER_SIDE = 1024;
+let mainShaderPromise = null;
+let scanShaderPromise = null;
 
 export class WebGpuDecollisionUnavailableError extends Error {
   constructor(message) {
@@ -23,11 +27,18 @@ export function isWebGpuDecollisionAvailable() {
   return !!getNavigatorWithGpu();
 }
 
-async function getShaderSource() {
-  if (!shaderSourcePromise) {
-    shaderSourcePromise = import('./decollision-webgpu.wgsl?raw').then((mod) => mod.default);
+async function getMainShader() {
+  if (!mainShaderPromise) {
+    mainShaderPromise = import('./decollision-webgpu.wgsl?raw').then((m) => m.default);
   }
-  return shaderSourcePromise;
+  return mainShaderPromise;
+}
+
+async function getScanShader() {
+  if (!scanShaderPromise) {
+    scanShaderPromise = import('./decollision-webgpu-scan.wgsl?raw').then((m) => m.default);
+  }
+  return scanShaderPromise;
 }
 
 let contextPromise = null;
@@ -46,34 +57,71 @@ async function ensureContext() {
       }
 
       const device = await adapter.requestDevice();
-      const shaderSource = await getShaderSource();
-      const shaderModule = device.createShaderModule({ code: shaderSource });
-      const bindGroupLayout = device.createBindGroupLayout({
+      const [mainSource, scanSource] = await Promise.all([getMainShader(), getScanShader()]);
+      const mainShader = device.createShaderModule({ code: mainSource });
+      const scanShader = device.createShaderModule({ code: scanSource });
+
+      // Main bind group: per-particle buffers + grid buffers + Params.
+      // Used by clearBins, countBins, placeParticles, collide, apply.
+      const mainLayout = device.createBindGroupLayout({
         entries: [
           { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
           { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
           { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
           { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
           { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
-        ]
+          { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+          { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+          { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        ],
       });
-      const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+
+      // Scan bind group (independent module). Uses its own group(0) bindings
+      // — the dispatch never binds both this and the main group at the same
+      // time, so the shared bin buffer is safe.
+      const scanLayout = device.createBindGroupLayout({
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+          { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+          { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } },
+        ],
+      });
+
+      const mainPipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [mainLayout] });
+      const scanPipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [scanLayout] });
+
       const pipelines = {
+        clearBins: device.createComputePipeline({
+          layout: mainPipelineLayout,
+          compute: { module: mainShader, entryPoint: 'clearBins' },
+        }),
+        countBins: device.createComputePipeline({
+          layout: mainPipelineLayout,
+          compute: { module: mainShader, entryPoint: 'countBins' },
+        }),
+        prefixSumStep: device.createComputePipeline({
+          layout: scanPipelineLayout,
+          compute: { module: scanShader, entryPoint: 'prefixSumStep' },
+        }),
+        placeParticles: device.createComputePipeline({
+          layout: mainPipelineLayout,
+          compute: { module: mainShader, entryPoint: 'placeParticles' },
+        }),
         collide: device.createComputePipeline({
-          layout: pipelineLayout,
-          compute: { module: shaderModule, entryPoint: 'collide' }
+          layout: mainPipelineLayout,
+          compute: { module: mainShader, entryPoint: 'collide' },
         }),
         apply: device.createComputePipeline({
-          layout: pipelineLayout,
-          compute: { module: shaderModule, entryPoint: 'apply' }
-        })
+          layout: mainPipelineLayout,
+          compute: { module: mainShader, entryPoint: 'apply' },
+        }),
       };
 
       device.lost.then(() => {
         contextPromise = null;
       });
 
-      return { device, bindGroupLayout, pipelines };
+      return { device, mainLayout, scanLayout, pipelines };
     })();
   }
   return contextPromise;
@@ -83,14 +131,13 @@ function createBuffer(device, usage, dataOrSize) {
   if (typeof dataOrSize === 'number') {
     return device.createBuffer({ size: dataOrSize, usage });
   }
-
   const source = dataOrSize instanceof Float32Array
     ? dataOrSize
     : new Float32Array(dataOrSize);
   const buffer = device.createBuffer({
     size: source.byteLength,
     usage,
-    mappedAtCreation: true
+    mappedAtCreation: true,
   });
   new Float32Array(buffer.getMappedRange()).set(source);
   buffer.unmap();
@@ -106,13 +153,58 @@ function buildParamsBuffer() {
 
 function writeParams(target, params) {
   target.u32[0] = params.nNodes >>> 0;
-  target.u32[1] = params.epoch >>> 0;
-  target.u32[2] = 0;
-  target.u32[3] = 0;
-  target.f32[4] = params.strength;
-  target.f32[5] = params.velocityDecay;
-  target.f32[6] = params.jitter;
-  target.f32[7] = 0;
+  target.u32[1] = params.numBins >>> 0;
+  target.u32[2] = params.gridDimX >>> 0;
+  target.u32[3] = params.gridDimY >>> 0;
+  target.f32[4] = params.gridMinX;
+  target.f32[5] = params.gridMinY;
+  target.f32[6] = params.cellSize;
+  target.u32[7] = params.epoch >>> 0;
+  target.f32[8] = params.strength;
+  target.f32[9] = params.velocityDecay;
+  target.f32[10] = params.jitter;
+  target.f32[11] = 0;
+}
+
+// Compute a uniform grid covering the data with margin. cellSize must be
+// ≥ 2 × maxRadius so the 3×3 neighbor scan in `collide` covers every
+// possible collider. We pick cellSize as large as practical (targeting
+// ~3 particles per cell) so numBins stays small and the prefix-sum cheap.
+function computeGridParams(nodes, radii) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  let maxRadius = 0;
+  for (let i = 0; i < nodes.length; i++) {
+    const x = nodes[i].x;
+    const y = nodes[i].y;
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    const r = radii[i];
+    if (r > maxRadius) maxRadius = r;
+  }
+  if (!Number.isFinite(minX)) {
+    minX = -1; minY = -1; maxX = 1; maxY = 1;
+  }
+  if (maxRadius <= 0) maxRadius = 1;
+
+  const minCellSize = 2 * maxRadius;
+  const dataW = Math.max(maxX - minX, minCellSize);
+  const dataH = Math.max(maxY - minY, minCellSize);
+  const targetCellsPerSide = Math.max(1, Math.ceil(Math.sqrt(nodes.length / 3)));
+  const targetCellSize = Math.max(dataW, dataH) / targetCellsPerSide;
+  const cellSize = Math.max(minCellSize, targetCellSize);
+
+  const margin = GRID_BOUNDS_MARGIN_CELLS * cellSize;
+  const gridMinX = minX - margin;
+  const gridMinY = minY - margin;
+  let gridDimX = Math.ceil((dataW + 2 * margin) / cellSize);
+  let gridDimY = Math.ceil((dataH + 2 * margin) / cellSize);
+  gridDimX = Math.max(1, Math.min(gridDimX, MAX_CELLS_PER_SIDE));
+  gridDimY = Math.max(1, Math.min(gridDimY, MAX_CELLS_PER_SIDE));
+  const numBins = gridDimX * gridDimY;
+
+  return { gridMinX, gridMinY, cellSize, gridDimX, gridDimY, numBins };
 }
 
 async function readPositions(stagingBuffer, nodeCount) {
@@ -196,6 +288,17 @@ function getAdaptiveStepsPerTick(nodeCount, publishIntermediate) {
   return 1;
 }
 
+// Number of Hillis-Steele scan iterations needed to fully accumulate
+// inclusive prefixes for an array of length `n`. Padded to an even count
+// so the final result lands back in `binBufferA` (the main pipeline's
+// counter / offset buffer).
+function computeScanIterations(n) {
+  if (n <= 1) return 0;
+  let iters = Math.ceil(Math.log2(n));
+  if (iters % 2 === 1) iters += 1;
+  return iters;
+}
+
 export function startWebGpuDecollisioning({
   nodes,
   radii,
@@ -211,7 +314,7 @@ export function startWebGpuDecollisioning({
   shouldPublishIntermediate,
   onTick,
   onComplete,
-  onError
+  onError,
 }) {
   if (!isWebGpuDecollisionAvailable()) {
     throw new WebGpuDecollisionUnavailableError('WebGPU not available');
@@ -221,7 +324,7 @@ export function startWebGpuDecollisioning({
   let currentPromise = null;
 
   currentPromise = (async () => {
-    const { device, bindGroupLayout, pipelines } = await ensureContext();
+    const { device, mainLayout, scanLayout, pipelines } = await ensureContext();
     const nodeCount = nodes.length;
     if (!nodeCount) {
       onComplete?.(nodes, 0);
@@ -231,45 +334,107 @@ export function startWebGpuDecollisioning({
     initializeNodesLikeD3(nodes);
     const positionsData = createNodePositions(nodes);
     const velocitiesData = createNodeVelocities(nodes);
+    const grid = computeGridParams(nodes, radii);
+    const numBins = grid.numBins;
+    const binArrayLen = numBins + 1; // +1 sentinel so countBins' bin+1 write is in-range
+
     const positionsBuffer = createBuffer(
       device,
       GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      positionsData
+      positionsData,
     );
     const velocitiesBuffer = createBuffer(
       device,
       GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      velocitiesData
+      velocitiesData,
     );
     const radiiBuffer = createBuffer(device, GPUBufferUsage.STORAGE, radii);
     const nextVelocitiesBuffer = createBuffer(
       device,
       GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      positionsData.byteLength
+      positionsData.byteLength,
     );
     const paramsBuffer = createBuffer(
       device,
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      PARAM_BYTES
+      PARAM_BYTES,
     );
     const stagingBuffer = device.createBuffer({
       size: positionsData.byteLength,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
 
-    const bindGroup = device.createBindGroup({
-      layout: bindGroupLayout,
+    // Spatial-hash buffers.
+    //   binBuffer: counts after countBins, offsets after scan, read by collide.
+    //   scanScratch: ping-pong target for the Hillis-Steele scan.
+    //   placeCounter / sortedIndices: phase-3 placement.
+    const binBytes = binArrayLen * 4;
+    const binBuffer = device.createBuffer({
+      size: binBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    const scanScratch = device.createBuffer({
+      size: binBytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    const placeCounterBuffer = device.createBuffer({
+      size: numBins * 4,
+      usage: GPUBufferUsage.STORAGE,
+    });
+    const sortedIndicesBuffer = device.createBuffer({
+      size: nodeCount * 4,
+      usage: GPUBufferUsage.STORAGE,
+    });
+
+    // Pre-write one uniform per scan iteration so the dispatch loop just
+    // rebinds without touching the queue.
+    const scanIterations = computeScanIterations(binArrayLen);
+    const scanParamBuffers = [];
+    for (let s = 0; s < scanIterations; s++) {
+      const buf = device.createBuffer({
+        size: SCAN_PARAM_BYTES,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      device.queue.writeBuffer(buf, 0, new Uint32Array([binArrayLen, 1 << s]).buffer, 0, 8);
+      scanParamBuffers.push(buf);
+    }
+
+    const mainBindGroup = device.createBindGroup({
+      layout: mainLayout,
       entries: [
         { binding: 0, resource: { buffer: positionsBuffer } },
         { binding: 1, resource: { buffer: velocitiesBuffer } },
         { binding: 2, resource: { buffer: radiiBuffer } },
         { binding: 3, resource: { buffer: nextVelocitiesBuffer } },
         { binding: 4, resource: { buffer: paramsBuffer } },
-      ]
+        { binding: 5, resource: { buffer: binBuffer } },
+        { binding: 6, resource: { buffer: placeCounterBuffer } },
+        { binding: 7, resource: { buffer: sortedIndicesBuffer } },
+      ],
     });
 
-    const params = buildParamsBuffer();
-    const workgroups = Math.ceil(nodeCount / WORKGROUP_SIZE);
+    // Two scan bind groups per iteration: A→scratch and scratch→A.
+    // Iteration parity ensures the final result lands back in binBuffer.
+    const scanBindGroupsA2B = scanParamBuffers.map((pb) => device.createBindGroup({
+      layout: scanLayout,
+      entries: [
+        { binding: 0, resource: { buffer: binBuffer } },
+        { binding: 1, resource: { buffer: scanScratch } },
+        { binding: 2, resource: { buffer: pb } },
+      ],
+    }));
+    const scanBindGroupsB2A = scanParamBuffers.map((pb) => device.createBindGroup({
+      layout: scanLayout,
+      entries: [
+        { binding: 0, resource: { buffer: scanScratch } },
+        { binding: 1, resource: { buffer: binBuffer } },
+        { binding: 2, resource: { buffer: pb } },
+      ],
+    }));
+
+    const paramsScratch = buildParamsBuffer();
+    const particleWorkgroups = Math.ceil(nodeCount / WORKGROUP_SIZE);
+    const binWorkgroups = Math.ceil(binArrayLen / WORKGROUP_SIZE);
     const batchSteps = Number.isFinite(stepsPerTick)
       ? Math.max(1, Math.floor(stepsPerTick))
       : getAdaptiveStepsPerTick(nodeCount, publishIntermediate);
@@ -279,9 +444,14 @@ export function startWebGpuDecollisioning({
     let lastReadbackAt = -Infinity;
     let positionsSyncedToCpu = true;
 
+    const allBuffers = [
+      positionsBuffer, velocitiesBuffer, radiiBuffer, nextVelocitiesBuffer, paramsBuffer,
+      stagingBuffer, binBuffer, scanScratch, placeCounterBuffer, sortedIndicesBuffer,
+      ...scanParamBuffers,
+    ];
+
     try {
       while (!stopped) {
-        // Drive compute from the browser frame clock so the UI remains responsive.
         if (publishIntermediate) {
           await nextFrame();
           if (stopped) break;
@@ -299,14 +469,19 @@ export function startWebGpuDecollisioning({
 
         for (let batchIndex = 0; batchIndex < iterationsThisBatch && !stopped; batchIndex++) {
           alpha += (0 - alpha) * alphaDecay;
-          writeParams(params, {
+          writeParams(paramsScratch, {
             nNodes: nodeCount,
+            numBins,
+            gridDimX: grid.gridDimX,
+            gridDimY: grid.gridDimY,
+            gridMinX: grid.gridMinX,
+            gridMinY: grid.gridMinY,
+            cellSize: grid.cellSize,
             epoch,
             strength,
             velocityDecay: 1 - velocityDecay,
-            jitter
+            jitter,
           });
-          device.queue.writeBuffer(paramsBuffer, 0, params.raw);
 
           const willFinish = alpha < alphaMin;
           const now = performance.now();
@@ -316,14 +491,55 @@ export function startWebGpuDecollisioning({
             && (batchIndex === iterationsThisBatch - 1 || willFinish)
             && (willFinish || readbackDue);
 
+          device.queue.writeBuffer(paramsBuffer, 0, paramsScratch.raw, 0, PARAM_BYTES);
           const encoder = device.createCommandEncoder();
-          const pass = encoder.beginComputePass();
-          pass.setBindGroup(0, bindGroup);
-          pass.setPipeline(pipelines.collide);
-          pass.dispatchWorkgroups(workgroups);
-          pass.setPipeline(pipelines.apply);
-          pass.dispatchWorkgroups(workgroups);
-          pass.end();
+
+          // Phase 0: clear binBuffer + placeCounter.
+          {
+            const pass = encoder.beginComputePass();
+            pass.setBindGroup(0, mainBindGroup);
+            pass.setPipeline(pipelines.clearBins);
+            pass.dispatchWorkgroups(binWorkgroups);
+            pass.end();
+          }
+          // Phase 1: count particles per bin.
+          {
+            const pass = encoder.beginComputePass();
+            pass.setBindGroup(0, mainBindGroup);
+            pass.setPipeline(pipelines.countBins);
+            pass.dispatchWorkgroups(particleWorkgroups);
+            pass.end();
+          }
+          // Phase 2: Hillis-Steele scan (ping-pong). Iteration parity is
+          // chosen by `computeScanIterations` so the final result lands
+          // back in binBuffer for collide to read.
+          for (let s = 0; s < scanIterations; s++) {
+            const bg = (s % 2 === 0) ? scanBindGroupsA2B[s] : scanBindGroupsB2A[s];
+            const pass = encoder.beginComputePass();
+            pass.setBindGroup(0, bg);
+            pass.setPipeline(pipelines.prefixSumStep);
+            pass.dispatchWorkgroups(binWorkgroups);
+            pass.end();
+          }
+          // Phase 3: place particles into sortedIndices.
+          {
+            const pass = encoder.beginComputePass();
+            pass.setBindGroup(0, mainBindGroup);
+            pass.setPipeline(pipelines.placeParticles);
+            pass.dispatchWorkgroups(particleWorkgroups);
+            pass.end();
+          }
+          // Phase 4 + 5: collide → apply (same pass; dispatches are ordered
+          // within a compute pass per the WebGPU spec).
+          {
+            const pass = encoder.beginComputePass();
+            pass.setBindGroup(0, mainBindGroup);
+            pass.setPipeline(pipelines.collide);
+            pass.dispatchWorkgroups(particleWorkgroups);
+            pass.setPipeline(pipelines.apply);
+            pass.dispatchWorkgroups(particleWorkgroups);
+            pass.end();
+          }
 
           if (shouldCopyThisStep) {
             encoder.copyBufferToBuffer(positionsBuffer, 0, stagingBuffer, 0, positionsData.byteLength);
@@ -351,9 +567,7 @@ export function startWebGpuDecollisioning({
           onTick?.(nodes, alpha, epoch);
         }
 
-        if (reachedFinalAlpha) {
-          break;
-        }
+        if (reachedFinalAlpha) break;
       }
 
       if (!stopped) {
@@ -369,14 +583,7 @@ export function startWebGpuDecollisioning({
         onComplete?.(nodes, epoch);
       }
     } finally {
-      destroyBuffers([
-        positionsBuffer,
-        velocitiesBuffer,
-        radiiBuffer,
-        nextVelocitiesBuffer,
-        paramsBuffer,
-        stagingBuffer
-      ]);
+      destroyBuffers(allBuffers);
     }
   })().catch((error) => {
     if (!stopped) {
@@ -390,6 +597,6 @@ export function startWebGpuDecollisioning({
     },
     done() {
       return currentPromise;
-    }
+    },
   };
 }
