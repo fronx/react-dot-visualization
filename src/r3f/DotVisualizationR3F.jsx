@@ -9,10 +9,13 @@ import React, {
 import * as d3 from 'd3';
 import { Canvas } from '@react-three/fiber';
 import { R3FScene } from './R3FScene.jsx';
-import { decollisioning } from '../decollisioning.js';
-import { getDotSize } from '../dotUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { boundsForData, computeFitTransformToVisible } from '../utils.js';
+import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
+import { useStablePositions } from '../useStablePositions.js';
+import { usePositionChangeDetection } from '../usePositionChangeDetection.js';
+import { resolveDataEffectPositions } from '../DotVisualization.jsx';
+import { useLatest } from '../useLatest.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const EMPTY_RADIUS_OVERRIDES = new Map();
@@ -103,13 +106,6 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   });
   const [hoveredId, setHoveredId] = useState(null);
 
-  const decollisionSimRef = useRef(null);
-  const memoizedPositions = useRef(new Map());
-  const stablePositionsRef = useRef([]);
-  const dotStylesRef = useRef(dotStyles);
-  const defaultSizeRef = useRef(defaultSize);
-  const onDecollisionCompleteRef = useRef(onDecollisionComplete);
-  const prevConstraintKeyRef = useRef(constraintKey);
   const cameraInitialized = useRef(false);
 
   // Camera state for zoom/pan persistence across renderer switches.
@@ -119,26 +115,25 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // Ref to programmatically set camera position from outside the Canvas.
   const setCameraPositionRef = useRef(null);
 
-  useEffect(() => {
-    dotStylesRef.current = dotStyles;
-  }, [dotStyles]);
+  // ── Decollision plumbing ─────────────────────────────────────────────────
+  // Same refs Canvas uses, so `useDecollisionScheduler` drives both renderers
+  // identically. `liveTransitionDataRef` carries per-tick simulation frames;
+  // we mirror it into React state so R3FDots (which consumes `data` as a prop)
+  // sees the moving positions and updates its instance matrices each render.
+  const dataRef = useRef([]);
+  const processedDataRef = useRef([]);
+  const liveTransitionDataRef = useRef(null);
+  const previousDataRef = useRef([]);
+  const schedulerRef = useRef(null);
+  const constraintKeyRef = useLatest(constraintKey);
 
-  useEffect(() => {
-    defaultSizeRef.current = defaultSize;
-  }, [defaultSize]);
+  // R3F owns its own pan/zoom (camera-space, not d3-zoom), so the scheduler's
+  // "skip publishing intermediate frames during interaction" gate is a no-op
+  // here. The refs still need to exist for the scheduler's API.
+  const alwaysFalseRef = useRef(false);
 
-  useEffect(() => {
-    onDecollisionCompleteRef.current = onDecollisionComplete;
-  }, [onDecollisionComplete]);
-
-  // Clear memoized positions when constraint key changes
-  useEffect(() => {
-    if (prevConstraintKeyRef.current !== constraintKey) {
-      memoizedPositions.current.clear();
-      stablePositionsRef.current = [];
-      prevConstraintKeyRef.current = constraintKey;
-    }
-  }, [constraintKey]);
+  const { updateStablePositions, shouldUseStablePositions } = useStablePositions();
+  const hasPositionsChanged = usePositionChangeDetection(defaultSize);
 
   // Validate and assign IDs
   const ensureIds = useCallback((d) =>
@@ -146,151 +141,121 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     []
   );
 
-  // Run decollision when data changes
+  // Scheduler callback: every simulation tick pushes new node positions in.
+  // Do NOT setState — that re-renders R3FDots and forces its full instance-
+  // matrix rebuild for all dots, 60 times per second. Canvas avoids this by
+  // calling `renderCanvasWithData` imperatively; R3F's equivalent is the
+  // useFrame loop inside R3FDots, which reads `liveTransitionDataRef` per
+  // frame and updates only the instance positions. State only changes at
+  // simulation completion via `syncDecollisionState`.
+  const onUpdateNodes = useCallback((nodes) => {
+    liveTransitionDataRef.current = nodes;
+  }, []);
+
+  // Scheduler callback: simulation settled (base or constraint complete).
+  const syncDecollisionState = useCallback((finalData) => {
+    liveTransitionDataRef.current = null;
+    if (finalData) {
+      updateStablePositions(finalData, constraintKeyRef.current);
+      setProcessedData(finalData);
+      processedDataRef.current = finalData;
+    }
+  }, [updateStablePositions, constraintKeyRef]);
+
+  // Data effect — mirrors Canvas's data effect minus the zoom/auto-fit pieces.
+  // Validates input, detects scope/length changes (which need a fresh base
+  // decollision), restores cached positions on unchanged re-renders, and
+  // hands off to the scheduler for actual simulation.
   useEffect(() => {
     if (!data || data.length === 0) {
       setProcessedData([]);
-      stablePositionsRef.current = [];
+      processedDataRef.current = [];
       return;
     }
 
-    const withIds = ensureIds(data);
-    const valid = withIds.filter(item => typeof item.x === 'number' && typeof item.y === 'number');
-    if (valid.length === 0) return;
+    const dataWithIds = ensureIds(data);
+    const validData = dataWithIds.filter(item =>
+      typeof item.x === 'number' && typeof item.y === 'number'
+    );
+    if (validData.length === 0) return;
 
-    // Stop any running simulation
-    if (decollisionSimRef.current) {
-      decollisionSimRef.current.stop();
-      decollisionSimRef.current = null;
-    }
-
-    if (positionsAreIntermediate) {
-      setProcessedData(valid);
-      return;
-    }
-
-    if (!enableDecollisioning) {
-      // Match Canvas: when decollision is disabled, render input positions as-is
-      // and never run a simulation. Restore memoized results if any so positions
-      // stay stable across re-renders.
-      const positioned = memoizedPositions.current.size > 0
-        ? valid.map(item => {
-            const memo = memoizedPositions.current.get(item.id);
-            return memo ? { ...item, x: memo.x, y: memo.y } : item;
-          })
-        : valid;
-      stablePositionsRef.current = positioned.map(node => ({ ...node }));
-      setProcessedData(positioned);
-      return;
-    }
-
-    // Seed from shared cross-renderer cache on first mount so we can immediately
-    // show decollisioned positions without running a catch-up simulation.
-    if (sharedPositionCache?.current?.size > 0 && memoizedPositions.current.size === 0) {
-      for (const item of valid) {
-        const cached = sharedPositionCache.current.get(item.id);
-        if (cached) {
-          memoizedPositions.current.set(item.id, {
-            inputX: item.x,
-            inputY: item.y,
-            x: cached.x,
-            y: cached.y,
-          });
-        }
+    let scopeChangedThisRender = false;
+    if (sharedPositionCache) {
+      scopeChangedThisRender = sharedPositionCache.checkScope(scopeKey);
+      if (scopeChangedThisRender && schedulerRef.current) {
+        dataRef.current = validData;
+        schedulerRef.current.decollideForConstraint('');
       }
     }
 
-    // Check if positions changed vs memoized
-    const allMemoized = valid.every(item => {
-      const memo = memoizedPositions.current.get(item.id);
-      return memo && Math.abs(memo.inputX - item.x) < 0.001 && Math.abs(memo.inputY - item.y) < 0.001;
+    const prevLength = previousDataRef.current?.length ?? 0;
+    if (
+      !scopeChangedThisRender &&
+      schedulerRef.current &&
+      prevLength > 0 &&
+      prevLength !== validData.length
+    ) {
+      dataRef.current = validData;
+      schedulerRef.current.decollideForConstraint('');
+    }
+
+    const { processedData: processedValidData } = resolveDataEffectPositions({
+      validData,
+      previousData: previousDataRef.current,
+      positionsAreIntermediate,
+      cachedPositions: sharedPositionCache?.cache.get(constraintKeyRef.current) ?? null,
+      previousProcessedData: processedDataRef.current,
+      hasPositionsChangedFn: hasPositionsChanged,
     });
 
-    if (allMemoized && memoizedPositions.current.size === valid.length) {
-      const restored = valid.map(item => {
-        const memo = memoizedPositions.current.get(item.id);
-        return { ...item, x: memo.x, y: memo.y };
-      });
-      stablePositionsRef.current = restored.map((node) => ({ ...node }));
-      setProcessedData(restored);
-      return;
+    previousDataRef.current = validData.map(item => ({ ...item }));
+    if (!scopeChangedThisRender) {
+      dataRef.current = processedValidData;
     }
 
-    // Incremental updates keep rendering previously stable positions while decollision runs.
-    if (isIncrementalUpdate && stablePositionsRef.current.length > 0) {
-      setProcessedData(stablePositionsRef.current);
-    } else if (!isIncrementalUpdate) {
-      // Full renders stream intermediate positions.
-      setProcessedData(valid);
-    }
-
-    const fnDotSize = (item) => getDotSize(item, dotStylesRef.current, defaultSizeRef.current);
-    const inputById = new Map(valid.map((item) => [item.id, item]));
-    const transitionConfig = isIncrementalUpdate
-      ? {
-          enabled: true,
-          stablePositions: stablePositionsRef.current.length > 0
-            ? stablePositionsRef.current
-            : valid,
-          duration: transitionDuration,
-          easing: transitionEasing,
-        }
-      : null;
-
-    const skipFrames = isIncrementalUpdate;
-    let cancelled = false;
-    const sim = decollisioning(
-      valid,
-      (nodes) => {
-        if (cancelled) return;
-        setProcessedData([...nodes]);
-      },
-      fnDotSize,
-      (finalNodes) => {
-        if (cancelled) return;
-        // Memoize results
-        for (const node of finalNodes) {
-          const original = inputById.get(node.id);
-          memoizedPositions.current.set(node.id, {
-            inputX: original?.x ?? node.x,
-            inputY: original?.y ?? node.y,
-            x: node.x,
-            y: node.y,
-          });
-        }
-        stablePositionsRef.current = finalNodes.map((node) => ({ ...node }));
-        // Write back to shared cache so the other renderer can seed from it on mount
-        if (sharedPositionCache?.current) {
-          sharedPositionCache.current.clear();
-          for (const node of finalNodes) {
-            sharedPositionCache.current.set(node.id, { x: node.x, y: node.y });
-          }
-        }
-        onDecollisionCompleteRef.current?.(finalNodes);
-      },
-      skipFrames,
-      transitionConfig,
-      { engine: decollisionEngine }
+    const keepStable = shouldUseStablePositions(
+      isIncrementalUpdate || positionsAreIntermediate,
+      constraintKeyRef.current,
+      validData.length,
     );
-    decollisionSimRef.current = sim;
-
-    return () => {
-      cancelled = true;
-      sim.stop();
-      if (decollisionSimRef.current === sim) {
-        decollisionSimRef.current = null;
-      }
-    };
+    if (!keepStable) {
+      setProcessedData(processedValidData);
+      processedDataRef.current = processedValidData;
+    }
   }, [
     data,
-    constraintKey,
-    enableDecollisioning,
-    decollisionEngine,
+    scopeKey,
     isIncrementalUpdate,
-    transitionDuration,
-    transitionEasing,
     positionsAreIntermediate,
+    sharedPositionCache,
+    hasPositionsChanged,
+    ensureIds,
+    shouldUseStablePositions,
+    constraintKeyRef,
   ]);
+
+  const scheduler = useDecollisionScheduler({
+    dataRef,
+    processedDataRef,
+    liveTransitionDataRef,
+    cache: sharedPositionCache,
+    positionsAreIntermediate,
+    constraintKey,
+    radiusOverrides,
+    decollisionEngine,
+    defaultSize,
+    onUpdateNodes,
+    onBaseReady: onDecollisionComplete,
+    onConstraintReady: (finalData) => onDecollisionComplete?.(finalData),
+    syncDecollisionState,
+    onSimulationRunningChange: () => {},
+    sendMetrics: false,
+    isDraggingRef: alwaysFalseRef,
+    interactionActiveRef: alwaysFalseRef,
+    enabled: enableDecollisioning,
+  });
+
+  schedulerRef.current = scheduler;
 
   const handleHoverChange = useCallback((id, item) => {
     setHoveredId(id);
@@ -443,13 +408,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     },
     updateVisibleDotCount: () => {},
     cancelDecollision: () => {
-      if (decollisionSimRef.current) {
-        decollisionSimRef.current.stop();
-        decollisionSimRef.current = null;
-      }
+      scheduler.cancelSimulation();
     },
     getCurrentPositions: () => processedData,
-  }), [processedData, defaultSize, computeFit, d3ToCamera, occludeLeft, occludeRight, occludeTop, occludeBottom]);
+  }), [processedData, defaultSize, computeFit, d3ToCamera, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler]);
 
   return (
     <div
@@ -491,6 +453,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           initialTransform={initialTransform}
           onCameraStateChange={handleCameraStateChange}
           setCameraRef={setCameraPositionRef}
+          liveTransitionDataRef={liveTransitionDataRef}
         />
       </Canvas>
 

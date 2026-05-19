@@ -289,6 +289,7 @@ export function R3FScene({
   initialTransform = null,
   onCameraStateChange,
   setCameraRef,
+  liveTransitionDataRef,
 }) {
   const dataMap = useMemo(() => {
     const map = new Map();
@@ -334,6 +335,7 @@ export function R3FScene({
         hoverSizeMultiplier={hoverSizeMultiplier}
         hoverOpacity={hoverOpacity}
         radiusOverrides={radiusOverrides}
+        liveTransitionDataRef={liveTransitionDataRef}
       />
 
       <HoverDetector

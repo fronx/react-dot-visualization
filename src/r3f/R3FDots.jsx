@@ -44,6 +44,7 @@ export function R3FDots({
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
   radiusOverrides = EMPTY_RADIUS_OVERRIDES,
+  liveTransitionDataRef = null,
 }) {
   const meshRef = useRef(null);
   const ringMeshRef = useRef(null);
@@ -305,17 +306,66 @@ export function R3FDots({
     prevHoverSizeMultiplierRef.current = hoverSizeMultiplier;
   }, [hoveredId, hoverSizeMultiplier, hoverOpacity, defaultOpacity]);
 
-  // Animate only pulsing dots each frame. Phase + ring geometry are derived
-  // from the shared hook+utility so behavior matches the Canvas renderer.
+  // Per-frame loop. Two responsibilities:
+  //   1. Live decollision: when the scheduler is mid-simulation,
+  //      `liveTransitionDataRef.current` carries fresh positions every tick.
+  //      Write them straight into the instance matrices here — no React
+  //      re-render, so R3FDots' big data-effect rebuild does NOT run 60×/sec.
+  //      Canvas achieves the same thing via `renderCanvasWithData`.
+  //   2. Pulse animation: as before, only iterates pulsing dots.
   useFrame((state) => {
-    const dynamicDots = dynamicDotsRef.current;
-    if (!dynamicDots.length) return;
-
     const mesh = meshRef.current;
+    if (!mesh) return;
     const ringMesh = ringMeshRef.current;
     const ringAlphaAttr = ringAlphaAttrRef.current;
     const dotAlphaAttr = dotAlphaAttrRef.current;
-    if (!mesh) return;
+    const dynamicDots = dynamicDotsRef.current;
+    const liveData = liveTransitionDataRef?.current;
+    const dotInfoById = dotInfoByIdRef.current;
+    const activeHoveredId = hoveredIdRef.current;
+
+    let needsMatrixUpdate = false;
+    let needsColorUpdate = false;
+    let needsAlphaUpdate = false;
+    let needsRingMatrixUpdate = false;
+    let needsRingAlphaUpdate = false;
+    let needsRingColorUpdate = false;
+
+    // Pass 1: live decollision positions (no-op when scheduler isn't running).
+    //
+    // For N=50k+ dots at 60fps, `_dummy.updateMatrix()` per dot dominates —
+    // Matrix4.compose() rebuilds the full quat-scaled matrix in JS each call.
+    // Scale + rotation don't change during decollision (only translation
+    // does), so we patch the translation columns of the instance matrix
+    // directly. Each matrix occupies 16 floats; translation lives at
+    // offsets 12 (tx) and 13 (ty). The hover useEffect uses Matrix4.compose
+    // for its 2-dot path, so hover-induced scale changes still land correctly.
+    if (liveData && dotInfoById.size > 0) {
+      const matrixArr = mesh.instanceMatrix.array;
+      for (let i = 0; i < liveData.length; i++) {
+        const item = liveData[i];
+        const info = dotInfoById.get(item.id);
+        if (!info) continue;
+        const worldY = -item.y;
+        info.x = item.x;
+        info.y = worldY;
+        // Keep the pulse-cache copy in lockstep so Pass 2 reads fresh positions.
+        const dyn = dynamicDotsByIdRef.current.get(item.id);
+        if (dyn) {
+          dyn.x = item.x;
+          dyn.y = worldY;
+        }
+        const off = info.index * 16;
+        matrixArr[off + 12] = item.x;
+        matrixArr[off + 13] = worldY;
+      }
+      needsMatrixUpdate = true;
+    }
+
+    if (!dynamicDots.length) {
+      if (needsMatrixUpdate) mesh.instanceMatrix.needsUpdate = true;
+      return;
+    }
 
     // Screen-pixels per world unit (CSS pixels) at current camera distance.
     // Adaptive ring sizing wants viewBoxScale in canvas-pixel space and a
@@ -326,13 +376,6 @@ export function R3FDots({
     const dpr = state.gl.getPixelRatio();
     const pxPerWorldUnit_CSS = heightCSS / (2 * camZ * TAN_HALF_FOV);
     const viewBoxScale = pxPerWorldUnit_CSS * dpr;
-
-    let needsMatrixUpdate = false;
-    let needsColorUpdate = false;
-    let needsAlphaUpdate = false;
-    let needsRingMatrixUpdate = false;
-    let needsRingAlphaUpdate = false;
-    let needsRingColorUpdate = false;
 
     for (const dot of dynamicDots) {
       const { id, index, x, y, baseScale, baseFill, baseOpacity } = dot;
