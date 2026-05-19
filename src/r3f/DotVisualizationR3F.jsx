@@ -153,14 +153,16 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   }, []);
 
   // Scheduler callback: simulation settled (base or constraint complete).
+  // updateStablePositions is intentionally skipped here: R3F never reads the
+  // resulting `stablePositions` state (only Canvas does). Calling it on every
+  // sim completion would spread+setState a 67k array for no consumer.
   const syncDecollisionState = useCallback((finalData) => {
     liveTransitionDataRef.current = null;
     if (finalData) {
-      updateStablePositions(finalData, constraintKeyRef.current);
       setProcessedData(finalData);
       processedDataRef.current = finalData;
     }
-  }, [updateStablePositions, constraintKeyRef]);
+  }, []);
 
   // Data effect — mirrors Canvas's data effect minus the zoom/auto-fit pieces.
   // Validates input, detects scope/length changes (which need a fresh base

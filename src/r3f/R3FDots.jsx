@@ -58,6 +58,17 @@ export function R3FDots({
   const prevHoveredIdRef = useRef(hoveredId);
   const prevHoverSizeMultiplierRef = useRef(hoverSizeMultiplier);
 
+  // Previous values of non-data deps — used by the sim-completion fast path
+  // in the big effect below.
+  const prevDotStylesRef = useRef(dotStyles);
+  const prevPulseDotsRef = useRef(null);
+  const prevDefaultColorRef = useRef(defaultColor);
+  const prevDefaultSizeRef = useRef(defaultSize);
+  const prevDefaultOpacityRef = useRef(defaultOpacity);
+  const prevHoverOpacityRef = useRef(hoverOpacity);
+  const prevHoverSizeMultRef = useRef(hoverSizeMultiplier);
+  const prevRadiusOverridesRef = useRef(radiusOverrides);
+
   const material = useMemo(
     () => createBevelStrokeMaterial(dotStroke || '#111', dotStrokeWidthFraction),
     [] // created once; uniforms updated below
@@ -140,6 +151,60 @@ export function R3FDots({
     const dotAlphaAttr = dotAlphaAttrRef.current;
     const dotFocusAttr = dotFocusAttrRef.current;
     if (!mesh) return;
+
+    // Fast path: sim-completion (positions changed, everything else stable).
+    // Same translation-column patch as Pass 1 in useFrame.
+    const prevDotInfo = dotInfoByIdRef.current;
+    const nonDataDepsUnchanged =
+      dotStyles === prevDotStylesRef.current
+      && pulseDots === prevPulseDotsRef.current
+      && defaultColor === prevDefaultColorRef.current
+      && defaultSize === prevDefaultSizeRef.current
+      && defaultOpacity === prevDefaultOpacityRef.current
+      && hoverOpacity === prevHoverOpacityRef.current
+      && hoverSizeMultiplier === prevHoverSizeMultRef.current
+      && radiusOverrides === prevRadiusOverridesRef.current;
+
+    if (nonDataDepsUnchanged && prevDotInfo.size === data.length && data.length > 0) {
+      const matrixArr = mesh.instanceMatrix.array;
+      const ringArr = ringMesh ? ringMesh.instanceMatrix.array : null;
+      const dynById = dynamicDotsByIdRef.current;
+      let fastPathOk = true;
+      for (let i = 0; i < data.length; i++) {
+        const item = data[i];
+        const info = prevDotInfo.get(item.id);
+        if (!info) { fastPathOk = false; break; }
+        const worldY = -item.y;
+        info.x = item.x;
+        info.y = worldY;
+        const off = info.index * 16;
+        matrixArr[off + 12] = item.x;
+        matrixArr[off + 13] = worldY;
+        if (ringArr) {
+          ringArr[off + 12] = item.x;
+          ringArr[off + 13] = worldY;
+        }
+        const dyn = dynById.get(item.id);
+        if (dyn) {
+          dyn.x = item.x;
+          dyn.y = worldY;
+        }
+      }
+      if (fastPathOk) {
+        mesh.instanceMatrix.needsUpdate = true;
+        if (ringMesh) ringMesh.instanceMatrix.needsUpdate = true;
+        return;
+      }
+    }
+
+    prevDotStylesRef.current = dotStyles;
+    prevPulseDotsRef.current = pulseDots;
+    prevDefaultColorRef.current = defaultColor;
+    prevDefaultSizeRef.current = defaultSize;
+    prevDefaultOpacityRef.current = defaultOpacity;
+    prevHoverOpacityRef.current = hoverOpacity;
+    prevHoverSizeMultRef.current = hoverSizeMultiplier;
+    prevRadiusOverridesRef.current = radiusOverrides;
 
     const dynamicDots = [];
     const dynamicDotsById = new Map();
