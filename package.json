@@ -28,7 +28,8 @@
     "bench:decollision": "node tests/decollision-webgpu.bench.mjs",
     "release:patch": "npm version patch && npm publish",
     "release:minor": "npm version minor && npm publish",
-    "release:major": "npm version major && npm publish"
+    "release:major": "npm version major && npm publish",
+    "check:tsl": "node tests/decollision-tsl.check.mjs"
   },
   "keywords": [
     "react",
