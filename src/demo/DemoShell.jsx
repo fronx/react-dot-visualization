@@ -1,10 +1,15 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { createRoot } from 'react-dom/client';
 import * as jdenticon from 'jdenticon';
-import DotVisualization from './src/DotVisualization.jsx';
-import DotVisualizationR3F from './src/r3f/DotVisualizationR3F.jsx';
+import DotVisualization from '../DotVisualization.jsx';
+import DotVisualizationR3F from '../r3f/DotVisualizationR3F.jsx';
 
-const App = () => {
+const NAV_LINKS = [
+  { mode: 'canvas', href: '/canvas.html', label: 'Canvas / SVG' },
+  { mode: 'webgl', href: '/webgl.html', label: 'R3F (WebGL)' },
+  { mode: 'webgpu', href: '/webgpu.html', label: 'R3F (WebGPU)' },
+];
+
+const DemoShell = ({ mode }) => {
   const [hoveredDot, setHoveredDot] = useState(null);
   const [clickedDot, setClickedDot] = useState(null);
   const [dotStyles, setDotStyles] = useState(new Map());
@@ -24,7 +29,6 @@ const App = () => {
   const [enableDecollision, setEnableDecollision] = useState(false); // Default off
   const [useCanvasRendering, setUseCanvasRendering] = useState(true); // Default off - canvas immediate mode
   const [gpuPanZoom, setGpuPanZoom] = useState(false);
-  const [renderer, setRenderer] = useState('canvas'); // 'canvas' | 'r3f'
   const containerRef = useRef(null);
   const vizRef = useRef(null);
 
@@ -258,7 +262,7 @@ const App = () => {
     return hoverImageCache.get(id);
   } : undefined;
 
-  const tabButtonStyle = (active) => ({
+  const tabLinkStyle = (active) => ({
     padding: '8px 16px',
     fontSize: '13px',
     cursor: 'pointer',
@@ -270,18 +274,19 @@ const App = () => {
     marginBottom: '-1px',
     fontWeight: active ? 600 : 400,
     color: active ? '#222' : '#666',
+    textDecoration: 'none',
+    display: 'inline-block',
   });
 
   return (
     <div className="demo">
       <h1>React Dot Visualization Demo</h1>
       <div style={{ display: 'flex', borderBottom: '1px solid #ddd', marginBottom: 12 }}>
-        <button onClick={() => setRenderer('canvas')} style={tabButtonStyle(renderer === 'canvas')}>
-          Canvas / SVG
-        </button>
-        <button onClick={() => setRenderer('r3f')} style={tabButtonStyle(renderer === 'r3f')}>
-          R3F (WebGL)
-        </button>
+        {NAV_LINKS.map((link) => (
+          <a key={link.mode} href={link.href} style={tabLinkStyle(mode === link.mode)}>
+            {link.label}
+          </a>
+        ))}
       </div>
       <div className="viz" ref={containerRef} style={{ position: 'relative', width: '100%', height: '60vh' }}>
         <div
@@ -499,7 +504,7 @@ const App = () => {
           </div>
 
         </div>
-        {renderer === 'canvas' ? (
+        {mode === 'canvas' ? (
           <DotVisualization
             ref={vizRef}
             data={data}
@@ -532,6 +537,7 @@ const App = () => {
         ) : (
           <DotVisualizationR3F
             ref={vizRef}
+            backend={mode === 'webgpu' ? 'webgpu' : 'webgl'}
             data={data}
             onHover={setHoveredDot}
             onLeave={() => setHoveredDot(null)}
@@ -541,6 +547,7 @@ const App = () => {
             defaultSize={getScaledDotSize()}
             dotStrokeWidthFraction={0.1}
             style={{ position: 'absolute', inset: 0 }}
+            occludeLeft={panelWidth}
             hoverSizeMultiplier={hoverSizeMultiplier}
             hoverOpacity={hoverOpacity}
             enableDecollisioning={enableDecollision}
@@ -558,6 +565,4 @@ const App = () => {
   );
 };
 
-// Render
-const root = createRoot(document.getElementById('root'));
-root.render(<App />);
+export default DemoShell;
