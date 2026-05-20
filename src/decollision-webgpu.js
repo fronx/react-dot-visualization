@@ -170,7 +170,7 @@ function writeParams(target, params) {
 // ≥ 2 × maxRadius so the 3×3 neighbor scan in `collide` covers every
 // possible collider. We pick cellSize as large as practical (targeting
 // ~3 particles per cell) so numBins stays small and the prefix-sum cheap.
-function computeGridParams(nodes, radii) {
+export function computeGridParams(nodes, radii) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   let maxRadius = 0;
   for (let i = 0; i < nodes.length; i++) {
