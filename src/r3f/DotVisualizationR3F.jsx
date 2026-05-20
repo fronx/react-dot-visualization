@@ -8,7 +8,10 @@ import React, {
 } from 'react';
 import * as d3 from 'd3';
 import { Canvas } from '@react-three/fiber';
-import { R3FScene } from './R3FScene.jsx';
+import { WebGPURenderer } from 'three/webgpu';
+import { R3FScene, CameraInitializer } from './R3FScene.jsx';
+import { R3FCamera } from './R3FCamera.jsx';
+import { R3FDotsWebGPU } from './R3FDotsWebGPU.jsx';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { boundsForData, computeFitTransformToVisible } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
@@ -46,6 +49,7 @@ const viewBoxForContainer = (rect) => [
  */
 const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) {
   const {
+    backend = 'webgl',
     data = [],
     edges = [],
     dotStyles = new Map(),
@@ -107,6 +111,15 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const [hoveredId, setHoveredId] = useState(null);
 
   const cameraInitialized = useRef(false);
+
+  // Switching backend remounts the Canvas with a fresh camera, so let the new
+  // camera re-fit. Done at render time (not in an effect) so it lands before
+  // the freshly-mounted CameraInitializer's fit effect reads the flag.
+  const prevBackendRef = useRef(backend);
+  if (prevBackendRef.current !== backend) {
+    prevBackendRef.current = backend;
+    cameraInitialized.current = false;
+  }
 
   // Camera state for zoom/pan persistence across renderer switches.
   const cameraStateRef = useRef(null);
@@ -254,7 +267,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     sendMetrics: false,
     isDraggingRef: alwaysFalseRef,
     interactionActiveRef: alwaysFalseRef,
-    enabled: enableDecollisioning,
+    // WebGPU backend runs decollision on the GPU; keep the CPU scheduler off.
+    enabled: enableDecollisioning && backend !== 'webgpu',
   });
 
   schedulerRef.current = scheduler;
@@ -307,6 +321,19 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
     return computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
   }, [defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom]);
+
+  // Initial-fit camera target for CameraInitializer's bounds-fit branch.
+  // Reuses the occlusion-aware computeFit + d3ToCamera pipeline that
+  // zoomToVisible uses, so the first paint centers identically to Canvas's
+  // autoFitToVisible (which honors occludeLeft/Right/Top/Bottom) instead of
+  // centering the raw centroid on the full canvas.
+  const computeInitialFitTarget = useCallback(() => {
+    if (!containerRef.current) return null;
+    const fit = computeFit(processedData, 0.9);
+    if (!fit) return null;
+    const rect = containerRef.current.getBoundingClientRect();
+    return d3ToCamera(fit, rect.width, rect.height);
+  }, [computeFit, d3ToCamera, processedData]);
 
   // Imperative handle — implements the DotVisualization API surface
   useImperativeHandle(ref, () => ({
@@ -421,43 +448,81 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       className={`dot-visualization-r3f ${className}`}
       style={{ width: '100%', height: '100%', position: 'relative', ...style }}
     >
-      <Canvas
-        style={{ position: 'absolute', inset: 0 }}
-        dpr={[1, 2]}
-        camera={{
-          fov: CAMERA_FOV_DEGREES,
-          near: 0.01,
-          far: 100000,
-          position: [0, 0, 65],
-        }}
-        gl={{ antialias: true, powerPreference: 'high-performance' }}
-      >
-        <R3FScene
-          data={processedData}
-          edges={edges}
-          dotStyles={dotStyles}
-          defaultColor={defaultColor}
-          defaultSize={defaultSize}
-          defaultOpacity={defaultOpacity}
-          dotStroke={dotStroke}
-          dotStrokeWidthFraction={dotStrokeWidthFraction}
-          hoveredId={hoveredId}
-          onHoverChange={handleHoverChange}
-          onDotClick={handleDotClick}
-          onBackgroundClick={handleBackgroundClick}
-          hoverSizeMultiplier={hoverSizeMultiplier}
-          hoverOpacity={hoverOpacity}
-          edgeColor={edgeColor}
-          edgeOpacity={edgeOpacity}
-          showEdges={showEdges}
-          radiusOverrides={radiusOverrides}
-          cameraInitialized={cameraInitialized}
-          initialTransform={initialTransform}
-          onCameraStateChange={handleCameraStateChange}
-          setCameraRef={setCameraPositionRef}
-          liveTransitionDataRef={liveTransitionDataRef}
-        />
-      </Canvas>
+      {backend === 'webgpu' ? (
+        <Canvas
+          style={{ position: 'absolute', inset: 0 }}
+          dpr={[1, 2]}
+          camera={{
+            fov: CAMERA_FOV_DEGREES,
+            near: 0.01,
+            far: 100000,
+            position: [0, 0, 65],
+          }}
+          gl={async (props) => {
+            const renderer = new WebGPURenderer(props);
+            await renderer.init();
+            return renderer;
+          }}
+        >
+          <CameraInitializer
+            data={processedData}
+            initialized={cameraInitialized}
+            initialTransform={initialTransform}
+            computeFitTarget={computeInitialFitTarget}
+            onInit={handleCameraStateChange}
+          />
+          <R3FCamera />
+          <R3FDotsWebGPU
+            data={processedData}
+            dotStyles={dotStyles}
+            radiusOverrides={radiusOverrides}
+            defaultSize={defaultSize}
+            defaultColor={defaultColor}
+            dotStroke={dotStroke}
+            dotStrokeWidthFraction={dotStrokeWidthFraction}
+            enableDecollisioning={enableDecollisioning}
+          />
+        </Canvas>
+      ) : (
+        <Canvas
+          style={{ position: 'absolute', inset: 0 }}
+          dpr={[1, 2]}
+          camera={{
+            fov: CAMERA_FOV_DEGREES,
+            near: 0.01,
+            far: 100000,
+            position: [0, 0, 65],
+          }}
+          gl={{ antialias: true, powerPreference: 'high-performance' }}
+        >
+          <R3FScene
+            data={processedData}
+            edges={edges}
+            dotStyles={dotStyles}
+            defaultColor={defaultColor}
+            defaultSize={defaultSize}
+            defaultOpacity={defaultOpacity}
+            dotStroke={dotStroke}
+            dotStrokeWidthFraction={dotStrokeWidthFraction}
+            hoveredId={hoveredId}
+            onHoverChange={handleHoverChange}
+            onDotClick={handleDotClick}
+            onBackgroundClick={handleBackgroundClick}
+            hoverSizeMultiplier={hoverSizeMultiplier}
+            hoverOpacity={hoverOpacity}
+            edgeColor={edgeColor}
+            edgeOpacity={edgeOpacity}
+            showEdges={showEdges}
+            radiusOverrides={radiusOverrides}
+            cameraInitialized={cameraInitialized}
+            initialTransform={initialTransform}
+            computeFitTarget={computeInitialFitTarget}
+            onCameraStateChange={handleCameraStateChange}
+            setCameraRef={setCameraPositionRef}
+            liveTransitionDataRef={liveTransitionDataRef}
+          />
+        </Canvas>
+      )}
 
       {/* Overlay children (e.g. labels, tooltips) */}
       {children && (

@@ -186,7 +186,7 @@ function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier
   return null;
 }
 
-function CameraInitializer({ data, initialized, initialTransform, onInit }) {
+export function CameraInitializer({ data, initialized, initialTransform, onInit, computeFitTarget }) {
   const { camera, size } = useThree();
   const hasRun = useRef(false);
 
@@ -194,6 +194,8 @@ function CameraInitializer({ data, initialized, initialTransform, onInit }) {
     if (hasRun.current || initialized.current || data.length === 0) return;
     hasRun.current = true;
     initialized.current = true;
+
+    const occlusionAwareFit = !initialTransform ? computeFitTarget?.() : null;
 
     if (initialTransform) {
       // Restore from a saved D3 zoom transform produced by Canvas's
@@ -210,6 +212,12 @@ function CameraInitializer({ data, initialized, initialTransform, onInit }) {
       const cy_world = (y - vbH / 2) / k;
       const cz = vbH / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
       camera.position.set(cx, cy_world, Math.max(0.5, Math.min(5000, cz)));
+    } else if (occlusionAwareFit) {
+      // Match Canvas: center the data in the occlusion-aware visible region
+      // (padded bounds, fitMargin) via the same computeFitTransformToVisible
+      // pipeline DotVisualizationR3F.zoomToVisible uses, rather than centering
+      // the raw centroid on the full canvas.
+      camera.position.set(occlusionAwareFit.x, occlusionAwareFit.y, occlusionAwareFit.z);
     } else {
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       for (const item of data) {
@@ -287,6 +295,7 @@ export function R3FScene({
   showEdges,
   cameraInitialized,
   initialTransform = null,
+  computeFitTarget,
   onCameraStateChange,
   setCameraRef,
   liveTransitionDataRef,
@@ -308,6 +317,7 @@ export function R3FScene({
         data={data}
         initialized={cameraInitialized}
         initialTransform={initialTransform}
+        computeFitTarget={computeFitTarget}
         onInit={onCameraStateChange}
       />
       <CameraReporter reportRef={reportCameraRef} onCameraStateChange={onCameraStateChange} />
