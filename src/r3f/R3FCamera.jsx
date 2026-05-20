@@ -1,5 +1,5 @@
 import { useRef, useEffect } from 'react';
-import { useThree } from '@react-three/fiber';
+import { useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import {
   classifyWheelGesture,
@@ -23,6 +23,20 @@ const CAMERA_Z_MAX = 5000;
 export function R3FCamera({ onTransformChange }) {
   const controlsRef = useRef(null);
   const { camera, gl, size } = useThree();
+
+  // OrbitControls targets the origin by default, but CameraInitializer and
+  // zoomToVisible place the camera at arbitrary (x, y). Without keeping the
+  // look-at directly under the camera, the view stays aimed at the origin and
+  // the data renders off-center until the first pan/zoom (which sets target).
+  useFrame(() => {
+    const controls = controlsRef.current;
+    if (!controls) return;
+    const { x, y } = camera.position;
+    if (controls.target.x !== x || controls.target.y !== y) {
+      controls.target.set(x, y, 0);
+      controls.update();
+    }
+  });
 
   // Drag-to-pan
   useEffect(() => {
