@@ -76,7 +76,10 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
   return nearest;
 }
 
-function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHoverChange, onDotClick, onBackgroundClick }) {
+// Renderer-agnostic: raycasts a z=0 plane (pure three-core math against the
+// camera) and resolves the nearest dot via a CPU spatial index over `data`.
+// Touches no GPU meshes, so the WebGPU backend mounts it directly.
+export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHoverChange, onDotClick, onBackgroundClick }) {
   const { camera, gl } = useThree();
   const hoveredIdRef = useRef(null);
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
@@ -241,7 +244,7 @@ export function CameraInitializer({ data, initialized, initialTransform, onInit,
 }
 
 // Allows programmatic camera positioning from outside the Canvas context.
-function CameraSetter({ setCameraRef }) {
+export function CameraSetter({ setCameraRef }) {
   const { camera } = useThree();
 
   useEffect(() => {
@@ -256,7 +259,7 @@ function CameraSetter({ setCameraRef }) {
 
 // Fires onCameraStateChange whenever the camera moves, allowing the outer component
 // to read camera state for zoom/pan persistence across renderer switches.
-function CameraReporter({ reportRef, onCameraStateChange }) {
+export function CameraReporter({ reportRef, onCameraStateChange }) {
   const { camera } = useThree();
   const onChangeRef = useRef(onCameraStateChange);
   useEffect(() => { onChangeRef.current = onCameraStateChange; }, [onCameraStateChange]);

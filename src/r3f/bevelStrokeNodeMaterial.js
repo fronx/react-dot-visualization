@@ -14,6 +14,7 @@
 import { MeshBasicNodeMaterial } from 'three/webgpu';
 import {
   uv, length, smoothstep, mix, max, select, fwidth, uniform, color, float, varying,
+  sRGBTransferOETF,
 } from 'three/tsl';
 
 // Focus-ring geometry (mirror utils/focusDotSizing.ts in fingertip):
@@ -57,10 +58,30 @@ export function createBevelStrokeNodeMaterial({
   const normalColor = mix(vColor, uStrokeColor, strokeMix);
 
   const isFocus = vFocus.greaterThan(0.5);
-  material.colorNode = select(isFocus, vColor, normalColor);
+  // sRGB-encode so blending happens in gamma space (see the outputColorSpace
+  // note in DotVisualizationR3F's gl callback). Alpha is left linear — that's
+  // how a 2D canvas composites.
+  material.colorNode = sRGBTransferOETF(select(isFocus, vColor, normalColor));
   material.opacityNode = select(isFocus, focusCoverage, discCoverage).mul(vAlpha);
 
   material.userData.uStrokeColor = uStrokeColor;
   material.userData.uStrokeWidth = uStrokeWidth;
+  return material;
+}
+
+/**
+ * TSL port of pulseDiscFragment (bevelStrokeMaterial.js) for the WebGPU pulse
+ * ring: a flat AA disc with per-instance color + alpha, no stroke. Position is
+ * the caller's concern (set material.positionNode).
+ */
+export function createPulseDiscNodeMaterial({ instanceColor, instanceAlpha }) {
+  const material = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false });
+  const vColor = varying(instanceColor);
+  const vAlpha = varying(instanceAlpha);
+  const dist = length(uv().sub(0.5)).mul(2.0);
+  const edge = fwidth(dist);
+  const coverage = float(1).sub(smoothstep(float(1).sub(edge), float(1), dist));
+  material.colorNode = sRGBTransferOETF(vColor); // gamma-space blend; see createBevelStrokeNodeMaterial
+  material.opacityNode = coverage.mul(vAlpha);
   return material;
 }

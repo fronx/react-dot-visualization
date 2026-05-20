@@ -10,7 +10,7 @@ import React, {
 import * as d3 from 'd3';
 import { Canvas } from '@react-three/fiber';
 import { WebGPURenderer } from 'three/webgpu';
-import { R3FScene, CameraInitializer } from './R3FScene.jsx';
+import { R3FScene, CameraInitializer, HoverDetector, CameraSetter, CameraReporter } from './R3FScene.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
 import { R3FDotsWebGPU } from './R3FDotsWebGPU.jsx';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
@@ -317,6 +317,15 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     cameraStateRef.current = state;
   }, []);
 
+  // Camera-report plumbing for the webgpu branch (R3FScene supplies its own for
+  // the WebGL branch). R3FCamera calls handleTransformChange on every pan/zoom;
+  // CameraReporter wires reportCameraRef to push the live camera position into
+  // cameraStateRef so getZoomTransform stays current.
+  const reportCameraRef = useRef(null);
+  const handleTransformChange = useCallback(() => {
+    reportCameraRef.current?.();
+  }, []);
+
   // Convert a viewBox-space D3 transform {x, y, k} to a Three.js camera
   // position. The transform lives in the same coordinate space Canvas's
   // ZoomManager uses ([0, 0, 100*aspect, 100]); the camera-world frame
@@ -472,8 +481,20 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       style={{ width: '100%', height: '100%', position: 'relative', ...style }}
     >
       {backend === 'webgpu' ? (
+        // `flat linear` make the dots blend in gamma space, matching the 2D
+        // canvas / WebGL paths. By default R3F sets outputColorSpace=sRGB +
+        // ACESFilmic toneMapping, which makes WebGPURenderer draw into a linear
+        // float intermediate and sRGB-encode in a post pass — so transparency
+        // blends in LINEAR space and reads dark/over-saturated (three.js #33104).
+        // `linear` (outputColorSpace=LinearSRGB) + `flat` (NoToneMapping) drop
+        // that intermediate; the dot materials sRGB-encode their own color
+        // (createBevelStrokeNodeMaterial / createPulseDiscNodeMaterial), so the
+        // GPU blends already-encoded values = gamma space, like the GLSL path's
+        // inline `#include <colorspace_fragment>`.
         <Canvas
           style={{ position: 'absolute', inset: 0 }}
+          flat
+          linear
           dpr={[1, 2]}
           camera={{
             fov: CAMERA_FOV_DEGREES,
@@ -494,17 +515,32 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             computeFitTarget={computeInitialFitTarget}
             onInit={handleCameraStateChange}
           />
-          <R3FCamera />
+          <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
+          <CameraSetter setCameraRef={setCameraPositionRef} />
+          <R3FCamera onTransformChange={handleTransformChange} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dotStyles={dotStyles}
             radiusOverrides={radiusOverrides}
             defaultSize={defaultSize}
             defaultColor={defaultColor}
+            defaultOpacity={defaultOpacity}
             dotStroke={dotStroke}
             dotStrokeWidthFraction={dotStrokeWidthFraction}
+            hoveredId={hoveredId}
+            hoverSizeMultiplier={hoverSizeMultiplier}
+            hoverOpacity={hoverOpacity}
             enableDecollisioning={enableDecollisioning}
             onSettle={handleWebGPUSettle}
+          />
+          <HoverDetector
+            data={processedData}
+            radiusOverrides={radiusOverrides}
+            defaultSize={defaultSize}
+            hoverSizeMultiplier={hoverSizeMultiplier}
+            onHoverChange={handleHoverChange}
+            onDotClick={handleDotClick}
+            onBackgroundClick={handleBackgroundClick}
           />
         </Canvas>
       ) : (

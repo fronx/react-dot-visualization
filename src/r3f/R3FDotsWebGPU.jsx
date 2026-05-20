@@ -3,27 +3,40 @@
  *
  * The WebGPU counterpart to R3FDots. Where R3FDots writes per-instance matrices
  * on the CPU each frame, this layer keeps everything on the GPU: per-instance
- * position/color/alpha/focus live in storage buffers, the decollision sim (the
- * validated TSL kernels) runs in-shader each frame and writes the positions
+ * position/color/alpha/focus/scale live in storage buffers, the decollision sim
+ * (the validated TSL kernels) runs in-shader each frame and writes the positions
  * buffer, and the bevel-stroke node material reads it via element(instanceIndex)
  * — zero readback, no CPU-side per-instance work.
  *
- * Proven in webgpu-spike-entry.jsx; this is the same pipeline parameterized by
- * the `data`/`dotStyles` props instead of synthetic input.
+ * Appearance (fill/opacity/scale/focus) is resolved through the shared rules in
+ * dotAppearance.js — the same source of truth R3FDots uses — so hover, dim, and
+ * focus behave identically across backends; only the upload mechanism differs.
  */
 import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
 import { instanceIndex, vec3, instancedArray, positionLocal, uniform } from 'three/tsl';
-import { createBevelStrokeNodeMaterial } from './bevelStrokeNodeMaterial.js';
+import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import { computeGridParams } from '../decollision-webgpu.js';
 import {
   buildCountBins, buildScanStep, buildPlaceParticles, buildCollideSpatial,
   buildApply, buildClearAtomicU32,
 } from '../decollision-tsl.js';
+import {
+  resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus,
+} from './dotAppearance.js';
+import { usePulseAnimation } from '../usePulseAnimation.js';
+import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
+import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 
 const ALPHA_DECAY = 0.0228; // d3-force defaults
 const ALPHA_MIN = 0.001;
+const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
+const TAN_HALF_FOV = Math.tan(CAMERA_FOV_RAD / 2);
+
+const EMPTY_STYLE = {};
+const EMPTY_RADIUS_OVERRIDES = new Map();
+const _color = new THREE.Color();
 
 function scanIterations(n) {
   if (n <= 1) return 0;
@@ -79,19 +92,54 @@ function buildPhysicsBuffers(data, { defaultSize, radiusOverrides }) {
   };
 }
 
-// Per-instance appearance: color/alpha/focus-ring. Lives in its own buffers so
+// Per-instance appearance: color/alpha/focus/scale. Lives in its own buffers so
 // restyling (hover, selection, pulse, semantic colors) writes these in place
 // without touching the position buffers or resetting the decollision alpha.
-// Seeded from the current style at build time so the first paint is correct
-// (the in-place rewrite on restyle runs after commit, too late for frame 1).
+// `scale` is the *render* size (base size × hover) and is separate from the
+// physics radii buffer, so hover enlargement never perturbs the sim. Seeded at
+// build so the first paint is correct (the restyle effect runs after commit).
 function buildCosmeticBuffers(N, data, opts) {
   const cosmetic = {
     colors: instancedArray(new Float32Array(N * 3), 'vec3'),
     alphas: instancedArray(new Float32Array(N), 'float'),
     focus: instancedArray(new Float32Array(N), 'float'),
+    scales: instancedArray(new Float32Array(N), 'float'),
   };
   writeCosmetics(cosmetic, data, opts);
   return cosmetic;
+}
+
+// Resolve fill/opacity/focus/scale for every dot via the shared appearance
+// rules (dotAppearance.js) and upload them. Identical rule set to R3FDots'
+// applyDotStylesToInstances — the renderers differ only in the write target.
+function writeCosmetics(cosmetic, data, opts) {
+  const {
+    defaultColor, defaultSize, defaultOpacity, dotStyles, radiusOverrides,
+    hoveredId, hoverSizeMultiplier, hoverOpacity,
+  } = opts;
+  const colAttr = cosmetic.colors.value;
+  const alphaAttr = cosmetic.alphas.value;
+  const focusAttr = cosmetic.focus.value;
+  const scaleAttr = cosmetic.scales.value;
+  const col = colAttr.array;
+  const alpha = alphaAttr.array;
+  const focus = focusAttr.array;
+  const scale = scaleAttr.array;
+  for (let i = 0; i < data.length; i++) {
+    const item = data[i];
+    const style = (dotStyles && dotStyles.get(item.id)) || EMPTY_STYLE;
+    const isHovered = item.id === hoveredId;
+    const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
+    _color.set(resolveFill(item, style, defaultColor));
+    col[i * 3] = _color.r; col[i * 3 + 1] = _color.g; col[i * 3 + 2] = _color.b;
+    alpha[i] = resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
+    focus[i] = resolveFocus(style);
+    scale[i] = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+  }
+  colAttr.needsUpdate = true;
+  alphaAttr.needsUpdate = true;
+  focusAttr.needsUpdate = true;
+  scaleAttr.needsUpdate = true;
 }
 
 // Read the settled GPU positions back to the CPU once the sim has come to
@@ -103,45 +151,46 @@ async function readSettledData(renderer, buffers, data, decollisioned) {
   const arrayBuffer = await renderer.getArrayBufferAsync(buffers.positions.value);
   const pos = new Float32Array(arrayBuffer);
   const out = new Array(data.length);
+  let nonFinite = 0;
   for (let i = 0; i < data.length; i++) {
-    out[i] = { ...data[i], x: pos[i * 2], y: -pos[i * 2 + 1] };
+    const x = pos[i * 2];
+    const y = -pos[i * 2 + 1];
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      out[i] = { ...data[i], x, y };
+    } else {
+      // The GPU sim can diverge a dot to NaN (e.g. two dots at the exact same
+      // spot normalize a zero vector). Keep its finite seed position so
+      // processedData stays clean — a single NaN poisons boundsForData and
+      // every fit/zoom that reads it.
+      out[i] = data[i];
+      nonFinite++;
+    }
   }
+  if (nonFinite > 0) console.warn(`[r3f-webgpu] readback kept seed for ${nonFinite}/${data.length} non-finite settled positions`);
   return out;
-}
-
-function writeCosmetics(cosmetic, data, { defaultColor, dotStyles }) {
-  const colAttr = cosmetic.colors.value;
-  const alphaAttr = cosmetic.alphas.value;
-  const focusAttr = cosmetic.focus.value;
-  const col = colAttr.array;
-  const alpha = alphaAttr.array;
-  const focus = focusAttr.array;
-  const tmp = new THREE.Color();
-  for (let i = 0; i < data.length; i++) {
-    const item = data[i];
-    const style = dotStyles && dotStyles.get(item.id);
-    tmp.set(style?.fill ?? item.color ?? defaultColor ?? '#888');
-    col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
-    alpha[i] = style?.opacity != null ? Number(style.opacity) : 1;
-    focus[i] = style?.focusRing ? 1 : 0;
-  }
-  colAttr.needsUpdate = true;
-  alphaAttr.needsUpdate = true;
-  focusAttr.needsUpdate = true;
 }
 
 export function R3FDotsWebGPU({
   data,
   dotStyles,
-  radiusOverrides,
+  radiusOverrides = EMPTY_RADIUS_OVERRIDES,
   defaultSize = 6,
-  defaultColor = '#888',
+  defaultColor = null,
+  defaultOpacity = 0.7,
   dotStroke = '#111',
   dotStrokeWidthFraction = 0.1,
+  hoveredId = null,
+  hoverSizeMultiplier = 1.5,
+  hoverOpacity = 1.0,
   enableDecollisioning = true,
   onSettle,
 }) {
   const gl = useThree((s) => s.gl);
+
+  const cosmeticOpts = {
+    defaultColor, defaultSize, defaultOpacity, dotStyles, radiusOverrides,
+    hoveredId, hoverSizeMultiplier, hoverOpacity,
+  };
 
   // Physics buffers rebuild only when the point set or its sizes change —
   // seeding the sim from raw positions and (via `pipeline`) resetting the
@@ -153,20 +202,22 @@ export function R3FDotsWebGPU({
 
   // Cosmetic buffers are sized to the physics buffers, seeded with the current
   // style, and rewritten in place on restyle — so hover/selection/pulse never
-  // restart the decollision. The seed-at-build deps intentionally exclude
-  // dotStyles/defaultColor: the effect below handles restyle without a rebuild.
+  // restart the decollision. The seed-at-build deps intentionally exclude the
+  // style inputs: the effect below handles restyle without a rebuild.
   const cosmetic = useMemo(
     () => (buffers && data && data.length
-      ? buildCosmeticBuffers(buffers.N, data, { defaultColor, dotStyles })
+      ? buildCosmeticBuffers(buffers.N, data, cosmeticOpts)
       : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [buffers],
   );
   useEffect(() => {
     if (cosmetic && data && data.length) {
-      writeCosmetics(cosmetic, data, { defaultColor, dotStyles });
+      writeCosmetics(cosmetic, data, cosmeticOpts);
     }
-  }, [cosmetic, data, defaultColor, dotStyles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cosmetic, data, defaultColor, defaultSize, defaultOpacity, dotStyles,
+      radiusOverrides, hoveredId, hoverSizeMultiplier, hoverOpacity]);
 
   const mesh = useMemo(() => {
     if (!buffers || !cosmetic) return null;
@@ -179,8 +230,8 @@ export function R3FDotsWebGPU({
       strokeWidthFraction: dotStrokeWidthFraction,
     });
     const instPos = buffers.positions.element(instanceIndex);
-    const instRad = buffers.radii.element(instanceIndex);
-    material.positionNode = vec3(positionLocal.xy.mul(instRad.mul(2.0)).add(instPos), 0);
+    const instScale = cosmetic.scales.element(instanceIndex);
+    material.positionNode = vec3(positionLocal.xy.mul(instScale.mul(2.0)).add(instPos), 0);
     const m = new THREE.InstancedMesh(geometry, material, buffers.N);
     m.frustumCulled = false;
     return m;
@@ -211,12 +262,16 @@ export function R3FDotsWebGPU({
     };
   }, [buffers]);
 
+  // Settled positions cached for the pulse ring (which needs CPU positions to
+  // place its disc behind the playing dot). Set once at readback.
+  const settledRef = useRef(null);
+
   // One-shot GPU→CPU readback at settle. The sim is GPU-resident, so the CPU
-  // has no idea where the dots ended up — camera-fit, hover, and click all
-  // need those positions. Reset whenever the physics buffers rebuild (new
-  // point set), so each fresh decollision fires its own settle.
+  // has no idea where the dots ended up — camera-fit, hover, click, and the
+  // pulse ring all need those positions. Reset whenever the physics buffers
+  // rebuild (new point set), so each fresh decollision fires its own settle.
   const settleFiredRef = useRef(false);
-  useEffect(() => { settleFiredRef.current = false; }, [buffers]);
+  useEffect(() => { settleFiredRef.current = false; settledRef.current = null; }, [buffers]);
 
   useFrame(() => {
     if (!pipeline) return;
@@ -232,11 +287,131 @@ export function R3FDotsWebGPU({
       p.alphaU.value += (0 - p.alphaU.value) * ALPHA_DECAY;
       return;
     }
-    if (settleFiredRef.current || !onSettle || !buffers || !data?.length) return;
+    if (settleFiredRef.current || !buffers || !data?.length) return;
     settleFiredRef.current = true;
-    readSettledData(gl, buffers, data, enableDecollisioning).then(onSettle);
+    readSettledData(gl, buffers, data, enableDecollisioning).then((settled) => {
+      settledRef.current = settled;
+      onSettle?.(settled);
+    });
+  });
+
+  // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────
+  // Same machinery as R3FDots: usePulseAnimation drives a phase clock, this
+  // useFrame reads it and writes pulsing dots' size/opacity into the cosmetic
+  // buffers + drives a separate ring layer. Renderer-agnostic timing/sizing
+  // (usePulseAnimation, calculateAdaptiveRingRadius) is reused as-is.
+  const getPulseState = usePulseAnimation(dotStyles, undefined, false, true);
+  const pulseIds = useMemo(() => {
+    const ids = [];
+    if (dotStyles) for (const [id, style] of dotStyles) if (style?.pulse) ids.push(id);
+    return ids;
+  }, [dotStyles]);
+  const pulseKey = pulseIds.join('|');
+  const idToIndex = useMemo(() => {
+    const m = new Map();
+    if (data) for (let i = 0; i < data.length; i++) m.set(data[i].id, i);
+    return m;
+  }, [data]);
+
+  const ringBuffers = useMemo(() => {
+    const count = pulseIds.length;
+    if (count === 0) return { count: 0 };
+    return {
+      count,
+      positions: instancedArray(new Float32Array(count * 2), 'vec2'),
+      scales: instancedArray(new Float32Array(count), 'float'),
+      colors: instancedArray(new Float32Array(count * 3), 'vec3'),
+      alphas: instancedArray(new Float32Array(count), 'float'),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pulseKey]);
+
+  const ringMesh = useMemo(() => {
+    if (!ringBuffers.count) return null;
+    const geometry = new THREE.PlaneGeometry(1, 1);
+    const material = createPulseDiscNodeMaterial({
+      instanceColor: ringBuffers.colors.element(instanceIndex),
+      instanceAlpha: ringBuffers.alphas.element(instanceIndex),
+    });
+    const rp = ringBuffers.positions.element(instanceIndex);
+    const rs = ringBuffers.scales.element(instanceIndex);
+    material.positionNode = vec3(positionLocal.xy.mul(rs.mul(2.0)).add(rp), -0.1);
+    const m = new THREE.InstancedMesh(geometry, material, ringBuffers.count);
+    m.frustumCulled = false;
+    m.renderOrder = -1; // behind the dots
+    return m;
+  }, [ringBuffers]);
+
+  useFrame((state) => {
+    if (!cosmetic || pulseIds.length === 0) return;
+    const scaleArr = cosmetic.scales.value.array;
+    const alphaArr = cosmetic.alphas.value.array;
+    const dpr = state.gl.getPixelRatio();
+    const viewBoxScale = (state.size.height / (2 * state.camera.position.z * TAN_HALF_FOV)) * dpr;
+    const rb = ringBuffers;
+    const ringPos = rb.count ? rb.positions.value.array : null;
+    const ringScale = rb.count ? rb.scales.value.array : null;
+    const ringCol = rb.count ? rb.colors.value.array : null;
+    const ringAlpha = rb.count ? rb.alphas.value.array : null;
+    let dotDirty = false;
+
+    for (let j = 0; j < pulseIds.length; j++) {
+      const id = pulseIds[j];
+      const idx = idToIndex.get(id);
+      if (idx === undefined) continue;
+      const item = data[idx];
+      const style = dotStyles.get(id) || EMPTY_STYLE;
+      const isHovered = id === hoveredId;
+      const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
+      const baseScale = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+      const baseAlpha = resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
+      const fill = resolveFill(item, style, defaultColor);
+      const ps = getPulseState(id, fill);
+
+      scaleArr[idx] = baseScale * ps.sizeMultiplier;
+      alphaArr[idx] = baseAlpha * ps.opacityMultiplier;
+      dotDirty = true;
+
+      if (!ringPos) continue;
+      if (ps.ringData) {
+        const ringRadius = calculateAdaptiveRingRadius({
+          radius: baseSize,
+          animationPhase: ps.ringData.animationPhase,
+          viewBoxScale,
+          zoomScale: 1,
+          targetPixels: ps.ringData.options?.targetPixels,
+          minRatio: ps.ringData.options?.minRatio,
+          canvasDPR: dpr,
+        });
+        const settled = settledRef.current;
+        const pos = (settled && settled[idx]) ? settled[idx] : item;
+        ringPos[j * 2] = pos.x; ringPos[j * 2 + 1] = -pos.y;
+        ringScale[j] = ringRadius;
+        _color.set(ps.ringData.color || fill);
+        ringCol[j * 3] = _color.r; ringCol[j * 3 + 1] = _color.g; ringCol[j * 3 + 2] = _color.b;
+        ringAlpha[j] = ps.ringData.opacity;
+      } else {
+        ringAlpha[j] = 0;
+      }
+    }
+
+    if (dotDirty) {
+      cosmetic.scales.value.needsUpdate = true;
+      cosmetic.alphas.value.needsUpdate = true;
+    }
+    if (rb.count) {
+      rb.positions.value.needsUpdate = true;
+      rb.scales.value.needsUpdate = true;
+      rb.colors.value.needsUpdate = true;
+      rb.alphas.value.needsUpdate = true;
+    }
   });
 
   if (!mesh) return null;
-  return <primitive object={mesh} />;
+  return (
+    <>
+      <primitive object={mesh} />
+      {ringMesh && <primitive object={ringMesh} />}
+    </>
+  );
 }

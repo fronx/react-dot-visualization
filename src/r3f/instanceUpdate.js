@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import {
+  resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus,
+} from './dotAppearance.js';
 
 const _color = new THREE.Color();
 const _ringColor = new THREE.Color();
@@ -96,13 +99,10 @@ function applyFull({
     const isHovered = item.id === hoveredId;
     const pulse = pulseDots.get(item.id);
 
-    const baseSize = customStyle.r ?? radiusOverrides.get(item.id) ?? item.size ?? defaultSize;
-    const scale = isHovered ? baseSize * hoverSizeMultiplier : baseSize;
-    const fill = customStyle.fill || customStyle.color || item.color || defaultColor || '#7c6fff';
-
-    const baseOpacity = customStyle.opacity !== undefined
-      ? customStyle.opacity
-      : (isHovered ? hoverOpacity : defaultOpacity);
+    const baseSize = resolveBaseSize(item, customStyle, radiusOverrides, defaultSize);
+    const scale = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+    const fill = resolveFill(item, customStyle, defaultColor);
+    const baseOpacity = resolveOpacity(customStyle, isHovered, hoverOpacity, defaultOpacity);
 
     const worldY = -item.y;
     const off = i * 16;
@@ -137,7 +137,7 @@ function applyFull({
     }
 
     if (focus) {
-      const focusValue = customStyle.focusRing ? 1 : 0;
+      const focusValue = resolveFocus(customStyle);
       if (focus[i] !== focusValue) {
         focus[i] = focusValue;
         needsFocusUpdate = true;
@@ -261,12 +261,10 @@ function applyDelta({
     const isHovered = id === hoveredId;
     const pulse = pulseDots.get(id);
 
-    const baseSize = customStyle.r ?? radiusOverrides.get(id) ?? item.size ?? defaultSize;
-    const scale = isHovered ? baseSize * hoverSizeMultiplier : baseSize;
-    const fill = customStyle.fill || customStyle.color || item.color || defaultColor || '#7c6fff';
-    const baseOpacity = customStyle.opacity !== undefined
-      ? customStyle.opacity
-      : (isHovered ? hoverOpacity : defaultOpacity);
+    const baseSize = resolveBaseSize(item, customStyle, radiusOverrides, defaultSize);
+    const scale = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+    const fill = resolveFill(item, customStyle, defaultColor);
+    const baseOpacity = resolveOpacity(customStyle, isHovered, hoverOpacity, defaultOpacity);
 
     const off = i * 16;
     matrix[off + 0] = scale;
@@ -287,7 +285,7 @@ function applyDelta({
     }
 
     if (focus) {
-      const focusValue = customStyle.focusRing ? 1 : 0;
+      const focusValue = resolveFocus(customStyle);
       if (focus[i] !== focusValue) {
         focus[i] = focusValue;
         needsFocusUpdate = true;
