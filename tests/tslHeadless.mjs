@@ -30,3 +30,10 @@ export async function readbackF32(renderer, storageNode, floatCount) {
   const arr = new Float32Array(buf);
   return floatCount ? arr.subarray(0, floatCount) : arr;
 }
+
+/** Read a storage buffer (instancedArray node) back as a Uint32Array view. */
+export async function readbackU32(renderer, storageNode, uintCount) {
+  const buf = await renderer.getArrayBufferAsync(storageNode.value);
+  const arr = new Uint32Array(buf);
+  return uintCount ? arr.subarray(0, uintCount) : arr;
+}

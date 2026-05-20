@@ -11,9 +11,30 @@
  * and `apply`:
  *   damped = nextVel[i] * velocityRetain;  pos += damped;  vel = damped
  */
-import { Fn, instanceIndex, Loop, If, vec2, float, max, sqrt } from 'three/tsl';
+import { Fn, instanceIndex, Loop, If, vec2, float, int, uint, floor, clamp, max, sqrt, atomicAdd } from 'three/tsl';
 
 const EPS = 1e-6;
+
+/**
+ * `countBins`: histogram particles into grid cells. Writes counts shifted by
+ * one (binCount[bin+1] += 1) so an inclusive prefix scan yields per-bin start
+ * offsets — same convention as decollision-webgpu.wgsl. `binCount` must be a
+ * `.toAtomic()` 'uint' buffer of length numBins+1, pre-zeroed.
+ *
+ * grid = { gridMinX, gridMinY, cellSize, gridDimX, gridDimY } as plain numbers
+ * (baked as literals here; production will swap to uniforms updated per frame).
+ */
+export function buildCountBins({ positions, velocities, binCount, grid, count }) {
+  const { gridMinX, gridMinY, cellSize, gridDimX, gridDimY } = grid;
+  return Fn(() => {
+    const i = instanceIndex;
+    const p = positions.element(i).add(velocities.element(i));
+    const cx = clamp(int(floor(p.x.sub(float(gridMinX)).div(float(cellSize)))), int(0), int(gridDimX - 1));
+    const cy = clamp(int(floor(p.y.sub(float(gridMinY)).div(float(cellSize)))), int(0), int(gridDimY - 1));
+    const bin = cy.mul(int(gridDimX)).add(cx);
+    atomicAdd(binCount.element(uint(bin).add(uint(1))), uint(1));
+  })().compute(count);
+}
 
 /**
  * Brute-force O(N²) collide step — the correctness baseline (no spatial hash).
