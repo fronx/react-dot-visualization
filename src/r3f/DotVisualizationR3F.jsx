@@ -1,5 +1,6 @@
 import React, {
   useState,
+  useMemo,
   useRef,
   useEffect,
   useCallback,
@@ -22,6 +23,22 @@ import { useLatest } from '../useLatest.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const EMPTY_RADIUS_OVERRIDES = new Map();
+
+// Filter to finite-coordinate items and assign fallback ids. Shared by the
+// initial processedData seed and the WebGPU seed memo so both produce the same
+// ids/ordering — which keeps the settle readback's index→item mapping valid.
+function validateData(data) {
+  if (!data || data.length === 0) return [];
+  const out = [];
+  for (let i = 0; i < data.length; i += 1) {
+    const item = data[i];
+    if (typeof item.x === 'number' && typeof item.y === 'number'
+        && Number.isFinite(item.x) && Number.isFinite(item.y)) {
+      out.push(item.id !== undefined ? item : { ...item, id: i });
+    }
+  }
+  return out;
+}
 
 // Match DotVisualization's viewBox convention: height = 100, width = 100 *
 // (W/H). Data positions, initialTransform, and the {x, y, k} transforms
@@ -96,19 +113,15 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // `processedData = []` on render 1 made R3FDots fall through to its
   // `count = data.length || 1` path and render one identity-matrix instance
   // at world origin — the "rogue centered dot" symptom.
-  const [processedData, setProcessedData] = useState(() => {
-    if (!data || data.length === 0) return [];
-    const out = [];
-    for (let i = 0; i < data.length; i += 1) {
-      const item = data[i];
-      if (typeof item.x === 'number' && typeof item.y === 'number'
-          && Number.isFinite(item.x) && Number.isFinite(item.y)) {
-        out.push(item.id !== undefined ? item : { ...item, id: i });
-      }
-    }
-    return out;
-  });
+  const [processedData, setProcessedData] = useState(() => validateData(data));
   const [hoveredId, setHoveredId] = useState(null);
+
+  // The WebGPU dots layer is seeded once from the validated input and then owns
+  // position animation on the GPU; processedData is the CPU-side *mirror* of the
+  // settled GPU state. Seeding the renderer from this `data`-keyed memo instead
+  // of processedData is what stops the settle→setProcessedData→rebuild→re-settle
+  // loop: a settle updates processedData without changing webgpuSeedData.
+  const webgpuSeedData = useMemo(() => validateData(data), [data]);
 
   const cameraInitialized = useRef(false);
 
@@ -176,6 +189,16 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       processedDataRef.current = finalData;
     }
   }, []);
+
+  // WebGPU settle bridge: the GPU sim hands back settled positions once it comes
+  // to rest. Mirror them into processedData (so fit/hover/getCurrentPositions see
+  // the true settled spread) and fire onDecollisionComplete, matching what the
+  // CPU scheduler does via syncDecollisionState + onBaseReady on the other paths.
+  const handleWebGPUSettle = useCallback((settledData) => {
+    setProcessedData(settledData);
+    processedDataRef.current = settledData;
+    onDecollisionComplete?.(settledData);
+  }, [onDecollisionComplete]);
 
   // Data effect — mirrors Canvas's data effect minus the zoom/auto-fit pieces.
   // Validates input, detects scope/length changes (which need a fresh base
@@ -473,7 +496,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           />
           <R3FCamera />
           <R3FDotsWebGPU
-            data={processedData}
+            data={webgpuSeedData}
             dotStyles={dotStyles}
             radiusOverrides={radiusOverrides}
             defaultSize={defaultSize}
@@ -481,6 +504,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             dotStroke={dotStroke}
             dotStrokeWidthFraction={dotStrokeWidthFraction}
             enableDecollisioning={enableDecollisioning}
+            onSettle={handleWebGPUSettle}
           />
         </Canvas>
       ) : (

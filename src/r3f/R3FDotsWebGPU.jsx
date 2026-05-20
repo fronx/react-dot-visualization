@@ -11,7 +11,7 @@
  * Proven in webgpu-spike-entry.jsx; this is the same pipeline parameterized by
  * the `data`/`dotStyles` props instead of synthetic input.
  */
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
 import { instanceIndex, vec3, instancedArray, positionLocal, uniform } from 'three/tsl';
@@ -94,6 +94,21 @@ function buildCosmeticBuffers(N, data, opts) {
   return cosmetic;
 }
 
+// Read the settled GPU positions back to the CPU once the sim has come to
+// rest. Positions are stored in world convention (worldY = -item.y; see
+// buildPhysicsBuffers), so the inverse negation restores viewBox-space y for
+// the caller. With decollisioning off the GPU never ran, so the seed IS final.
+async function readSettledData(renderer, buffers, data, decollisioned) {
+  if (!decollisioned) return data;
+  const arrayBuffer = await renderer.getArrayBufferAsync(buffers.positions.value);
+  const pos = new Float32Array(arrayBuffer);
+  const out = new Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    out[i] = { ...data[i], x: pos[i * 2], y: -pos[i * 2 + 1] };
+  }
+  return out;
+}
+
 function writeCosmetics(cosmetic, data, { defaultColor, dotStyles }) {
   const colAttr = cosmetic.colors.value;
   const alphaAttr = cosmetic.alphas.value;
@@ -124,6 +139,7 @@ export function R3FDotsWebGPU({
   dotStroke = '#111',
   dotStrokeWidthFraction = 0.1,
   enableDecollisioning = true,
+  onSettle,
 }) {
   const gl = useThree((s) => s.gl);
 
@@ -195,6 +211,13 @@ export function R3FDotsWebGPU({
     };
   }, [buffers]);
 
+  // One-shot GPU→CPU readback at settle. The sim is GPU-resident, so the CPU
+  // has no idea where the dots ended up — camera-fit, hover, and click all
+  // need those positions. Reset whenever the physics buffers rebuild (new
+  // point set), so each fresh decollision fires its own settle.
+  const settleFiredRef = useRef(false);
+  useEffect(() => { settleFiredRef.current = false; }, [buffers]);
+
   useFrame(() => {
     if (!pipeline) return;
     const p = pipeline;
@@ -207,7 +230,11 @@ export function R3FDotsWebGPU({
       gl.compute(p.collide);
       gl.compute(p.apply);
       p.alphaU.value += (0 - p.alphaU.value) * ALPHA_DECAY;
+      return;
     }
+    if (settleFiredRef.current || !onSettle || !buffers || !data?.length) return;
+    settleFiredRef.current = true;
+    readSettledData(gl, buffers, data, enableDecollisioning).then(onSettle);
   });
 
   if (!mesh) return null;
