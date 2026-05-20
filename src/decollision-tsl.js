@@ -120,7 +120,7 @@ export function buildPlaceParticles({ positions, velocities, binCount, placeCoun
  * validated to produce identical nextVel. Jitter on exact overlap is omitted
  * (matches the brute-force oracle; degenerate-only).
  */
-export function buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count, strength = 1 }) {
+export function buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count, strength = 1, alpha = 1 }) {
   const { gridMinX, gridMinY, cellSize, gridDimX, gridDimY } = grid;
   return Fn(() => {
     const i = instanceIndex;
@@ -152,7 +152,7 @@ export function buildCollideSpatial({ positions, velocities, radii, nextVel, bin
             const dist2 = d.dot(d);
             If(dist2.lessThan(minDist.mul(minDist)), () => {
               const dist = sqrt(dist2);
-              const scale = minDist.sub(dist).div(dist).mul(float(strength));
+              const scale = minDist.sub(dist).div(dist).mul(float(strength)).mul(alpha);
               const weight = rJ.mul(rJ).div(rI2.add(rJ.mul(rJ)));
               total.addAssign(d.mul(scale.mul(weight)));
             });
@@ -176,4 +176,15 @@ export function buildApply({ positions, velocities, nextVel, count, velocityReta
     positions.element(i).addAssign(damped);
     velocities.element(i).assign(damped);
   })().compute(count);
+}
+
+/**
+ * Zero an atomic `uint` storage buffer. The headless checks created fresh
+ * buffers per run; a continuous frame loop reuses them, so the atomic
+ * accumulators (binCount, placeCounter) must be reset before each iteration.
+ */
+export function buildClearAtomicU32({ buffer, length }) {
+  return Fn(() => {
+    atomicStore(buffer.element(instanceIndex), uint(0));
+  })().compute(length);
 }
