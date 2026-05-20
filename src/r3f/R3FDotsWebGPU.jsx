@@ -11,7 +11,7 @@
  * Proven in webgpu-spike-entry.jsx; this is the same pipeline parameterized by
  * the `data`/`dotStyles` props instead of synthetic input.
  */
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
 import { instanceIndex, vec3, instancedArray, positionLocal, uniform } from 'three/tsl';
@@ -32,19 +32,27 @@ function scanIterations(n) {
   return iters;
 }
 
-// Build the storage buffers + grid from data. Positions use R3FDots' world
-// convention (worldY = -item.y). The dot radius matches R3FDots exactly:
-// baseSize = customStyle.r ?? radiusOverride ?? item.size ?? defaultSize, used
-// directly as the world-space circle radius (its quad is scaled to 2*radius).
-function buildBuffers(data, { defaultSize, defaultColor, dotStyles, radiusOverrides }) {
+// Physics radius matches R3FDots: radiusOverride ?? item.size ?? defaultSize.
+// `dotStyles.r` (focus enlargement) is mirrored into radiusOverrides by the
+// caller, so it reaches the sim through that path — the physics buffers never
+// read dotStyles, which is what lets cosmetic style churn skip a rebuild.
+function physicsRadius(item, { defaultSize, radiusOverrides }) {
+  const baseSize = radiusOverrides?.get(item.id) ?? item.size ?? defaultSize;
+  return Math.max(0.0001, baseSize);
+}
+
+// Build the position/velocity/grid storage buffers + the simulation's static
+// inputs (radii, sort scratch). Positions use R3FDots' world convention
+// (worldY = -item.y) and seed the GPU sim from the raw, un-decollided input —
+// the spread the decollision animates away from. Rebuilt only when the point
+// set or its physical sizes change, never on cosmetic restyle, so the alpha
+// schedule (created alongside, in `pipeline`) runs once to completion instead
+// of restarting on every hover/selection/pulse frame.
+function buildPhysicsBuffers(data, { defaultSize, radiusOverrides }) {
   const N = data.length;
   const pos = new Float32Array(N * 2);
   const rad = new Float32Array(N);
-  const col = new Float32Array(N * 3);
-  const alpha = new Float32Array(N);
-  const focus = new Float32Array(N);
   const nodes = new Array(N);
-  const tmp = new THREE.Color();
 
   for (let i = 0; i < N; i++) {
     const item = data[i];
@@ -52,14 +60,7 @@ function buildBuffers(data, { defaultSize, defaultColor, dotStyles, radiusOverri
     const y = -item.y;
     pos[i * 2] = x; pos[i * 2 + 1] = y;
     nodes[i] = { x, y };
-
-    const style = dotStyles && dotStyles.get(item.id);
-    const baseSize = style?.r ?? radiusOverrides?.get(item.id) ?? item.size ?? defaultSize;
-    rad[i] = Math.max(0.0001, baseSize);
-    tmp.set(style?.fill ?? item.color ?? defaultColor ?? '#888');
-    col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
-    alpha[i] = style?.opacity != null ? Number(style.opacity) : 1;
-    focus[i] = style?.focusRing ? 1 : 0;
+    rad[i] = physicsRadius(item, { defaultSize, radiusOverrides });
   }
 
   const grid = computeGridParams(nodes, rad);
@@ -75,10 +76,43 @@ function buildBuffers(data, { defaultSize, defaultColor, dotStyles, radiusOverri
     scratch: instancedArray(new Uint32Array(len), 'uint'),
     placeCounter: instancedArray(new Uint32Array(grid.numBins), 'uint').toAtomic(),
     sortedIndices: instancedArray(new Uint32Array(N), 'uint'),
-    colors: instancedArray(col, 'vec3'),
-    alphas: instancedArray(alpha, 'float'),
-    focus: instancedArray(focus, 'float'),
   };
+}
+
+// Per-instance appearance: color/alpha/focus-ring. Lives in its own buffers so
+// restyling (hover, selection, pulse, semantic colors) writes these in place
+// without touching the position buffers or resetting the decollision alpha.
+// Seeded from the current style at build time so the first paint is correct
+// (the in-place rewrite on restyle runs after commit, too late for frame 1).
+function buildCosmeticBuffers(N, data, opts) {
+  const cosmetic = {
+    colors: instancedArray(new Float32Array(N * 3), 'vec3'),
+    alphas: instancedArray(new Float32Array(N), 'float'),
+    focus: instancedArray(new Float32Array(N), 'float'),
+  };
+  writeCosmetics(cosmetic, data, opts);
+  return cosmetic;
+}
+
+function writeCosmetics(cosmetic, data, { defaultColor, dotStyles }) {
+  const colAttr = cosmetic.colors.value;
+  const alphaAttr = cosmetic.alphas.value;
+  const focusAttr = cosmetic.focus.value;
+  const col = colAttr.array;
+  const alpha = alphaAttr.array;
+  const focus = focusAttr.array;
+  const tmp = new THREE.Color();
+  for (let i = 0; i < data.length; i++) {
+    const item = data[i];
+    const style = dotStyles && dotStyles.get(item.id);
+    tmp.set(style?.fill ?? item.color ?? defaultColor ?? '#888');
+    col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
+    alpha[i] = style?.opacity != null ? Number(style.opacity) : 1;
+    focus[i] = style?.focusRing ? 1 : 0;
+  }
+  colAttr.needsUpdate = true;
+  alphaAttr.needsUpdate = true;
+  focusAttr.needsUpdate = true;
 }
 
 export function R3FDotsWebGPU({
@@ -93,18 +127,38 @@ export function R3FDotsWebGPU({
 }) {
   const gl = useThree((s) => s.gl);
 
+  // Physics buffers rebuild only when the point set or its sizes change —
+  // seeding the sim from raw positions and (via `pipeline`) resetting the
+  // alpha schedule. Cosmetic restyle deliberately does NOT invalidate these.
   const buffers = useMemo(
-    () => (data && data.length ? buildBuffers(data, { defaultSize, defaultColor, dotStyles, radiusOverrides }) : null),
-    [data, defaultSize, defaultColor, dotStyles, radiusOverrides],
+    () => (data && data.length ? buildPhysicsBuffers(data, { defaultSize, radiusOverrides }) : null),
+    [data, defaultSize, radiusOverrides],
   );
 
+  // Cosmetic buffers are sized to the physics buffers, seeded with the current
+  // style, and rewritten in place on restyle — so hover/selection/pulse never
+  // restart the decollision. The seed-at-build deps intentionally exclude
+  // dotStyles/defaultColor: the effect below handles restyle without a rebuild.
+  const cosmetic = useMemo(
+    () => (buffers && data && data.length
+      ? buildCosmeticBuffers(buffers.N, data, { defaultColor, dotStyles })
+      : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [buffers],
+  );
+  useEffect(() => {
+    if (cosmetic && data && data.length) {
+      writeCosmetics(cosmetic, data, { defaultColor, dotStyles });
+    }
+  }, [cosmetic, data, defaultColor, dotStyles]);
+
   const mesh = useMemo(() => {
-    if (!buffers) return null;
+    if (!buffers || !cosmetic) return null;
     const geometry = new THREE.PlaneGeometry(1, 1);
     const material = createBevelStrokeNodeMaterial({
-      instanceColor: buffers.colors.element(instanceIndex),
-      instanceAlpha: buffers.alphas.element(instanceIndex),
-      instanceFocus: buffers.focus.element(instanceIndex),
+      instanceColor: cosmetic.colors.element(instanceIndex),
+      instanceAlpha: cosmetic.alphas.element(instanceIndex),
+      instanceFocus: cosmetic.focus.element(instanceIndex),
       strokeColor: dotStroke,
       strokeWidthFraction: dotStrokeWidthFraction,
     });
@@ -114,7 +168,7 @@ export function R3FDotsWebGPU({
     const m = new THREE.InstancedMesh(geometry, material, buffers.N);
     m.frustumCulled = false;
     return m;
-  }, [buffers, dotStroke, dotStrokeWidthFraction]);
+  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction]);
 
   const pipeline = useMemo(() => {
     if (!buffers) return null;
