@@ -9,6 +9,7 @@ import {
 import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
+import { applyDotStylesToInstances } from './instanceUpdate.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const TAN_HALF_FOV = Math.tan(CAMERA_FOV_RAD / 2);
@@ -68,6 +69,10 @@ export function R3FDots({
   const prevHoverOpacityRef = useRef(hoverOpacity);
   const prevHoverSizeMultRef = useRef(hoverSizeMultiplier);
   const prevRadiusOverridesRef = useRef(radiusOverrides);
+  // Snapshot of the last applyDotStylesToInstances inputs + outputs. Lets the
+  // next call take the delta path when only style refs flap (data positions
+  // stable). Null = no prior snapshot → full rebuild.
+  const prevSnapshotRef = useRef(null);
 
   const material = useMemo(
     () => createBevelStrokeMaterial(dotStroke || '#111', dotStrokeWidthFraction),
@@ -115,6 +120,11 @@ export function R3FDots({
       geom.setAttribute('instanceAlpha', attr);
     }
     ringAlphaAttrRef.current = attr;
+    // Pre-create instanceColor so the slow path can write directly to the
+    // backing Float32Array without Three.js's lazy-on-setColorAt creation.
+    if (!ringMesh.instanceColor || ringMesh.instanceColor.array.length < count * 3) {
+      ringMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
+    }
   }, [data.length, pulseDots]);
 
   // (Re)attach per-instance alpha buffer to the dot geometry. Drives
@@ -142,6 +152,10 @@ export function R3FDots({
       geom.setAttribute('instanceFocus', focusAttr);
     }
     dotFocusAttrRef.current = focusAttr;
+    // Pre-create instanceColor (same rationale as the ring mesh above).
+    if (!mesh.instanceColor || mesh.instanceColor.array.length < count * 3) {
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
+    }
   }, [data.length]);
 
   // Apply static instance attributes when data/style changes.
@@ -155,15 +169,18 @@ export function R3FDots({
     // Fast path: sim-completion (positions changed, everything else stable).
     // Same translation-column patch as Pass 1 in useFrame.
     const prevDotInfo = dotInfoByIdRef.current;
+    const dotStylesSame = dotStyles === prevDotStylesRef.current;
+    const pulseDotsSame = pulseDots === prevPulseDotsRef.current;
+    const radiusOverridesSame = radiusOverrides === prevRadiusOverridesRef.current;
     const nonDataDepsUnchanged =
-      dotStyles === prevDotStylesRef.current
-      && pulseDots === prevPulseDotsRef.current
+      dotStylesSame
+      && pulseDotsSame
       && defaultColor === prevDefaultColorRef.current
       && defaultSize === prevDefaultSizeRef.current
       && defaultOpacity === prevDefaultOpacityRef.current
       && hoverOpacity === prevHoverOpacityRef.current
       && hoverSizeMultiplier === prevHoverSizeMultRef.current
-      && radiusOverrides === prevRadiusOverridesRef.current;
+      && radiusOverridesSame;
 
     if (nonDataDepsUnchanged && prevDotInfo.size === data.length && data.length > 0) {
       const matrixArr = mesh.instanceMatrix.array;
@@ -193,6 +210,12 @@ export function R3FDots({
       if (fastPathOk) {
         mesh.instanceMatrix.needsUpdate = true;
         if (ringMesh) ringMesh.instanceMatrix.needsUpdate = true;
+        // Advance the delta snapshot's data ref. The fast path mutated
+        // dotInfoById positions in place (that Map IS the snapshot's), and
+        // styles are unchanged here — so the only thing the next delta needs
+        // is the new data ref. Without this, the next style-only change sees
+        // prev.data !== data and is forced down the full path.
+        if (prevSnapshotRef.current) prevSnapshotRef.current.data = data;
         return;
       }
     }
@@ -206,107 +229,50 @@ export function R3FDots({
     prevHoverSizeMultRef.current = hoverSizeMultiplier;
     prevRadiusOverridesRef.current = radiusOverrides;
 
-    const dynamicDots = [];
-    const dynamicDotsById = new Map();
-    const dotInfoById = new Map();
     const activeHoveredId = hoveredIdRef.current;
-    let needsMatrixUpdate = false;
-    let needsColorUpdate = false;
-    let needsAlphaUpdate = false;
-    let needsFocusUpdate = false;
-    let needsRingMatrixUpdate = false;
-    let needsRingColorUpdate = false;
-
-    data.forEach((item, i) => {
-      const customStyle = dotStyles.get(item.id) || {};
-      const isHovered = item.id === activeHoveredId;
-      const pulse = pulseDots.get(item.id);
-
-      const baseSize = customStyle.r ?? radiusOverrides.get(item.id) ?? item.size ?? defaultSize;
-      const scale = isHovered ? baseSize * hoverSizeMultiplier : baseSize;
-      const fill = customStyle.fill || customStyle.color || item.color || defaultColor || '#7c6fff';
-
-      // Opacity resolution (mirrors Canvas):
-      //   customStyle.opacity wins over hover/default; pulse multiplier
-      //   composes on top in useFrame.
-      const baseOpacity = customStyle.opacity !== undefined
-        ? customStyle.opacity
-        : (isHovered ? hoverOpacity : defaultOpacity);
-
-      _dummy.position.set(item.x, -item.y, 0);
-      _dummy.scale.setScalar(scale);
-      _dummy.updateMatrix();
-      mesh.setMatrixAt(i, _dummy.matrix);
-      needsMatrixUpdate = true;
-
-      _color.set(fill);
-      mesh.setColorAt(i, _color);
-      needsColorUpdate = true;
-
-      if (dotAlphaAttr) {
-        dotAlphaAttr.array[i] = baseOpacity;
-        needsAlphaUpdate = true;
-      }
-
-      if (dotFocusAttr) {
-        const focusValue = customStyle.focusRing ? 1 : 0;
-        if (dotFocusAttr.array[i] !== focusValue) {
-          dotFocusAttr.array[i] = focusValue;
-          needsFocusUpdate = true;
-        }
-      }
-
-      dotInfoById.set(item.id, {
-        index: i,
-        x: item.x,
-        y: -item.y,
-        baseScale: baseSize,
-        baseOpacity,
-        customOpacity: customStyle.opacity,
-      });
-
-      if (pulse) {
-        const dynamicDot = {
-          id: item.id,
-          index: i,
-          x: item.x,
-          y: -item.y,
-          baseScale: scale,
-          baseFill: fill,
-          baseOpacity,
-        };
-        dynamicDots.push(dynamicDot);
-        dynamicDotsById.set(item.id, dynamicDot);
-      }
-
-      // Ring effect
-      if (ringMesh) {
-        _dummy.position.set(item.x, -item.y, -0.1);
-        _dummy.scale.setScalar(0);
-        _dummy.updateMatrix();
-        ringMesh.setMatrixAt(i, _dummy.matrix);
-        needsRingMatrixUpdate = true;
-
-        _ringColor.set(pulse?.pulseColor || fill);
-        ringMesh.setColorAt(i, _ringColor);
-        needsRingColorUpdate = true;
-      }
+    const defaultsSnap = {
+      defaultColor, defaultSize, defaultOpacity, hoverOpacity, hoverSizeMultiplier,
+    };
+    const result = applyDotStylesToInstances({
+      data,
+      dotStyles,
+      pulseDots,
+      radiusOverrides,
+      defaults: defaultsSnap,
+      hoveredId: activeHoveredId,
+      buffers: {
+        matrix: mesh.instanceMatrix.array,
+        color: mesh.instanceColor.array,
+        alpha: dotAlphaAttr ? dotAlphaAttr.array : null,
+        focus: dotFocusAttr ? dotFocusAttr.array : null,
+      },
+      ringBuffers: ringMesh ? {
+        matrix: ringMesh.instanceMatrix.array,
+        color: ringMesh.instanceColor.array,
+      } : null,
+      prev: prevSnapshotRef.current,
     });
 
-    dynamicDotsRef.current = dynamicDots;
-    dynamicDotsByIdRef.current = dynamicDotsById;
-    dotInfoByIdRef.current = dotInfoById;
+    dynamicDotsRef.current = result.dynamicDots;
+    dynamicDotsByIdRef.current = result.dynamicDotsById;
+    dotInfoByIdRef.current = result.dotInfoById;
     prevHoveredIdRef.current = activeHoveredId;
     prevHoverSizeMultiplierRef.current = hoverSizeMultiplier;
 
-    if (needsMatrixUpdate) mesh.instanceMatrix.needsUpdate = true;
-    if (needsColorUpdate && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    if (needsAlphaUpdate && dotAlphaAttr) dotAlphaAttr.needsUpdate = true;
-    if (needsFocusUpdate && dotFocusAttr) dotFocusAttr.needsUpdate = true;
-    if (ringMesh && needsRingMatrixUpdate) {
-      ringMesh.instanceMatrix.needsUpdate = true;
-    }
-    if (ringMesh && needsRingColorUpdate && ringMesh.instanceColor) {
+    prevSnapshotRef.current = {
+      data, dotStyles, pulseDots, radiusOverrides,
+      defaults: defaultsSnap, hoveredId: activeHoveredId,
+      dotInfoById: result.dotInfoById,
+      dynamicDots: result.dynamicDots,
+      dynamicDotsById: result.dynamicDotsById,
+    };
+
+    if (result.dirty.matrix) mesh.instanceMatrix.needsUpdate = true;
+    if (result.dirty.color && mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    if (result.dirty.alpha && dotAlphaAttr) dotAlphaAttr.needsUpdate = true;
+    if (result.dirty.focus && dotFocusAttr) dotFocusAttr.needsUpdate = true;
+    if (ringMesh && result.dirty.ringMatrix) ringMesh.instanceMatrix.needsUpdate = true;
+    if (ringMesh && result.dirty.ringColor && ringMesh.instanceColor) {
       ringMesh.instanceColor.needsUpdate = true;
     }
   }, [data, dotStyles, pulseDots, defaultColor, defaultSize, defaultOpacity, hoverOpacity, hoverSizeMultiplier, radiusOverrides]);
