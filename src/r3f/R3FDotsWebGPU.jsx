@@ -15,7 +15,7 @@
 import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { instanceIndex, vec3, instancedArray, positionLocal, uniform } from 'three/tsl';
+import { instanceIndex, vec3, instancedArray, positionLocal, uniform, select, float } from 'three/tsl';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import { computeGridParams } from '../decollision-webgpu.js';
 import {
@@ -37,6 +37,7 @@ const TAN_HALF_FOV = Math.tan(CAMERA_FOV_RAD / 2);
 const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
+const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
 
 function scanIterations(n) {
   if (n <= 1) return 0;
@@ -170,6 +171,27 @@ async function readSettledData(renderer, buffers, data, decollisioned) {
   return out;
 }
 
+// Bevel-stroke dot mesh: per-instance color/alpha/focus/scale from `cosmetic`
+// and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
+// instanceIndex; the hover overlay reuses this with a fixed uniform index.
+// `scaleMul` lets the main mesh collapse the hovered instance to zero size.
+function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul }) {
+  const material = createBevelStrokeNodeMaterial({
+    instanceColor: cosmetic.colors.element(indexNode),
+    instanceAlpha: cosmetic.alphas.element(indexNode),
+    instanceFocus: cosmetic.focus.element(indexNode),
+    strokeColor: dotStroke,
+    strokeWidthFraction: dotStrokeWidthFraction,
+  });
+  const baseScale = cosmetic.scales.element(indexNode);
+  const scale = scaleMul ? baseScale.mul(scaleMul) : baseScale;
+  const pos = buffers.positions.element(indexNode);
+  material.positionNode = vec3(positionLocal.xy.mul(scale.mul(2.0)).add(pos), 0);
+  const m = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), material, count);
+  m.frustumCulled = false;
+  return m;
+}
+
 export function R3FDotsWebGPU({
   data,
   dotStyles,
@@ -219,23 +241,26 @@ export function R3FDotsWebGPU({
   }, [cosmetic, data, defaultColor, defaultSize, defaultOpacity, dotStyles,
       radiusOverrides, hoveredId, hoverSizeMultiplier, hoverOpacity]);
 
+  // Hovered instance index, read in-shader by the main mesh (to drop it) and the overlay (to redraw it on top).
+  const hoveredIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
+
   const mesh = useMemo(() => {
     if (!buffers || !cosmetic) return null;
-    const geometry = new THREE.PlaneGeometry(1, 1);
-    const material = createBevelStrokeNodeMaterial({
-      instanceColor: cosmetic.colors.element(instanceIndex),
-      instanceAlpha: cosmetic.alphas.element(instanceIndex),
-      instanceFocus: cosmetic.focus.element(instanceIndex),
-      strokeColor: dotStroke,
-      strokeWidthFraction: dotStrokeWidthFraction,
-    });
-    const instPos = buffers.positions.element(instanceIndex);
-    const instScale = cosmetic.scales.element(instanceIndex);
-    material.positionNode = vec3(positionLocal.xy.mul(instScale.mul(2.0)).add(instPos), 0);
-    const m = new THREE.InstancedMesh(geometry, material, buffers.N);
-    m.frustumCulled = false;
+    // Collapse the hovered instance to zero size so it draws once: the overlay
+    // redraws it on top (the canvas renderer draws the hovered dot last).
+    const scaleMul = select(instanceIndex.equal(hoveredIndexU), float(0), float(1));
+    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul });
+  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU]);
+
+  // Redraw the hovered dot after the main mesh (renderOrder 1) so it sits on top
+  // of overlapping dots, matching the canvas renderer.
+  const hoverMesh = useMemo(() => {
+    if (!buffers || !cosmetic) return null;
+    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction });
+    m.renderOrder = 1;
+    m.visible = false;
     return m;
-  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction]);
+  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU]);
 
   const pipeline = useMemo(() => {
     if (!buffers) return null;
@@ -312,6 +337,20 @@ export function R3FDotsWebGPU({
     if (data) for (let i = 0; i < data.length; i++) m.set(data[i].id, i);
     return m;
   }, [data]);
+
+  // Hide the overlay when nothing is hovered; resetting the index also
+  // un-collapses the previously-hovered instance in the main mesh.
+  useEffect(() => {
+    if (!hoverMesh) return;
+    const idx = hoveredId != null ? idToIndex.get(hoveredId) : undefined;
+    if (idx === undefined) {
+      hoveredIndexU.value = NO_HOVER_INDEX;
+      hoverMesh.visible = false;
+      return;
+    }
+    hoveredIndexU.value = idx;
+    hoverMesh.visible = true;
+  }, [hoverMesh, hoveredId, idToIndex, hoveredIndexU]);
 
   const ringBuffers = useMemo(() => {
     const count = pulseIds.length;
@@ -411,6 +450,7 @@ export function R3FDotsWebGPU({
   return (
     <>
       <primitive object={mesh} />
+      {hoverMesh && <primitive object={hoverMesh} />}
       {ringMesh && <primitive object={ringMesh} />}
     </>
   );
