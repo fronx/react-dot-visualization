@@ -27,7 +27,7 @@
 import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { Fn, instanceIndex, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
+import { Fn, instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
 import { easeCubicOut } from 'd3';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import {
@@ -38,9 +38,10 @@ import { computeGridParams } from '../decollision-webgpu.js';
 import {
   buildCountBins, buildScanStep, buildPlaceParticles, buildCollideSpatial,
   buildApply, buildMeasureMaxVelocitySquared, buildClearAtomicU32,
+  buildPickNearest, buildStoreAtomicU32, pickIndexBits,
 } from '../decollision-tsl.js';
 import {
-  resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus,
+  resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus, resolveHoverRadius,
 } from './dotAppearance.js';
 import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
@@ -213,6 +214,24 @@ async function readbackMaxVelocitySquared(renderer, metricBuffer) {
   return new Uint32Array(arrayBuffer)[0] ?? 0;
 }
 
+// Fill a per-dot pick-radius buffer via the shared resolveHoverRadius rule (same
+// hit geometry as the CPU spatial grid). A dedicated buffer, separate from the
+// sim's physics collision radii, so picking and decollision stay independent.
+function writePickRadii(array, data, radiusOverrides, defaultSize, hoverSizeMultiplier) {
+  for (let i = 0; i < data.length; i++) {
+    array[i] = resolveHoverRadius(data[i], radiusOverrides, defaultSize, hoverSizeMultiplier);
+  }
+}
+
+// Read back the packed pick result (one u32). 0xffffffff = no hit; otherwise the
+// low `indexBits` bits hold the hit instance index (see buildPickNearest).
+async function readbackPick(renderer, pickResult, indexBits) {
+  const arrayBuffer = await renderer.getArrayBufferAsync(pickResult.value);
+  const packed = new Uint32Array(arrayBuffer)[0] >>> 0;
+  if (packed === 0xffffffff) return -1;
+  return packed & ((2 ** indexBits) - 1);
+}
+
 // Two trivial kernels for the GPU lerp: snapshot the live positions into fromPos
 // (one GPU→GPU copy at transition start), then mix fromPos→targetPos by a uniform
 // t each frame. No per-frame CPU↔GPU copy — just the t uniform.
@@ -343,6 +362,7 @@ export function R3FDotsWebGPU({
   hoverOpacity = 1.0,
   positionsAreIntermediate = false,
   gpuControlRef = null,
+  pickControlRef = null,
 }) {
   const gl = useThree((s) => s.gl);
 
@@ -424,6 +444,62 @@ export function R3FDotsWebGPU({
   useEffect(() => () => {
     if (lerpKernels) disposeComputeNodes([lerpKernels.snapshot, lerpKernels.mixStep]);
   }, [lerpKernels]);
+
+  // ── GPU hover/click picking ───────────────────────────────────────────────
+  // The position buffer is always current (sim or lerp writes it in-shader, the
+  // streaming effect writes it in place), so hit-testing against it tracks the
+  // live layout during decollision — where a CPU spatial grid built from the
+  // settled positions lags. The pick kernel reduces to one packed (dist, index)
+  // u32 via atomicMin; only 4 bytes cross back per pointer event. Per-seed
+  // (rebuilt on a count change), so the index→dot mapping stays valid.
+  const pickCursorU = useMemo(() => uniform(vec2(0, 0)), []);
+  const pickThresholdU = useMemo(() => uniform(float(0)), []);
+  const pick = useMemo(() => {
+    if (!buffers) return null;
+    const N = buffers.N;
+    const pickResult = instancedArray(new Uint32Array(1), 'uint').toAtomic();
+    const pickRadii = instancedArray(new Float32Array(N), 'float');
+    return {
+      pickResult,
+      pickRadii,
+      indexBits: pickIndexBits(N),
+      clear: buildStoreAtomicU32({ buffer: pickResult, value: 0xffffffff }),
+      pickNearest: buildPickNearest({
+        positions: buffers.positions, pickRadii, pickResult,
+        cursor: pickCursorU, threshold: pickThresholdU, count: N,
+      }),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buffers]);
+  // Pick radii mirror the CPU hover grid's hit geometry; rewritten in place
+  // whenever a size input changes (e.g. the dot-size slider) so a fresh
+  // decollision after a resize picks against the new radii.
+  useEffect(() => {
+    if (pick && data && data.length) {
+      writePickRadii(pick.pickRadii.value.array, data, radiusOverrides, defaultSize, hoverSizeMultiplier);
+      pick.pickRadii.value.needsUpdate = true;
+    }
+  }, [pick, data, radiusOverrides, defaultSize, hoverSizeMultiplier]);
+  useEffect(() => () => {
+    if (pick) {
+      disposeStorageBuffers(gl, [pick.pickResult, pick.pickRadii]);
+      disposeComputeNodes([pick.clear, pick.pickNearest]);
+    }
+  }, [pick, gl]);
+
+  // Pick is a coalesced one-in-flight request: HoverDetector publishes the latest
+  // desired cursor (click takes priority over hover-move); the useFrame loop runs
+  // the kernel for it when none is in flight, then routes the resolved index back
+  // through the request's callback. All gl.compute stays inside the frame loop.
+  const pickInFlightRef = useRef(false);
+  useEffect(() => {
+    if (!pickControlRef) return;
+    const channel = { move: null, click: null };
+    pickControlRef.current = channel;
+    return () => {
+      if (pickControlRef.current === channel) pickControlRef.current = null;
+    };
+  }, [pickControlRef]);
 
   // ── Decollision job state, driven by the scheduler's request channel ──────
   // jobRef holds the current GPU job ({ mode: 'idle' | 'sim' | 'lerp' | 'settling' }
@@ -559,6 +635,28 @@ export function R3FDotsWebGPU({
   // Consume the latest request, then step the current job. One useFrame owns the
   // GPU decollision; the density-RT render below reads the positions it writes.
   useFrame(() => {
+    // Service the highest-priority pending pick (click over hover-move) when none
+    // is in flight. Reads the position buffer as left by the previous frame — a
+    // one-frame lag that's invisible for hit-testing, and keeps every gl.compute
+    // inside this loop. The 4-byte result routes back via the request callback.
+    if (pick && pickControlRef && pickControlRef.current && !pickInFlightRef.current) {
+      const channel = pickControlRef.current;
+      const req = channel.click || channel.move;
+      if (req) {
+        if (channel.click === req) channel.click = null; else channel.move = null;
+        pickInFlightRef.current = true;
+        pickCursorU.value.set(req.x, req.y);
+        pickThresholdU.value = req.threshold;
+        gl.compute(pick.clear);
+        gl.compute(pick.pickNearest);
+        const onResult = req.onResult;
+        readbackPick(gl, pick.pickResult, pick.indexBits).then((index) => {
+          pickInFlightRef.current = false;
+          onResult(index);
+        });
+      }
+    }
+
     const channel = gpuControlRef && gpuControlRef.current;
     if (channel && channel.request && channel.request.id !== handledReqId.current) {
       handledReqId.current = channel.request.id;

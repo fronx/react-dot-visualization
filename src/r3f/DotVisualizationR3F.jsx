@@ -164,6 +164,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // the GPU. A plain ref object decouples the scheduler (here, outside the
   // Canvas) from the GPU work (inside it), race-free against the lazy mount.
   const gpuControlRef = useRef({ request: null });
+  // Pick channel: R3FDotsWebGPU publishes a GPU pick fn here, HoverDetector
+  // drives it. Lets WebGPU hit-test against the live position buffer (so hover/
+  // click track the moving dots during decollision) instead of a CPU spatial
+  // grid built from the settled layout.
+  const pickControlRef = useRef(null);
   const gpuExecutor = useMemo(
     () => makeGpuExecutor(gpuControlRef, {
       baseMaxIterations: BASE_MAX_SOLVER_ITERATIONS,
@@ -533,6 +538,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             hoverOpacity={hoverOpacity}
             positionsAreIntermediate={positionsAreIntermediate}
             gpuControlRef={gpuControlRef}
+            pickControlRef={pickControlRef}
           />
           <HoverDetector
             data={processedData}
@@ -544,6 +550,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onHoveredIdChange={setHoveredId}
             onDotClick={handleDotClick}
             onBackgroundClick={handleBackgroundClick}
+            pickControlRef={pickControlRef}
           />
         </Canvas>
       ) : (

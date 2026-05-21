@@ -7,6 +7,7 @@ import { R3FCamera } from './R3FCamera.jsx';
 import { computeFitZ, CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { buildSpatialGrid, queryRadius } from '../spatialIndex.js';
 import { useHoverDispatcher } from '../useHoverDispatcher.js';
+import { resolveHoverRadius } from './dotAppearance.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 
@@ -23,8 +24,7 @@ function buildHoverSpatialIndex(data, radiusOverrides, defaultSize, hoverSizeMul
   let maxHoverRadius = 0;
 
   for (const item of data) {
-    const effectiveSize = radiusOverrides.get(item.id) ?? item.size ?? defaultSize;
-    const hoverRadius = effectiveSize * hoverSizeMultiplier;
+    const hoverRadius = resolveHoverRadius(item, radiusOverrides, defaultSize, hoverSizeMultiplier);
     maxHoverRadius = Math.max(maxHoverRadius, hoverRadius);
 
     entries.push({
@@ -78,17 +78,34 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
 }
 
 // Renderer-agnostic: raycasts a z=0 plane (pure three-core math against the
-// camera) and resolves the nearest dot via a CPU spatial index over `data`.
-// Touches no GPU meshes, so the WebGPU backend mounts it directly.
-export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onBackgroundClick }) {
+// camera) and resolves the nearest dot. WebGL resolves it via a CPU spatial
+// index over `data`; WebGPU (when `pickControlRef` is supplied) defers to a GPU
+// pick kernel that reads the live position buffer, so hit-testing tracks the
+// moving dots during decollision rather than the settled `data`. Touches no GPU
+// meshes either way, so the WebGPU backend mounts it directly.
+export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onBackgroundClick, pickControlRef = null }) {
   const { camera, gl } = useThree();
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
+  const useGpuPick = !!pickControlRef;
   const spatialIndex = useMemo(
-    () => buildHoverSpatialIndex(data, radiusOverrides, defaultSize, hoverSizeMultiplier),
-    [data, radiusOverrides, defaultSize, hoverSizeMultiplier]
+    () => (useGpuPick ? null : buildHoverSpatialIndex(data, radiusOverrides, defaultSize, hoverSizeMultiplier)),
+    [useGpuPick, data, radiusOverrides, defaultSize, hoverSizeMultiplier]
   );
+  // Latest data, read inside async pick callbacks to map a resolved index back
+  // to its dot. The GPU buffer order matches `data` (both positional), so
+  // `data[index]` is the hit dot.
+  const dataRef = useRef(data);
+  dataRef.current = data;
 
   const dispatcher = useHoverDispatcher({ onHover, onLeave, onHoveredIdChange });
+
+  // Publish the latest cursor into the GPU pick channel; R3FDotsWebGPU's frame
+  // loop services it and calls `onResult(index)`. The single writer for both
+  // hover-move ('move') and click ('click') slots.
+  const publishPick = useCallback((slot, threshold, onResult) => {
+    const channel = pickControlRef?.current;
+    if (channel) channel[slot] = { x: _worldPos.x, y: _worldPos.y, threshold, onResult };
+  }, [pickControlRef]);
 
   // Cache canvas bounds; avoid layout reads on every mouse event.
   useEffect(() => {
@@ -113,6 +130,10 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
     let rafId = 0;
     let pendingX = 0;
     let pendingY = 0;
+    // True while the pointer is inside the canvas. The GPU pick resolves a frame
+    // or two later; without this gate an in-flight (or queued) pick could land
+    // after mouseleave and re-hover a dot we already reported as zone-left.
+    let inside = false;
 
     const processMove = () => {
       rafId = 0;
@@ -126,12 +147,21 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
 
       // Threshold scales with camera Z to maintain consistent screen-space feel
       const threshold = 0.015 * camera.position.z;
-      const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
 
+      if (useGpuPick) {
+        publishPick('move', threshold, (index) => {
+          if (!inside) return;
+          dispatcher.move(index >= 0 ? (dataRef.current[index] ?? null) : null);
+        });
+        return;
+      }
+
+      const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
       dispatcher.move(nearest ?? null);
     };
 
     const handleMove = (e) => {
+      inside = true;
       pendingX = e.clientX;
       pendingY = e.clientY;
       if (!rafId) {
@@ -140,12 +170,15 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
     };
 
     const handleLeave = () => {
+      inside = false;
       // Drop any batched move so a stale raycast can't re-hover after we've
       // already reported the zone-leave.
       if (rafId) {
         cancelAnimationFrame(rafId);
         rafId = 0;
       }
+      // Cancel a queued GPU pick too (an in-flight one is gated by `inside`).
+      if (useGpuPick && pickControlRef.current) pickControlRef.current.move = null;
       dispatcher.leaveZone();
     };
 
@@ -158,7 +191,7 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       canvas.removeEventListener('mousemove', handleMove);
       canvas.removeEventListener('mouseleave', handleLeave);
     };
-  }, [camera, gl, dispatcher, spatialIndex]);
+  }, [camera, gl, dispatcher, spatialIndex, useGpuPick, pickControlRef, publishPick]);
 
   // Click detection
   useEffect(() => {
@@ -174,8 +207,19 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       if (!_raycaster.ray.intersectPlane(_zeroPlane, _worldPos)) return;
 
       const threshold = 0.015 * camera.position.z;
-      const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
 
+      if (useGpuPick) {
+        // No `inside` gate: a click is user-initiated, not a hover re-trigger,
+        // so it should land even if the pointer left between press and resolve.
+        publishPick('click', threshold, (index) => {
+          const item = index >= 0 ? dataRef.current[index] : null;
+          if (item) onDotClick?.(item, e);
+          else onBackgroundClick?.(e);
+        });
+        return;
+      }
+
+      const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
       if (nearest) {
         onDotClick?.(nearest, e);
       } else {
@@ -185,7 +229,7 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
 
     canvas.addEventListener('click', handleClick);
     return () => canvas.removeEventListener('click', handleClick);
-  }, [camera, gl, onDotClick, onBackgroundClick, spatialIndex]);
+  }, [camera, gl, onDotClick, onBackgroundClick, spatialIndex, useGpuPick, publishPick]);
 
   return null;
 }

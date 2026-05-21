@@ -15,6 +15,14 @@ export function resolveScale(baseSize, isHovered, hoverSizeMultiplier) {
   return isHovered ? baseSize * hoverSizeMultiplier : baseSize;
 }
 
+// Hover/click hit radius — the pickable radius around a dot. Shared by the CPU
+// spatial grid (R3FScene.buildHoverSpatialIndex) and the GPU pick-radius buffer
+// (R3FDotsWebGPU.writePickRadii) so the two hit-testers stay in lockstep. Unlike
+// resolveBaseSize it ignores customStyle.r: hit-testing has no dotStyles.
+export function resolveHoverRadius(item, radiusOverrides, defaultSize, hoverSizeMultiplier) {
+  return (radiusOverrides.get(item.id) ?? item.size ?? defaultSize) * hoverSizeMultiplier;
+}
+
 export function resolveFill(item, customStyle, defaultColor) {
   return customStyle.fill || customStyle.color || item.color || defaultColor || '#7c6fff';
 }

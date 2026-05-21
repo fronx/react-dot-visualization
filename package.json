@@ -30,7 +30,8 @@
     "release:minor": "npm version minor && npm publish",
     "release:major": "npm version major && npm publish",
     "check:tsl": "node tests/decollision-tsl.check.mjs",
-    "check:tsl-spatial": "node tests/decollision-tsl-spatial.check.mjs"
+    "check:tsl-spatial": "node tests/decollision-tsl-spatial.check.mjs",
+    "check:pick": "node tests/decollision-pick.check.mjs"
   },
   "keywords": [
     "react",

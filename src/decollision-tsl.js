@@ -11,7 +11,7 @@
  * and `apply`:
  *   damped = nextVel[i] * velocityRetain;  pos += damped;  vel = damped
  */
-import { Fn, instanceIndex, Loop, If, vec2, float, int, uint, floor, clamp, max, min, select, sqrt, atomicAdd, atomicLoad, atomicMax, atomicStore } from 'three/tsl';
+import { Fn, instanceIndex, Loop, If, vec2, float, int, uint, floor, clamp, max, min, select, sqrt, atomicAdd, atomicLoad, atomicMax, atomicMin, atomicStore } from 'three/tsl';
 
 const EPS = 1e-6;
 
@@ -204,4 +204,56 @@ export function buildClearAtomicU32({ buffer, length }) {
   return Fn(() => {
     atomicStore(buffer.element(instanceIndex), uint(0));
   })().compute(length);
+}
+
+/**
+ * Store a constant into the single-element atomic `uint` `buffer`. Used to prime
+ * the pick result to its no-hit sentinel (0xffffffff) before each pick, since
+ * the pick reduces with atomicMin.
+ */
+export function buildStoreAtomicU32({ buffer, value }) {
+  return Fn(() => {
+    atomicStore(buffer.element(uint(0)), uint(value >>> 0));
+  })().compute(1);
+}
+
+// Index/distance bit split for the packed pick result. The nearest-dot search
+// packs a quantized squared-distance into the high bits and the instance index
+// into the low bits of one u32, so a single atomicMin finds the closest dot:
+// for equal distance buckets the lower index wins (an arbitrary, stable tie-
+// break). indexBits covers the point count; the rest quantize distance.
+export function pickIndexBits(count) {
+  return Math.max(1, Math.ceil(Math.log2(Math.max(2, count))));
+}
+
+/**
+ * `pickNearest`: find the dot nearest to `cursor` (world coords) within its hit
+ * radius, by atomicMin over a packed (quantizedDist, index) u32. A dot is a
+ * candidate when `dist <= min(pickRadii[i], threshold)` — the same rule the CPU
+ * spatial-grid path applies (`min(hoverRadius, threshold)`). Distance is
+ * normalized by `threshold²` (the largest possible hit radius) so nearer always
+ * sorts smaller. `pickResult` must be primed to 0xffffffff (buildStoreAtomicU32)
+ * before each launch; afterwards 0xffffffff means "no hit" and otherwise the low
+ * `indexBits` bits hold the hit index.
+ *
+ * The packing reserves the 0xffffffff sentinel: qMax = 2^distBits - 2 keeps the
+ * maximum real packed value at 0xfffffffe, so a genuine edge-of-threshold hit on
+ * the last index can never collide with "no hit".
+ */
+export function buildPickNearest({ positions, pickRadii, pickResult, cursor, threshold, count }) {
+  const indexBits = pickIndexBits(count);
+  const indexScale = 2 ** indexBits;
+  const qMax = (2 ** (32 - indexBits)) - 2;
+  return Fn(() => {
+    const i = instanceIndex;
+    const delta = positions.element(i).sub(cursor);
+    const distSq = delta.dot(delta);
+    const limit = min(pickRadii.element(i), threshold);
+    If(distSq.lessThanEqual(limit.mul(limit)), () => {
+      const ratio = clamp(distSq.div(threshold.mul(threshold)), float(0), float(1));
+      const q = floor(ratio.mul(float(qMax)));
+      const packed = uint(q).mul(uint(indexScale)).add(i);
+      atomicMin(pickResult.element(uint(0)), packed);
+    });
+  })().compute(count);
 }
