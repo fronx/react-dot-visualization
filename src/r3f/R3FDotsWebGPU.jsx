@@ -196,8 +196,10 @@ function disposeSimResources(gl, sim) {
 
 function disposeMesh(mesh) {
   if (!mesh) return;
+  mesh.dispose?.(); // InstancedMesh.dispose frees instanceMatrix/instanceColor; no-op on plain Mesh
   mesh.geometry?.dispose?.();
-  mesh.material?.dispose?.();
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) material?.dispose?.();
 }
 
 async function readbackMaxVelocitySquared(renderer, metricBuffer) {
