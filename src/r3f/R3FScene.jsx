@@ -6,6 +6,7 @@ import { R3FEdges } from './R3FEdges.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
 import { computeFitZ, CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { buildSpatialGrid, queryRadius } from '../spatialIndex.js';
+import { useHoverDispatcher } from '../useHoverDispatcher.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 
@@ -79,14 +80,15 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
 // Renderer-agnostic: raycasts a z=0 plane (pure three-core math against the
 // camera) and resolves the nearest dot via a CPU spatial index over `data`.
 // Touches no GPU meshes, so the WebGPU backend mounts it directly.
-export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHoverChange, onDotClick, onBackgroundClick }) {
+export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onBackgroundClick }) {
   const { camera, gl } = useThree();
-  const hoveredIdRef = useRef(null);
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
   const spatialIndex = useMemo(
     () => buildHoverSpatialIndex(data, radiusOverrides, defaultSize, hoverSizeMultiplier),
     [data, radiusOverrides, defaultSize, hoverSizeMultiplier]
   );
+
+  const dispatcher = useHoverDispatcher({ onHover, onLeave, onHoveredIdChange });
 
   // Cache canvas bounds; avoid layout reads on every mouse event.
   useEffect(() => {
@@ -126,11 +128,7 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       const threshold = 0.015 * camera.position.z;
       const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
 
-      const newId = nearest?.id ?? null;
-      if (newId !== hoveredIdRef.current) {
-        hoveredIdRef.current = newId;
-        onHoverChange?.(newId, nearest);
-      }
+      dispatcher.move(nearest ?? null);
     };
 
     const handleMove = (e) => {
@@ -142,10 +140,13 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
     };
 
     const handleLeave = () => {
-      if (hoveredIdRef.current !== null) {
-        hoveredIdRef.current = null;
-        onHoverChange?.(null, null);
+      // Drop any batched move so a stale raycast can't re-hover after we've
+      // already reported the zone-leave.
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
       }
+      dispatcher.leaveZone();
     };
 
     canvas.addEventListener('mousemove', handleMove);
@@ -157,7 +158,7 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       canvas.removeEventListener('mousemove', handleMove);
       canvas.removeEventListener('mouseleave', handleLeave);
     };
-  }, [camera, gl, onHoverChange, spatialIndex]);
+  }, [camera, gl, dispatcher, spatialIndex]);
 
   // Click detection
   useEffect(() => {
@@ -288,7 +289,9 @@ export function R3FScene({
   dotStroke,
   dotStrokeWidthFraction,
   hoveredId,
-  onHoverChange,
+  onHover,
+  onLeave,
+  onHoveredIdChange,
   onDotClick,
   onBackgroundClick,
   hoverSizeMultiplier,
@@ -356,7 +359,9 @@ export function R3FScene({
         radiusOverrides={radiusOverrides}
         defaultSize={defaultSize}
         hoverSizeMultiplier={hoverSizeMultiplier}
-        onHoverChange={onHoverChange}
+        onHover={onHover}
+        onLeave={onLeave}
+        onHoveredIdChange={onHoveredIdChange}
         onDotClick={onDotClick}
         onBackgroundClick={onBackgroundClick}
       />

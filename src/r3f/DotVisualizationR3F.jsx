@@ -302,15 +302,6 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
 
   schedulerRef.current = scheduler;
 
-  const handleHoverChange = useCallback((id, item) => {
-    setHoveredId(id);
-    if (id !== null) {
-      onHover?.(item);
-    } else {
-      onLeave?.();
-    }
-  }, [onHover, onLeave]);
-
   const handleDotClick = useCallback((item, event) => {
     onClick?.(item, event);
   }, [onClick]);
@@ -547,7 +538,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             radiusOverrides={radiusOverrides}
             defaultSize={defaultSize}
             hoverSizeMultiplier={hoverSizeMultiplier}
-            onHoverChange={handleHoverChange}
+            onHover={onHover}
+            onLeave={onLeave}
+            onHoveredIdChange={setHoveredId}
             onDotClick={handleDotClick}
             onBackgroundClick={handleBackgroundClick}
           />
@@ -574,7 +567,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             dotStroke={dotStroke}
             dotStrokeWidthFraction={dotStrokeWidthFraction}
             hoveredId={hoveredId}
-            onHoverChange={handleHoverChange}
+            onHover={onHover}
+            onLeave={onLeave}
+            onHoveredIdChange={setHoveredId}
             onDotClick={handleDotClick}
             onBackgroundClick={handleBackgroundClick}
             hoverSizeMultiplier={hoverSizeMultiplier}

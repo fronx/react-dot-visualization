@@ -26,10 +26,8 @@ const BASE_RADIUS = 1.0; // geometry radius in local space
  * - dotStyles: Map<id, {r?, fill?, opacity?, stroke?, strokeWidth?, pulse?}>
  * - defaultColor, defaultSize, defaultOpacity
  * - dotStroke, dotStrokeWidth (global stroke, dotStrokeWidth is fraction of radius 0-1)
- * - hoveredId, hoverSizeMultiplier, hoverOpacity
- * - onHoverChange(id | null) — called when hovered dot changes
- * - onDotClick(item, event)
- * - onBackgroundClick(event)
+ * - hoveredId, hoverSizeMultiplier, hoverOpacity (visual hover state only;
+ *   hover detection + click routing live in HoverDetector)
  */
 const EMPTY_RADIUS_OVERRIDES = new Map();
 

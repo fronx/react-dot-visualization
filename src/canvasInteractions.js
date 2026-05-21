@@ -10,6 +10,7 @@
  */
 import { useRef } from 'react';
 import { buildSpatialGrid, queryCell } from './spatialIndex.js';
+import { useHoverDispatcher } from './useHoverDispatcher.js';
 
 /**
  * Build a data-space spatial hash grid for hover hit-testing.
@@ -142,8 +143,8 @@ export const useCanvasInteractions = (config) => {
     debug = false
   } = config;
 
-  const currentHoveredDot = useRef(null);
   const dragState = useRef(null);
+  const hoverDispatcher = useHoverDispatcher({ onHover, onLeave });
 
   // Constants for drag detection (from InteractionLayer.jsx)
   const DRAG_THRESHOLD = 5; // pixels
@@ -200,23 +201,12 @@ export const useCanvasInteractions = (config) => {
     if (blockHoverDuringInteraction && isInteractionActive?.()) return;
 
     const { hitDot } = getMousePositionAndHit(event);
-    if (hitDot !== currentHoveredDot.current) {
-      if (currentHoveredDot.current && onLeave) {
-        onLeave(currentHoveredDot.current, event);
-      }
-      if (hitDot && onHover) {
-        onHover(hitDot, event);
-      }
-      currentHoveredDot.current = hitDot;
-    }
+    hoverDispatcher.move(hitDot, event);
   };
 
   const handleMouseLeave = (event) => {
     if (!enabled) return;
-    if (currentHoveredDot.current && onLeave) {
-      onLeave(currentHoveredDot.current, event);
-    }
-    currentHoveredDot.current = null;
+    hoverDispatcher.leaveZone(event);
   };
 
   const handleClick = (event) => {
