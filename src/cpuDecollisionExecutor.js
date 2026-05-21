@@ -14,7 +14,7 @@ import { decollisioning } from './decollisioning.js';
  *
  * Contract (both methods return a handle with stop()):
  *   runSimulation({ sourceData, fnDotSize, transitionConfig, onUpdateNodes, onComplete })
- *   runAnimation ({ fromData, target, targetPositions, duration, onUpdateNodes, onComplete })
+ *   runAnimation ({ fromData, target, duration, onUpdateNodes, onComplete })
  * The scheduler wraps onComplete to clear its handle, sync state, and store the
  * cache; onUpdateNodes publishes live per-tick frames (consumed by Canvas/WebGL,
  * ignored by the GPU executor whose positions live in a GPU buffer).

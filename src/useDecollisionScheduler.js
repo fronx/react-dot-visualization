@@ -246,7 +246,6 @@ export function useDecollisionScheduler({
     const handle = executor.runAnimation({
       fromData: from,
       target,
-      targetPositions: positions,
       duration,
       onUpdateNodes: stableOnUpdateNodes,
       onComplete: (finalData) => {

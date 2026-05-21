@@ -28,6 +28,7 @@ import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Fn, instanceIndex, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
+import { easeCubicOut } from 'd3';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import {
   createDensityRenderTarget, createSplatScene, createDensityResolveMesh,
@@ -45,11 +46,10 @@ import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 
-// Decollision now runs to a velocity fixpoint instead of stopping after a fixed
-// number of rendered frames. The max values below are safety caps in solver
-// iterations; convergence normally stops earlier. Multiple iterations per frame
-// keep wall-clock convergence practical for large samples maps while still
-// allowing the render loop to breathe between batches.
+// Safety caps in solver iterations — the velocity fixpoint (see the convergence
+// metric below) normally settles a run earlier. Several iterations per frame
+// keep wall-clock convergence practical on large samples maps while letting the
+// render loop breathe between batches.
 export const BASE_MAX_SOLVER_ITERATIONS = 2400;
 export const CONSTRAINT_MAX_SOLVER_ITERATIONS = 1200;
 const SOLVER_ITERATIONS_PER_FRAME = 4;
@@ -77,10 +77,6 @@ const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
-
-// d3.easeCubicOut — matches the CPU executor's transition easing so GPU and
-// Canvas focus transitions feel identical.
-const easeCubicOut = (t) => 1 - Math.pow(1 - t, 3);
 
 function scanIterations(n) {
   if (n <= 1) return 0;
@@ -151,11 +147,9 @@ function buildSimResources({ N, positions, velocities }, grid, radiiArray) {
     countBins: buildCountBins({ positions, velocities, binCount, grid, count: N }),
     scanSteps,
     place: buildPlaceParticles({ positions, velocities, binCount, placeCounter, sortedIndices, grid, count: N }),
-    // Full-strength push (no alpha multiplier): d3.forceCollide and the standalone
-    // WGSL collide both resolve overlaps at full strength every tick and use alpha
-    // only as a run clock. The earlier alpha-scaled push tapered the separation
-    // force to ~0 long before overlaps were resolved ("gives up too quickly"); the
-    // per-launch frame cap is the run clock now.
+    // Full strength every tick (strength: 1): d3.forceCollide and the standalone
+    // WGSL collide both resolve overlaps at full strength and stop on a run
+    // clock, not a tapering force. Here the per-launch iteration cap is that clock.
     collide: buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count: N, strength: 1 }),
     apply: buildApply({ positions, velocities, nextVel, count: N, velocityRetain: 0.6 }),
     clearMetric: buildClearAtomicU32({ buffer: maxVelocitySquared, length: 1 }),
@@ -188,15 +182,6 @@ function buildLerpKernels({ N, positions, fromPos, targetPos }, tU) {
     positions.element(i).assign(a.mul(float(1).sub(tU)).add(b.mul(tU)));
   })().compute(N);
   return { snapshot, mixStep };
-}
-
-// Physics radius matches R3FDots: radiusOverride ?? item.size ?? defaultSize.
-// `dotStyles.r` (focus enlargement) is mirrored into radiusOverrides by the
-// caller, so it reaches the sim through that path. Used to build the per-launch
-// radii when the scheduler doesn't supply a dot-size fn (defensive default).
-function physicsRadius(item, { defaultSize, radiusOverrides }) {
-  const baseSize = radiusOverrides?.get(item.id) ?? item.size ?? defaultSize;
-  return Math.max(0.0001, baseSize);
 }
 
 // Per-instance appearance: color/alpha/focus/scale. Lives in its own buffers so
@@ -415,26 +400,26 @@ export function R3FDotsWebGPU({
         : BASE_MAX_SOLVER_ITERATIONS;
       const N = buffers.N;
       // Seed positions from sourceData (raw cloud for base; the cached base
-      // layout with one enlarged dot for a constraint) and zero velocities.
+      // layout with one enlarged dot for a constraint), zero velocities, and
+      // build this launch's radii + grid nodes — all in one pass over sourceData.
       const posArr = buffers.positions.value.array;
       const velArr = buffers.velocities.value.array;
+      const radiiArray = new Float32Array(N);
+      const nodes = new Array(N);
       for (let i = 0; i < N; i++) {
-        posArr[i * 2] = sourceData[i].x;
-        posArr[i * 2 + 1] = -sourceData[i].y;
+        const src = sourceData[i];
+        const x = src.x;
+        const y = -src.y;
+        posArr[i * 2] = x; posArr[i * 2 + 1] = y;
         velArr[i * 2] = 0; velArr[i * 2 + 1] = 0;
+        const r = fnDotSize ? Number(fnDotSize(src)) : resolveBaseSize(src, EMPTY_STYLE, radiusOverrides, defaultSize);
+        radiiArray[i] = Number.isFinite(r) ? Math.max(0.0001, r) : 0.0001;
+        nodes[i] = { x, y };
       }
       buffers.positions.value.needsUpdate = true;
       buffers.velocities.value.needsUpdate = true;
-      const radiiArray = new Float32Array(N);
-      for (let i = 0; i < N; i++) {
-        const r = fnDotSize ? Number(fnDotSize(sourceData[i])) : physicsRadius(sourceData[i], { defaultSize, radiusOverrides });
-        radiiArray[i] = Number.isFinite(r) ? Math.max(0.0001, r) : 0.0001;
-      }
-      // Grid from the just-seeded positions + this launch's radii. Reuse a cached
-      // pipeline when the grid matches (the common case for focuses); otherwise
-      // build one and cap the cache so pipelines don't accumulate.
-      const nodes = new Array(N);
-      for (let i = 0; i < N; i++) nodes[i] = { x: posArr[i * 2], y: posArr[i * 2 + 1] };
+      // Reuse a cached pipeline when the grid matches (the common case for
+      // focuses); otherwise build one and cap the cache so pipelines don't pile up.
       const grid = computeGridParams(nodes, radiiArray);
       const sig = gridSignature(grid);
       let sim = simCache.get(sig);
@@ -455,7 +440,6 @@ export function R3FDotsWebGPU({
         iterations: 0,
         maxIterations,
         metricPending: false,
-        lastMetric: Infinity,
         onComplete,
         template: sourceData,
         jobId: req.id,
@@ -543,7 +527,6 @@ export function R3FDotsWebGPU({
           const current = jobRef.current;
           if (current.jobId !== jobId || current.mode !== 'sim') return;
           current.metricPending = false;
-          current.lastMetric = metric;
           if (metric <= CONVERGED_MAX_VELOCITY_SQUARED_U32) {
             settleSimJob(current);
           }
