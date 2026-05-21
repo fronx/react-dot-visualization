@@ -140,27 +140,64 @@ function buildSimResources({ N, positions, velocities }, grid, radiiArray) {
     }));
   }
 
+  const clearBin = buildClearAtomicU32({ buffer: binCount, length: len });
+  const clearPlace = buildClearAtomicU32({ buffer: placeCounter, length: grid.numBins });
+  const countBins = buildCountBins({ positions, velocities, binCount, grid, count: N });
+  const place = buildPlaceParticles({ positions, velocities, binCount, placeCounter, sortedIndices, grid, count: N });
+  // Full strength every tick (strength: 1): d3.forceCollide and the standalone
+  // WGSL collide both resolve overlaps at full strength and stop on a run
+  // clock, not a tapering force. Here the per-launch iteration cap is that clock.
+  const collide = buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count: N, strength: 1 });
+  const apply = buildApply({ positions, velocities, nextVel, count: N, velocityRetain: 0.6 });
+  const clearMetric = buildClearAtomicU32({ buffer: maxVelocitySquared, length: 1 });
+  const measureVelocity = buildMeasureMaxVelocitySquared({ velocities, maxVelocitySquared, count: N, scale: CONVERGENCE_METRIC_SCALE });
+
   return {
     radii, // exposed so a cache hit can rewrite radii without rebuilding the pipeline
-    clearBin: buildClearAtomicU32({ buffer: binCount, length: len }),
-    clearPlace: buildClearAtomicU32({ buffer: placeCounter, length: grid.numBins }),
-    countBins: buildCountBins({ positions, velocities, binCount, grid, count: N }),
-    scanSteps,
-    place: buildPlaceParticles({ positions, velocities, binCount, placeCounter, sortedIndices, grid, count: N }),
-    // Full strength every tick (strength: 1): d3.forceCollide and the standalone
-    // WGSL collide both resolve overlaps at full strength and stop on a run
-    // clock, not a tapering force. Here the per-launch iteration cap is that clock.
-    collide: buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count: N, strength: 1 }),
-    apply: buildApply({ positions, velocities, nextVel, count: N, velocityRetain: 0.6 }),
-    clearMetric: buildClearAtomicU32({ buffer: maxVelocitySquared, length: 1 }),
-    measureVelocity: buildMeasureMaxVelocitySquared({
-      velocities,
-      maxVelocitySquared,
-      count: N,
-      scale: CONVERGENCE_METRIC_SCALE,
-    }),
+    clearBin, clearPlace, countBins, scanSteps, place, collide, apply, clearMetric, measureVelocity,
     maxVelocitySquared,
+    // Released wholesale on cache eviction / seed change / unmount (see
+    // disposeSimResources): the storage buffers free their GPUBuffers, the compute
+    // nodes free their pipeline + bindings + node-builder cache. The shared seed
+    // positions/velocities are excluded — they outlive any single sim.
+    ownedBuffers: [radii, nextVel, binCount, scratch, placeCounter, sortedIndices, maxVelocitySquared],
+    computeNodes: [clearBin, clearPlace, countBins, ...scanSteps, place, collide, apply, clearMetric, measureVelocity],
   };
+}
+
+// instancedArray storage buffers and compute nodes are NOT reclaimed by dropping
+// their JS reference. A storage buffer's GPUBuffer is freed only via
+// Attributes.delete (geometry attributes get this through a dispose event;
+// standalone storage buffers have none); a compute node's pipeline + bindings +
+// node-builder cache are freed only when the node fires 'dispose' (the listener
+// Renderer.compute registers). So every GPU resource this component creates
+// imperatively — sim buffers/kernels, seed/cosmetic/ring buffers, dot meshes —
+// must be released by hand on replacement/unmount or it leaks for the renderer's
+// lifetime (R3F never disposes <primitive> objects either).
+function disposeStorageBuffers(gl, nodes) {
+  const attributes = gl._attributes; // frees the GPUBuffer and updates renderer.info
+  for (const node of nodes) {
+    const attr = node?.value;
+    if (!attr) continue;
+    if (attributes) attributes.delete(attr);
+    else if (gl.backend?.get(attr)?.buffer) gl.backend.destroyAttribute(attr);
+  }
+}
+
+function disposeComputeNodes(nodes) {
+  for (const node of nodes) node?.dispose?.();
+}
+
+function disposeSimResources(gl, sim) {
+  if (!sim) return;
+  disposeStorageBuffers(gl, sim.ownedBuffers);
+  disposeComputeNodes(sim.computeNodes);
+}
+
+function disposeMesh(mesh) {
+  if (!mesh) return;
+  mesh.geometry?.dispose?.();
+  mesh.material?.dispose?.();
 }
 
 async function readbackMaxVelocitySquared(renderer, metricBuffer) {
@@ -329,6 +366,9 @@ export function R3FDotsWebGPU({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [seedKey],
   );
+  useEffect(() => () => {
+    if (buffers) disposeStorageBuffers(gl, [buffers.positions, buffers.velocities, buffers.fromPos, buffers.targetPos]);
+  }, [buffers, gl]);
 
   // Cosmetic buffers sized to the seed, seeded with the current style, rewritten
   // in place on restyle — so hover/selection/pulse/focus never touch positions.
@@ -346,6 +386,9 @@ export function R3FDotsWebGPU({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmetic, data, defaultColor, defaultSize, defaultOpacity, dotStyles,
       radiusOverrides, hoveredId, hoverSizeMultiplier, hoverOpacity]);
+  useEffect(() => () => {
+    if (cosmetic) disposeStorageBuffers(gl, [cosmetic.colors, cosmetic.alphas, cosmetic.focus, cosmetic.scales]);
+  }, [cosmetic, gl]);
 
   // Hovered instance index, read in-shader by the main mesh (to drop it) and the overlay (to redraw it on top).
   const hoveredIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
@@ -363,6 +406,9 @@ export function R3FDotsWebGPU({
     () => (buffers ? buildLerpKernels(buffers, tU) : null),
     [buffers, tU],
   );
+  useEffect(() => () => {
+    if (lerpKernels) disposeComputeNodes([lerpKernels.snapshot, lerpKernels.mixStep]);
+  }, [lerpKernels]);
 
   // ── Decollision job state, driven by the scheduler's request channel ──────
   // jobRef holds the current GPU job ({ mode: 'idle' | 'sim' | 'lerp' | 'settling' }
@@ -377,6 +423,15 @@ export function R3FDotsWebGPU({
   // fresh pipeline + bin buffers per click. Fresh Map per seed: old resources
   // referencing the previous buffers are dropped wholesale on a new seed.
   const simCache = useMemo(() => new Map(), [buffers]);
+  // Free every cached sim's buffers + compute pipelines when the seed changes or
+  // the component unmounts. The active job's sim is always still in this map, so
+  // this only runs once the seed — and thus every job built against it — has been
+  // superseded; GPU work already submitted against these resources still
+  // completes, per WebGPU's buffer-lifetime guarantee.
+  useEffect(() => () => {
+    for (const sim of simCache.values()) disposeSimResources(gl, sim);
+    simCache.clear();
+  }, [simCache, gl]);
 
   // A job is tagged with the buffers it was built against (see startJob); the
   // useFrame loop skips stepping a job whose buffers no longer match the live
@@ -430,7 +485,11 @@ export function R3FDotsWebGPU({
       } else {
         sim = buildSimResources(buffers, grid, radiiArray);
         simCache.set(sig, sim);
-        if (simCache.size > MAX_SIM_CACHE) simCache.delete(simCache.keys().next().value);
+        if (simCache.size > MAX_SIM_CACHE) {
+          const oldestKey = simCache.keys().next().value;
+          disposeSimResources(gl, simCache.get(oldestKey));
+          simCache.delete(oldestKey);
+        }
       }
       jobRef.current = {
         mode: 'sim',
@@ -559,14 +618,13 @@ export function R3FDotsWebGPU({
       pxPerWorldU, bandwidthPxU,
     });
   }, [buffers, cosmetic, pxPerWorldU, bandwidthPxU]);
-  useEffect(() => () => {
-    if (splat) { splat.mesh.geometry.dispose(); splat.mesh.material.dispose(); }
-  }, [splat]);
+  useEffect(() => () => disposeMesh(splat?.mesh), [splat]);
 
   const densityMesh = useMemo(
     () => createDensityResolveMesh({ densityRT, densityFadeU }),
     [densityRT, densityFadeU],
   );
+  useEffect(() => () => disposeMesh(densityMesh), [densityMesh]);
 
   useFrame((state) => {
     const dpr = state.gl.getPixelRatio();
@@ -595,6 +653,7 @@ export function R3FDotsWebGPU({
     const scaleMul = select(instanceIndex.equal(hoveredIndexU), float(0), float(1));
     return buildDotMesh(instanceIndex, buffers.N, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU });
   }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
+  useEffect(() => () => disposeMesh(mesh), [mesh]);
 
   // Redraw the hovered dot after the main mesh (renderOrder 1) so it sits on top
   // of overlapping dots, matching the canvas renderer.
@@ -605,6 +664,7 @@ export function R3FDotsWebGPU({
     m.visible = false;
     return m;
   }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
+  useEffect(() => () => disposeMesh(hoverMesh), [hoverMesh]);
 
   // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────
   // Same machinery as R3FDots: usePulseAnimation drives a phase clock, this
@@ -649,6 +709,9 @@ export function R3FDotsWebGPU({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pulseKey]);
+  useEffect(() => () => {
+    if (ringBuffers.count) disposeStorageBuffers(gl, [ringBuffers.positions, ringBuffers.scales, ringBuffers.colors, ringBuffers.alphas]);
+  }, [ringBuffers, gl]);
 
   const ringMesh = useMemo(() => {
     if (!ringBuffers.count) return null;
@@ -665,6 +728,7 @@ export function R3FDotsWebGPU({
     m.renderOrder = -1; // behind the dots
     return m;
   }, [ringBuffers]);
+  useEffect(() => () => disposeMesh(ringMesh), [ringMesh]);
 
   useFrame((state) => {
     if (!cosmetic || pulseIds.length === 0) return;
