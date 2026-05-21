@@ -503,7 +503,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             position: [0, 0, 65],
           }}
           gl={async (props) => {
-            const renderer = new WebGPURenderer(props);
+            // depth:false — flat 2D scene writes no depth (materials are
+            // depthWrite:false, layering is renderOrder). Also dodges a three
+            // r184 stale-depth-attachment-on-resize bug that intermittently
+            // blanks the graph (see memory: webgpu-depth-stale-on-resize).
+            const renderer = new WebGPURenderer({ ...props, depth: false });
             await renderer.init();
             return renderer;
           }}
