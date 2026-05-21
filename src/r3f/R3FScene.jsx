@@ -325,7 +325,7 @@ export function R3FScene({
       />
       <CameraReporter reportRef={reportCameraRef} onCameraStateChange={onCameraStateChange} />
       {setCameraRef && <CameraSetter setCameraRef={setCameraRef} />}
-      <R3FCamera onTransformChange={handleTransformChange} />
+      <R3FCamera onTransformChange={handleTransformChange} data={data} />
 
       {showEdges && edges.length > 0 && (
         <R3FEdges

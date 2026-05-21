@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useMemo } from 'react';
 import { useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import {
@@ -10,9 +10,14 @@ import {
   computeFitZ,
   CAMERA_FOV_DEGREES,
 } from './cameraUtils.js';
+import { finiteBoundsForData } from '../utils.js';
 
 const CAMERA_Z_MIN = 0.5;
-const CAMERA_Z_MAX = 5000;
+const CAMERA_Z_MAX = 5000; // absolute zoom-out ceiling (safety)
+// Most-zoomed-out state keeps the whole graph filling at least this fraction of
+// the viewport, so it never shrinks to a useless speck. computeFitZ's margin IS
+// this fraction; initial fit uses ~0.85, so the graph can still shrink a bit.
+const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
 
 /**
  * Camera controller for the R3F dot renderer.
@@ -20,9 +25,23 @@ const CAMERA_Z_MAX = 5000;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-export function R3FCamera({ onTransformChange }) {
+export function R3FCamera({ onTransformChange, data = [] }) {
   const controlsRef = useRef(null);
   const { camera, gl, size } = useThree();
+
+  // Graph-aware zoom-out cap: derive the max camera distance from the data
+  // bounds so the whole graph never shrinks below MIN_GRAPH_VIEWPORT_FRACTION
+  // of the viewport. Recomputed only when the point set or viewport changes.
+  const dataBounds = useMemo(() => finiteBoundsForData(data), [data]);
+  const maxZ = useMemo(() => {
+    if (!dataBounds) return CAMERA_Z_MAX;
+    const aspect = size.width / size.height;
+    const z = computeFitZ(
+      dataBounds.minX, dataBounds.maxX, dataBounds.minY, dataBounds.maxY,
+      aspect, MIN_GRAPH_VIEWPORT_FRACTION,
+    );
+    return Math.min(CAMERA_Z_MAX, z);
+  }, [dataBounds, size.width, size.height]);
 
   // OrbitControls targets the origin by default, but CameraInitializer and
   // zoomToVisible place the camera at arbitrary (x, y). Without keeping the
@@ -83,7 +102,7 @@ export function R3FCamera({ onTransformChange }) {
         // zoom-to-cursor
         const oldZ = camera.position.z;
         const isPinch = gesture === 'pinch';
-        const newZ = Math.max(CAMERA_Z_MIN, Math.min(CAMERA_Z_MAX, oldZ * calculateZoomFactor(event.deltaY, isPinch)));
+        const newZ = Math.max(CAMERA_Z_MIN, Math.min(maxZ, oldZ * calculateZoomFactor(event.deltaY, isPinch)));
         if (Math.abs(newZ - oldZ) < 0.001) return;
 
         const screenX = event.clientX - rect.left;
@@ -111,7 +130,7 @@ export function R3FCamera({ onTransformChange }) {
 
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
-  }, [camera, gl, size]);
+  }, [camera, gl, size, maxZ]);
 
   return (
     <OrbitControls
@@ -122,7 +141,7 @@ export function R3FCamera({ onTransformChange }) {
       enableDamping
       dampingFactor={0.1}
       minDistance={CAMERA_Z_MIN}
-      maxDistance={CAMERA_Z_MAX}
+      maxDistance={maxZ}
     />
   );
 }

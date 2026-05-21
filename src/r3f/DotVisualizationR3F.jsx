@@ -521,7 +521,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} />
+          <R3FCamera onTransformChange={handleTransformChange} data={processedData} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dotStyles={dotStyles}

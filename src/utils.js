@@ -34,6 +34,23 @@ export function boundsForData(data, dotSize = 2) {
   });
 }
 
+// Bounding box over finite points only. boundsForData does not skip NaN, and
+// streaming UMAP coords are NaN-prefilled — a single NaN poisons the box.
+// Returns null when no point is finite. No dot-size padding: callers that want
+// a tight extent (e.g. the camera zoom-out cap) use this.
+export function finiteBoundsForData(data) {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, n = 0;
+  for (const item of data) {
+    if (!Number.isFinite(item.x) || !Number.isFinite(item.y)) continue;
+    if (item.x < minX) minX = item.x;
+    if (item.x > maxX) maxX = item.x;
+    if (item.y < minY) minY = item.y;
+    if (item.y > maxY) maxY = item.y;
+    n++;
+  }
+  return n ? { minX, maxX, minY, maxY } : null;
+}
+
 export function withMargin(margin, box) {
   let width = box[2] * (1 + 2 * margin);
   let height = box[3] * (1 + 2 * margin);

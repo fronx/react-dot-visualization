@@ -15,7 +15,7 @@
 import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { instanceIndex, vec3, instancedArray, positionLocal, uniform, select, float } from 'three/tsl';
+import { instanceIndex, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import { computeGridParams } from '../decollision-webgpu.js';
 import {
@@ -33,6 +33,10 @@ const ALPHA_DECAY = 0.0228; // d3-force defaults
 const ALPHA_MIN = 0.001;
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const TAN_HALF_FOV = Math.tan(CAMERA_FOV_RAD / 2);
+// Min on-screen dot radius (device px); mirrors ColoredDots' MIN_BITMAP_RADIUS.
+// Keeps sub-pixel dots from winking out when zoomed far out (a quad smaller
+// than a pixel misses every pixel center). Clamped in-shader against pxPerWorld.
+const MIN_SCREEN_PX = 1.5;
 
 const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
@@ -175,7 +179,7 @@ async function readSettledData(renderer, buffers, data, decollisioned) {
 // and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
-function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul }) {
+function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU }) {
   const material = createBevelStrokeNodeMaterial({
     instanceColor: cosmetic.colors.element(indexNode),
     instanceAlpha: cosmetic.alphas.element(indexNode),
@@ -183,7 +187,10 @@ function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrok
     strokeColor: dotStroke,
     strokeWidthFraction: dotStrokeWidthFraction,
   });
-  const baseScale = cosmetic.scales.element(indexNode);
+  // Floor the render radius at MIN_SCREEN_PX device px so dots don't vanish at
+  // sub-pixel size when zoomed out. Clamp the base scale *before* scaleMul so
+  // the hover-collapse-to-zero trick (scaleMul=0) still hides the main-mesh dot.
+  const baseScale = max(cosmetic.scales.element(indexNode), float(MIN_SCREEN_PX).div(pxPerWorldU));
   const scale = scaleMul ? baseScale.mul(scaleMul) : baseScale;
   const pos = buffers.positions.element(indexNode);
   material.positionNode = vec3(positionLocal.xy.mul(scale.mul(2.0)).add(pos), 0);
@@ -244,23 +251,31 @@ export function R3FDotsWebGPU({
   // Hovered instance index, read in-shader by the main mesh (to drop it) and the overlay (to redraw it on top).
   const hoveredIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
 
+  // Device px per world unit at the dot plane (z=0), refreshed each frame so the
+  // min-screen-size clamp in buildDotMesh tracks zoom. Seeded large so dots are
+  // not enlarged on the first frame, before the real value lands.
+  const pxPerWorldU = useMemo(() => uniform(float(1e6)), []);
+  useFrame((state) => {
+    pxPerWorldU.value = (state.size.height / (2 * state.camera.position.z * TAN_HALF_FOV)) * state.gl.getPixelRatio();
+  });
+
   const mesh = useMemo(() => {
     if (!buffers || !cosmetic) return null;
     // Collapse the hovered instance to zero size so it draws once: the overlay
     // redraws it on top (the canvas renderer draws the hovered dot last).
     const scaleMul = select(instanceIndex.equal(hoveredIndexU), float(0), float(1));
-    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul });
-  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU]);
+    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU });
+  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
 
   // Redraw the hovered dot after the main mesh (renderOrder 1) so it sits on top
   // of overlapping dots, matching the canvas renderer.
   const hoverMesh = useMemo(() => {
     if (!buffers || !cosmetic) return null;
-    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction });
+    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU });
     m.renderOrder = 1;
     m.visible = false;
     return m;
-  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU]);
+  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
 
   const pipeline = useMemo(() => {
     if (!buffers) return null;
