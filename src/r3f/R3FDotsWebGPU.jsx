@@ -46,6 +46,7 @@ import {
 import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
+import { chooseBufferMismatchAction } from './webgpuDecollisionJobState.js';
 
 // Safety caps in solver iterations — the velocity fixpoint (see the convergence
 // metric below) normally settles a run earlier. Several iterations per frame
@@ -298,6 +299,20 @@ function writeCosmetics(cosmetic, data, opts) {
   scaleAttr.needsUpdate = true;
 }
 
+function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
+  if (index === undefined || index < 0 || index >= data.length) return false;
+  const {
+    defaultSize, defaultOpacity, dotStyles, radiusOverrides,
+    hoverSizeMultiplier, hoverOpacity,
+  } = opts;
+  const item = data[index];
+  const style = (dotStyles && dotStyles.get(item.id)) || EMPTY_STYLE;
+  const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
+  cosmetic.alphas.value.array[index] = resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
+  cosmetic.scales.value.array[index] = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+  return true;
+}
+
 // Read the GPU positions back to the CPU. Positions are world convention
 // (worldY = -item.y; see buildSeedBuffers), so the inverse negation restores
 // viewBox-space y for the caller. `template` supplies the id/order (the launch's
@@ -420,7 +435,7 @@ export function R3FDotsWebGPU({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmetic, data, defaultColor, defaultSize, defaultOpacity, dotStyles,
-      radiusOverrides, hoveredId, hoverSizeMultiplier, hoverOpacity]);
+      radiusOverrides, hoverSizeMultiplier, hoverOpacity]);
   useEffect(() => () => {
     if (cosmetic) disposeStorageBuffers(gl, [cosmetic.colors, cosmetic.alphas, cosmetic.focus, cosmetic.scales]);
   }, [cosmetic, gl]);
@@ -619,6 +634,15 @@ export function R3FDotsWebGPU({
     }
   };
 
+  // Single exit for every finished job: cache the settled layout, drop to idle,
+  // notify the scheduler. Centralizing it keeps the idle transition coupled to
+  // the completion callback so no path can notify while leaving a stale job.
+  const finishJobIdle = (settled, onComplete) => {
+    settledRef.current = settled;
+    jobRef.current = { mode: 'idle' };
+    onComplete?.(settled);
+  };
+
   const settleSimJob = (job) => {
     if (!job || job.mode !== 'sim') return;
     job.mode = 'settling'; // stop stepping; await the one-shot position readback
@@ -626,9 +650,7 @@ export function R3FDotsWebGPU({
     const onComplete = job.onComplete;
     readbackPositions(gl, buffers.positions, job.template).then((settled) => {
       if (jobRef.current.jobId !== jobId) return; // superseded by a newer launch
-      settledRef.current = settled;
-      jobRef.current = { mode: 'idle' };
-      onComplete?.(settled);
+      finishJobIdle(settled, onComplete);
     });
   };
 
@@ -668,17 +690,20 @@ export function R3FDotsWebGPU({
     // (full count) lands a beat after the base launch has already bound the sim
     // to a partial count, so `buffers` rebuilds and no longer matches what the
     // job's compute pipelines were built against. Those pipelines reference the
-    // stale buffer instances and can't be retargeted in place — but the launch
-    // request is still pending and its sourceData already matches the new count,
-    // so re-run startJob to rebuild the sim against the live buffers. (The
-    // scheduler does NOT relaunch here: same logical layout, no scope/size
-    // change — so without this the job is orphaned and decollision never runs.)
-    // If a *newer* request superseded ours, drop to idle; the consume block
-    // above picks the new one up.
-    if (job.buffers && job.buffers !== buffers) {
+    // stale buffer instances and can't be retargeted in place — so re-run
+    // startJob to rebuild the sim against the live buffers. But only when the
+    // request's frozen sourceData snapshot still covers the new count: if buffers
+    // grew past the snapshot, startJob would read sourceData[i].x past the
+    // snapshot's end. When the same request can't safely rebind, complete with the
+    // live positions so the parent scheduler is not left in a running state.
+    // Newer/superseded requests drop to idle; the consume block above picks those up.
+    const mismatchAction = chooseBufferMismatchAction(job, channel && channel.request, buffers);
+    if (mismatchAction !== 'continue') {
       const req = channel && channel.request;
-      if (job.mode === 'sim' && req && req.id === job.jobId) {
+      if (mismatchAction === 'rebind') {
         startJob(req); // rebind the sim to the live buffers
+      } else if (mismatchAction === 'complete-live') {
+        finishJobIdle(Array.isArray(data) ? data : [], job.onComplete);
       } else {
         jobRef.current = { mode: 'idle' };
       }
@@ -727,12 +752,7 @@ export function R3FDotsWebGPU({
       const t = (performance.now() - job.t0) / job.duration;
       tU.value = Math.min(1, easeCubicOut(Math.min(1, t)));
       if (lerpKernels) gl.compute(lerpKernels.mixStep);
-      if (t >= 1) {
-        settledRef.current = job.target;
-        const onComplete = job.onComplete;
-        jobRef.current = { mode: 'idle' };
-        onComplete?.(job.target);
-      }
+      if (t >= 1) finishJobIdle(job.target, job.onComplete);
     }
   });
 
@@ -812,6 +832,35 @@ export function R3FDotsWebGPU({
     if (data) for (let i = 0; i < data.length; i++) m.set(data[i].id, i);
     return m;
   }, [data]);
+  const prevHoveredIdRef = useRef(hoveredId);
+
+  // Hover changes affect only the old and new hovered dots. Do not run the
+  // full cosmetic rewrite for the whole graph; at 200k+ dots that turns every
+  // cursor transition into a main-thread scan and storage-buffer upload.
+  useEffect(() => {
+    if (!cosmetic || !data?.length) {
+      prevHoveredIdRef.current = hoveredId;
+      return;
+    }
+
+    const prevHoveredId = prevHoveredIdRef.current;
+    if (prevHoveredId === hoveredId) return;
+
+    let dirty = false;
+    for (const [id, isHovered] of [[prevHoveredId, false], [hoveredId, true]]) {
+      if (id != null) {
+        dirty = writeHoverCosmetic(cosmetic, data, idToIndex.get(id), cosmeticOpts, isHovered) || dirty;
+      }
+    }
+    if (dirty) {
+      cosmetic.alphas.value.needsUpdate = true;
+      cosmetic.scales.value.needsUpdate = true;
+    }
+    prevHoveredIdRef.current = hoveredId;
+    // Style/size changes restyle the hovered dot through the full-restyle effect
+    // above; this effect only re-runs when the hovered id itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cosmetic, data, idToIndex, hoveredId]);
 
   // Hide the overlay when nothing is hovered; resetting the index also
   // un-collapses the previously-hovered instance in the main mesh.
