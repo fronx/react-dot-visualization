@@ -85,18 +85,24 @@ function scanIterations(n) {
   return iters;
 }
 
+// Pack data items into a flat vec2 position array (worldY = -item.y; the seed
+// and readback share this negation). One place for the convention.
+function writePositions(array, data) {
+  for (let i = 0; i < data.length; i++) {
+    array[i * 2] = data[i].x;
+    array[i * 2 + 1] = -data[i].y;
+  }
+}
+
 // Persistent per-seed buffers: position/velocity for the sim, plus from/target
 // scratch for the GPU lerp. Created once per point set (data identity) and kept
 // across constraint changes — so focus restyle never re-seeds positions. Seeded
-// from the raw input (worldY = -item.y) so the first paint shows real positions
-// before the base decollision runs.
+// from the raw input so the first paint shows real positions before the base
+// decollision runs.
 function buildSeedBuffers(data) {
   const N = data.length;
   const pos = new Float32Array(N * 2);
-  for (let i = 0; i < N; i++) {
-    pos[i * 2] = data[i].x;
-    pos[i * 2 + 1] = -data[i].y;
-  }
+  writePositions(pos, data);
   return {
     N,
     positions: instancedArray(pos, 'vec2'),
@@ -335,6 +341,7 @@ export function R3FDotsWebGPU({
   hoveredId = null,
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
+  positionsAreIntermediate = false,
   gpuControlRef = null,
 }) {
   const gl = useThree((s) => s.gl);
@@ -344,21 +351,16 @@ export function R3FDotsWebGPU({
     hoveredId, hoverSizeMultiplier, hoverOpacity,
   };
 
-  // Seed identity: changes only when the positional content (length + coords)
-  // changes — NOT when sizes/colors do. fingertip recomputes `data` (new array,
-  // same coords) whenever radii/folderColors resolve or a paint input changes;
-  // keying the buffers on the reference would destroy the sim mid-flight on
-  // every such churn (the scheduler is one-shot and wouldn't relaunch). Hashing
-  // x/y keeps the GPU buffers alive across cosmetic re-renders.
-  const seedKey = useMemo(() => {
-    if (!data || data.length === 0) return 'empty';
-    let h = (2166136261 ^ data.length) >>> 0;
-    for (let i = 0; i < data.length; i++) {
-      h = Math.imul(h ^ ((data[i].x * 8192) | 0), 16777619);
-      h = Math.imul(h ^ ((data[i].y * 8192) | 0), 16777619);
-    }
-    return h >>> 0;
-  }, [data]);
+  // Seed identity = point COUNT only. Positions are always owned by the sim seed
+  // or the streaming write above, never the buffer identity, so only a count
+  // change needs a realloc. Keying on coords instead would rebuild the buffers
+  // at the streaming→settled edge (final coords arrive re-normalized) and orphan
+  // the base sim mid-flight — decollision would never run. Recompute passes
+  // through count 0, so a genuinely new layout still rebuilds.
+  const seedKey = useMemo(
+    () => (!data || data.length === 0 ? 'empty' : `count:${data.length}`),
+    [data],
+  );
 
   // Persistent per-seed buffers — rebuilt only when the seed identity changes
   // (new point set / streaming flush / re-projection), never on cosmetic restyle
@@ -371,6 +373,17 @@ export function R3FDotsWebGPU({
   useEffect(() => () => {
     if (buffers) disposeStorageBuffers(gl, [buffers.positions, buffers.velocities, buffers.fromPos, buffers.targetPos]);
   }, [buffers, gl]);
+
+  // While UMAP streams, write the moving coords into the persistent buffer in
+  // place rather than reallocating. Safe because the scheduler holds the sim off
+  // until intermediate ends (nothing else owns positions); gated on intermediate
+  // so a settled cosmetic re-render can't stomp the decollided layout.
+  useEffect(() => {
+    if (!positionsAreIntermediate || !buffers || !data?.length) return;
+    if (data.length !== buffers.N) return; // skip the frame where seedKey is mid-swap
+    writePositions(buffers.positions.value.array, data);
+    buffers.positions.value.needsUpdate = true;
+  }, [data, buffers, positionsAreIntermediate]);
 
   // Cosmetic buffers sized to the seed, seeded with the current style, rewritten
   // in place on restyle — so hover/selection/pulse/focus never touch positions.
@@ -553,9 +566,26 @@ export function R3FDotsWebGPU({
     }
 
     const job = jobRef.current;
-    // Skip a job whose seed changed under it; the scheduler relaunches against
-    // the new buffers (and that launch's startJob retags job.buffers).
-    if (job.buffers && job.buffers !== buffers) return;
+    // The point set can change under an in-flight job: the final streamed frame
+    // (full count) lands a beat after the base launch has already bound the sim
+    // to a partial count, so `buffers` rebuilds and no longer matches what the
+    // job's compute pipelines were built against. Those pipelines reference the
+    // stale buffer instances and can't be retargeted in place — but the launch
+    // request is still pending and its sourceData already matches the new count,
+    // so re-run startJob to rebuild the sim against the live buffers. (The
+    // scheduler does NOT relaunch here: same logical layout, no scope/size
+    // change — so without this the job is orphaned and decollision never runs.)
+    // If a *newer* request superseded ours, drop to idle; the consume block
+    // above picks the new one up.
+    if (job.buffers && job.buffers !== buffers) {
+      const req = channel && channel.request;
+      if (job.mode === 'sim' && req && req.id === job.jobId) {
+        startJob(req); // rebind the sim to the live buffers
+      } else {
+        jobRef.current = { mode: 'idle' };
+      }
+      return;
+    }
     if (job.mode === 'sim') {
       const p = job.sim;
       const remaining = Math.max(0, job.maxIterations - job.iterations);

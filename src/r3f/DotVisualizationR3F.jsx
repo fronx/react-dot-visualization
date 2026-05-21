@@ -531,6 +531,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             hoveredId={hoveredId}
             hoverSizeMultiplier={hoverSizeMultiplier}
             hoverOpacity={hoverOpacity}
+            positionsAreIntermediate={positionsAreIntermediate}
             gpuControlRef={gpuControlRef}
           />
           <HoverDetector
