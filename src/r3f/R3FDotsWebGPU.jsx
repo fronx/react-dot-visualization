@@ -17,6 +17,10 @@ import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
 import { instanceIndex, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
+import {
+  createDensityRenderTarget, createSplatScene, createDensityResolveMesh,
+  densityFadeForProjectedPx, BANDWIDTH_PX,
+} from './densityField.js';
 import { computeGridParams } from '../decollision-webgpu.js';
 import {
   buildCountBins, buildScanStep, buildPlaceParticles, buildCollideSpatial,
@@ -255,8 +259,53 @@ export function R3FDotsWebGPU({
   // min-screen-size clamp in buildDotMesh tracks zoom. Seeded large so dots are
   // not enlarged on the first frame, before the real value lands.
   const pxPerWorldU = useMemo(() => uniform(float(1e6)), []);
+  const bandwidthPxU = useMemo(() => uniform(float(BANDWIDTH_PX)), []);
+  const densityFadeU = useMemo(() => uniform(float(0)), []);
+
+  // Density-field "lens": splat the points into a float RT each frame, then a
+  // fullscreen quad resolves it (perceptual mean + density→brightness) and
+  // crossfades over the crisp dots by zoom. See densityField.js.
+  const densityRT = useMemo(() => createDensityRenderTarget(2, 2), []);
+  useEffect(() => () => densityRT.dispose(), [densityRT]);
+
+  const splat = useMemo(() => {
+    if (!buffers || !cosmetic) return null;
+    return createSplatScene({
+      count: buffers.N, positions: buffers.positions,
+      colors: cosmetic.colors, alphas: cosmetic.alphas,
+      pxPerWorldU, bandwidthPxU,
+    });
+  }, [buffers, cosmetic, pxPerWorldU, bandwidthPxU]);
+  useEffect(() => () => {
+    if (splat) { splat.mesh.geometry.dispose(); splat.mesh.material.dispose(); }
+  }, [splat]);
+
+  const densityMesh = useMemo(
+    () => createDensityResolveMesh({ densityRT, densityFadeU }),
+    [densityRT, densityFadeU],
+  );
+
   useFrame((state) => {
-    pxPerWorldU.value = (state.size.height / (2 * state.camera.position.z * TAN_HALF_FOV)) * state.gl.getPixelRatio();
+    const dpr = state.gl.getPixelRatio();
+    const pxPerWorld = (state.size.height / (2 * state.camera.position.z * TAN_HALF_FOV)) * dpr;
+    pxPerWorldU.value = pxPerWorld;
+    // Crossfade by the projected size of a typical dot: dots when large, density when small.
+    densityFadeU.value = densityFadeForProjectedPx(defaultSize * pxPerWorld);
+
+    if (!splat) return;
+    // Keep the RT at drawing-buffer resolution (full-res; bandwidth is px-based).
+    const w = Math.max(1, Math.round(state.size.width * dpr));
+    const h = Math.max(1, Math.round(state.size.height * dpr));
+    if (densityRT.width !== w || densityRT.height !== h) densityRT.setSize(w, h);
+
+    // Accumulate splats → RT; R3F's auto-render then draws the scene (incl. the
+    // resolve quad sampling this RT). Priority 0 keeps R3F owning the screen render.
+    const prevTarget = state.gl.getRenderTarget();
+    state.gl.setRenderTarget(densityRT);
+    state.gl.setClearColor(0x000000, 0);
+    state.gl.clear();
+    state.gl.render(splat.scene, state.camera);
+    state.gl.setRenderTarget(prevTarget);
   });
 
   const mesh = useMemo(() => {
@@ -467,6 +516,7 @@ export function R3FDotsWebGPU({
       <primitive object={mesh} />
       {hoverMesh && <primitive object={hoverMesh} />}
       {ringMesh && <primitive object={ringMesh} />}
+      <primitive object={densityMesh} />
     </>
   );
 }
