@@ -11,7 +11,7 @@
  * and `apply`:
  *   damped = nextVel[i] * velocityRetain;  pos += damped;  vel = damped
  */
-import { Fn, instanceIndex, Loop, If, vec2, float, int, uint, floor, clamp, max, min, select, sqrt, atomicAdd, atomicLoad, atomicStore } from 'three/tsl';
+import { Fn, instanceIndex, Loop, If, vec2, float, int, uint, floor, clamp, max, min, select, sqrt, atomicAdd, atomicLoad, atomicMax, atomicStore } from 'three/tsl';
 
 const EPS = 1e-6;
 
@@ -175,6 +175,23 @@ export function buildApply({ positions, velocities, nextVel, count, velocityReta
     const damped = nextVel.element(i).mul(float(velocityRetain));
     positions.element(i).addAssign(damped);
     velocities.element(i).assign(damped);
+  })().compute(count);
+}
+
+/**
+ * Reduce the largest per-particle velocity² into a single atomic uint.
+ *
+ * WebGPU atomics do not support float, so callers provide a fixed-point scale
+ * and compare the readback against `epsilon² * scale`. This is intentionally
+ * based on the post-apply velocity rather than overlap count: a decollision run
+ * is "done enough" for visual continuity when the next frame would move no dot
+ * by a meaningful amount.
+ */
+export function buildMeasureMaxVelocitySquared({ velocities, maxVelocitySquared, count, scale = 1000000 }) {
+  return Fn(() => {
+    const v = velocities.element(instanceIndex);
+    const scaled = clamp(v.dot(v).mul(float(scale)), float(0), float(4294967040));
+    atomicMax(maxVelocitySquared.element(uint(0)), uint(scaled));
   })().compute(count);
 }
 

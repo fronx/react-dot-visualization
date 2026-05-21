@@ -12,7 +12,8 @@ import { Canvas } from '@react-three/fiber';
 import { WebGPURenderer } from 'three/webgpu';
 import { R3FScene, CameraInitializer, HoverDetector, CameraSetter, CameraReporter } from './R3FScene.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
-import { R3FDotsWebGPU } from './R3FDotsWebGPU.jsx';
+import { R3FDotsWebGPU, BASE_MAX_SOLVER_ITERATIONS, CONSTRAINT_MAX_SOLVER_ITERATIONS } from './R3FDotsWebGPU.jsx';
+import { makeGpuExecutor } from './gpuDecollisionExecutor.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { boundsForData, computeFitTransformToVisible } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
@@ -158,6 +159,19 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // here. The refs still need to exist for the scheduler's API.
   const alwaysFalseRef = useRef(false);
 
+  // WebGPU command channel: the GPU executor (below) writes sim/lerp requests
+  // here; R3FDotsWebGPU consumes them inside its useFrame and runs the work on
+  // the GPU. A plain ref object decouples the scheduler (here, outside the
+  // Canvas) from the GPU work (inside it), race-free against the lazy mount.
+  const gpuControlRef = useRef({ request: null });
+  const gpuExecutor = useMemo(
+    () => makeGpuExecutor(gpuControlRef, {
+      baseMaxIterations: BASE_MAX_SOLVER_ITERATIONS,
+      constraintMaxIterations: CONSTRAINT_MAX_SOLVER_ITERATIONS,
+    }),
+    [],
+  );
+
   const { updateStablePositions, shouldUseStablePositions } = useStablePositions();
   const hasPositionsChanged = usePositionChangeDetection(defaultSize);
 
@@ -189,16 +203,6 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       processedDataRef.current = finalData;
     }
   }, []);
-
-  // WebGPU settle bridge: the GPU sim hands back settled positions once it comes
-  // to rest. Mirror them into processedData (so fit/hover/getCurrentPositions see
-  // the true settled spread) and fire onDecollisionComplete, matching what the
-  // CPU scheduler does via syncDecollisionState + onBaseReady on the other paths.
-  const handleWebGPUSettle = useCallback((settledData) => {
-    setProcessedData(settledData);
-    processedDataRef.current = settledData;
-    onDecollisionComplete?.(settledData);
-  }, [onDecollisionComplete]);
 
   // Data effect — mirrors Canvas's data effect minus the zoom/auto-fit pieces.
   // Validates input, detects scope/length changes (which need a fresh base
@@ -290,8 +294,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     sendMetrics: false,
     isDraggingRef: alwaysFalseRef,
     interactionActiveRef: alwaysFalseRef,
-    // WebGPU backend runs decollision on the GPU; keep the CPU scheduler off.
-    enabled: enableDecollisioning && backend !== 'webgpu',
+    enabled: enableDecollisioning,
+    // WebGPU runs decollision on the GPU via this executor (sim + lerp stay in
+    // GPU buffers, no per-frame readback); CPU/WebGL use the default executor.
+    executor: backend === 'webgpu' ? gpuExecutor : null,
   });
 
   schedulerRef.current = scheduler;
@@ -534,8 +540,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             hoveredId={hoveredId}
             hoverSizeMultiplier={hoverSizeMultiplier}
             hoverOpacity={hoverOpacity}
-            enableDecollisioning={enableDecollisioning}
-            onSettle={handleWebGPUSettle}
+            gpuControlRef={gpuControlRef}
           />
           <HoverDetector
             data={processedData}

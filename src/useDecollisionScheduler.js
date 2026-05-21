@@ -1,7 +1,7 @@
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useEffect, useMemo } from 'react';
 import * as d3 from 'd3';
 import { PHASE, onIntermediateChange, onBaseComplete, onConstraintRequest, onColdStart } from './decollisionScheduler.js';
-import { decollisioning } from './decollisioning.js';
+import { makeCpuExecutor } from './cpuDecollisionExecutor.js';
 import { useLatest } from './useLatest.js';
 import { useStableCallback } from './useStableCallback.js';
 
@@ -72,6 +72,7 @@ export function useDecollisionScheduler({
   isDraggingRef,
   interactionActiveRef,
   enabled = true,
+  executor: providedExecutor = null,
 }) {
   const phaseRef = useRef(PHASE.AWAITING_LAYOUT);
   const simulationRef = useRef(null);
@@ -99,6 +100,16 @@ export function useDecollisionScheduler({
   const enabledRef = useLatest(enabled);
   const prevEnabledRef = useRef(enabled);
 
+  // Execution backend. Default = CPU/standalone-WebGPU sim + d3.timer lerp
+  // (built here so existing callers pass nothing and keep their behavior). The
+  // WebGPU R3F path injects a GPU-resident executor; only the *how* differs —
+  // every decision below (phase, cache, go-through-base) is renderer-agnostic.
+  const defaultCpuExecutor = useMemo(
+    () => makeCpuExecutor({ decollisionEngineRef, isDraggingRef, interactionActiveRef, sendMetricsRef }),
+    [decollisionEngineRef, isDraggingRef, interactionActiveRef, sendMetricsRef],
+  );
+  const executor = providedExecutor ?? defaultCpuExecutor;
+
   const cancelSimulation = useCallback(() => {
     if (simulationRef.current) {
       simulationRef.current.stop();
@@ -121,35 +132,24 @@ export function useDecollisionScheduler({
     cancelSimulation();
 
     const fnDotSize = makeDotSizeFn(overrides, defaultSizeRef.current);
-    const skipFrames = transitionConfig?.enabled === true;
-    let cancelled = false;
-
     stableOnSimulationRunningChange(true);
 
-    const simulation = decollisioning(
+    const handle = executor.runSimulation({
       sourceData,
-      (nodes) => {
-        if (!cancelled) stableOnUpdateNodes(nodes);
-      },
       fnDotSize,
-      (finalData) => {
-        if (cancelled) return;
+      transitionConfig,
+      constraintKey: constraintKeyForLaunch,
+      onUpdateNodes: stableOnUpdateNodes,
+      onComplete: (finalData) => {
         simulationRef.current = null;
         stableOnSimulationRunningChange(false);
         stableSyncDecollisionState(finalData);
         onComplete(finalData, constraintKeyForLaunch);
       },
-      skipFrames,
-      transitionConfig,
-      {
-        engine: decollisionEngineRef.current,
-        shouldPublishIntermediate: () => !(isDraggingRef.current || interactionActiveRef.current),
-        sendMetrics: sendMetricsRef.current,
-      }
-    );
+    });
 
-    simulationRef.current = simulation;
-  }, [cancelSimulation, defaultSizeRef, stableOnUpdateNodes, stableSyncDecollisionState, stableOnSimulationRunningChange, decollisionEngineRef, isDraggingRef, interactionActiveRef, sendMetricsRef]);
+    simulationRef.current = handle;
+  }, [cancelSimulation, defaultSizeRef, executor, stableOnUpdateNodes, stableSyncDecollisionState, stableOnSimulationRunningChange]);
 
   // Ref to break circular dependency: launchBase → launchConstraint → processAction → launchBase
   const launchConstraintRef = useRef(null);
@@ -243,33 +243,21 @@ export function useDecollisionScheduler({
       return pos ? { ...item, x: pos.x, y: pos.y } : item;
     });
 
-    const ease = d3.easeCubicOut;
-    let cancelled = false;
-
-    const timer = d3.timer((elapsed) => {
-      if (cancelled) { timer.stop(); return; }
-      const t = Math.min(1, ease(elapsed / duration));
-      const interpolated = target.map((targetItem, i) => {
-        const source = from[i] || targetItem;
-        return {
-          ...targetItem,
-          x: source.x + (targetItem.x - source.x) * t,
-          y: source.y + (targetItem.y - source.y) * t,
-        };
-      });
-      stableOnUpdateNodes(interpolated);
-      if (t >= 1) {
-        timer.stop();
+    const handle = executor.runAnimation({
+      fromData: from,
+      target,
+      targetPositions: positions,
+      duration,
+      onUpdateNodes: stableOnUpdateNodes,
+      onComplete: (finalData) => {
         simulationRef.current = null;
-        stableSyncDecollisionState(target);
-        onComplete(target);
-      }
+        stableSyncDecollisionState(finalData);
+        onComplete(finalData);
+      },
     });
 
-    simulationRef.current = {
-      stop() { cancelled = true; timer.stop(); }
-    };
-  }, [dataRef, getOnScreenData, cancelSimulation, stableOnUpdateNodes, stableSyncDecollisionState]);
+    simulationRef.current = handle;
+  }, [dataRef, getOnScreenData, cancelSimulation, executor, stableOnUpdateNodes, stableSyncDecollisionState]);
 
   // Ref to access processAction from animate-to-base completion
   const processActionRef = useRef(null);

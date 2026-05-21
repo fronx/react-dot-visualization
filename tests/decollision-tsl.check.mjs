@@ -12,8 +12,13 @@
  */
 import './tslShims.mjs'; // must be first — sets navigator.gpu/self/rAF before three loads
 import { instancedArray } from 'three/tsl';
-import { makeRenderer, readbackF32 } from './tslHeadless.mjs';
-import { buildCollideBruteForce, buildApply } from '../src/decollision-tsl.js';
+import { makeRenderer, readbackF32, readbackU32 } from './tslHeadless.mjs';
+import {
+  buildCollideBruteForce,
+  buildApply,
+  buildMeasureMaxVelocitySquared,
+  buildClearAtomicU32,
+} from '../src/decollision-tsl.js';
 
 let failures = 0;
 function approxEqual(label, got, expected, tol = 1e-4) {
@@ -95,6 +100,27 @@ const renderer = await makeRenderer();
   for (let i = 0; i < n * 2; i++) expected[i] = pos[i] + nv[i] * retain;
   const ok = approxEqual('apply', outPos, expected);
   console.log(ok ? 'PASS: TSL apply advances positions by damped velocity (n=16)' : 'FAIL: apply');
+}
+
+// Check 3: fixed-point max-velocity metric reduces into one atomic uint.
+{
+  const n = 4, scale = 1000000;
+  const velocities = instancedArray(new Float32Array([
+    0.1, 0.0,    // v² * scale = 10000
+    0.03, 0.04,  // v² * scale = 2500
+    0.0, 0.0,
+    -0.02, 0.0,
+  ]), 'vec2');
+  const metric = instancedArray(new Uint32Array([999]), 'uint').toAtomic();
+  await renderer.computeAsync(buildClearAtomicU32({ buffer: metric, length: 1 }));
+  await renderer.computeAsync(buildMeasureMaxVelocitySquared({ velocities, maxVelocitySquared: metric, count: n, scale }));
+  const out = await readbackU32(renderer, metric, 1);
+  if (out[0] < 9999 || out[0] > 10001) {
+    console.error(`  FAIL maxVelocitySquared: TSL ${out[0]} vs expected ~10000`);
+    failures++;
+  } else {
+    console.log('PASS: TSL max-velocity metric reduces to fixed-point atomic max');
+  }
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} FAILURE(S)`);

@@ -4,9 +4,21 @@
  * The WebGPU counterpart to R3FDots. Where R3FDots writes per-instance matrices
  * on the CPU each frame, this layer keeps everything on the GPU: per-instance
  * position/color/alpha/focus/scale live in storage buffers, the decollision sim
- * (the validated TSL kernels) runs in-shader each frame and writes the positions
- * buffer, and the bevel-stroke node material reads it via element(instanceIndex)
- * — zero readback, no CPU-side per-instance work.
+ * (the validated TSL kernels) runs in-shader and writes the positions buffer,
+ * and the bevel-stroke node material reads it via element(instanceIndex) — zero
+ * readback during animation, no CPU-side per-instance work.
+ *
+ * Decollision is driven by the shared useDecollisionScheduler (in the parent),
+ * via a GPU executor + a request channel (gpuControlRef). The scheduler owns
+ * every decision — base vs. constraint, the position cache, go-through-base
+ * transitions; this layer only executes them on the GPU:
+ *   - a 'sim' request seeds the positions buffer, builds the spatial-hash
+ *     collide pipeline for the launch radii, steps the kernels in-shader until
+ *     the velocity metric converges, then reads positions back ONCE at settle.
+ *   - a 'lerp' request snapshots the live positions, uploads the cached target,
+ *     and mixes from→target in-shader each frame (zero per-frame copy).
+ * Focus therefore animates from the current settled layout (or a cached one),
+ * never from the raw UMAP cloud — matching the Canvas/WebGL scheduler exactly.
  *
  * Appearance (fill/opacity/scale/focus) is resolved through the shared rules in
  * dotAppearance.js — the same source of truth R3FDots uses — so hover, dim, and
@@ -15,7 +27,7 @@
 import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { instanceIndex, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
+import { Fn, instanceIndex, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import {
   createDensityRenderTarget, createSplatScene, createDensityResolveMesh,
@@ -24,7 +36,7 @@ import {
 import { computeGridParams } from '../decollision-webgpu.js';
 import {
   buildCountBins, buildScanStep, buildPlaceParticles, buildCollideSpatial,
-  buildApply, buildClearAtomicU32,
+  buildApply, buildMeasureMaxVelocitySquared, buildClearAtomicU32,
 } from '../decollision-tsl.js';
 import {
   resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus,
@@ -33,8 +45,27 @@ import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 
-const ALPHA_DECAY = 0.0228; // d3-force defaults
-const ALPHA_MIN = 0.001;
+// Decollision now runs to a velocity fixpoint instead of stopping after a fixed
+// number of rendered frames. The max values below are safety caps in solver
+// iterations; convergence normally stops earlier. Multiple iterations per frame
+// keep wall-clock convergence practical for large samples maps while still
+// allowing the render loop to breathe between batches.
+export const BASE_MAX_SOLVER_ITERATIONS = 2400;
+export const CONSTRAINT_MAX_SOLVER_ITERATIONS = 1200;
+const SOLVER_ITERATIONS_PER_FRAME = 4;
+const CONVERGENCE_CHECK_FRAME_INTERVAL = 8;
+const CONVERGENCE_METRIC_SCALE = 1000000;
+const CONVERGED_MAX_VELOCITY = 0.002;
+const CONVERGED_MAX_VELOCITY_SQUARED_U32 = Math.ceil(
+  CONVERGED_MAX_VELOCITY * CONVERGED_MAX_VELOCITY * CONVERGENCE_METRIC_SCALE,
+);
+
+// Distinct grids to keep compiled at once (per seed). Focuses overwhelmingly
+// share one grid; a handful of distinct cellSizes (big dots, the bumped-set
+// drill-in) add entries. The cap bounds the compiled-pipeline + bin-buffer
+// footprint instead of leaking one set per launch.
+const MAX_SIM_CACHE = 12;
+
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const TAN_HALF_FOV = Math.tan(CAMERA_FOV_RAD / 2);
 // Min on-screen dot radius (device px); mirrors ColoredDots' MIN_BITMAP_RADIUS.
@@ -47,6 +78,10 @@ const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
 
+// d3.easeCubicOut — matches the CPU executor's transition easing so GPU and
+// Canvas focus transitions feel identical.
+const easeCubicOut = (t) => 1 - Math.pow(1 - t, 3);
+
 function scanIterations(n) {
   if (n <= 1) return 0;
   let iters = Math.ceil(Math.log2(n));
@@ -54,59 +89,122 @@ function scanIterations(n) {
   return iters;
 }
 
+// Persistent per-seed buffers: position/velocity for the sim, plus from/target
+// scratch for the GPU lerp. Created once per point set (data identity) and kept
+// across constraint changes — so focus restyle never re-seeds positions. Seeded
+// from the raw input (worldY = -item.y) so the first paint shows real positions
+// before the base decollision runs.
+function buildSeedBuffers(data) {
+  const N = data.length;
+  const pos = new Float32Array(N * 2);
+  for (let i = 0; i < N; i++) {
+    pos[i * 2] = data[i].x;
+    pos[i * 2 + 1] = -data[i].y;
+  }
+  return {
+    N,
+    positions: instancedArray(pos, 'vec2'),
+    velocities: instancedArray(new Float32Array(N * 2), 'vec2'),
+    fromPos: instancedArray(new Float32Array(N * 2), 'vec2'),
+    targetPos: instancedArray(new Float32Array(N * 2), 'vec2'),
+  };
+}
+
+// Grid-derived cache key: two launches whose grid params match can share one set
+// of compute pipelines + bin buffers. Focuses seed from the same base layout, so
+// they almost always share a grid (cellSize is usually the UMAP-spacing-driven
+// targetCellSize, unaffected by one enlarged dot) — which is what lets us reuse
+// instead of leaking a fresh pipeline per click.
+function gridSignature(g) {
+  return `${g.gridDimX}x${g.gridDimY}|${g.cellSize.toFixed(4)}|${g.gridMinX.toFixed(3)},${g.gridMinY.toFixed(3)}`;
+}
+
+// Build the spatial-hash collide pipeline for a grid. The result is cached by
+// gridSignature and reused across launches (see startJob) — its `radii` buffer
+// is rewritten in place per launch, so the pipeline never needs rebuilding for a
+// new focus. Positions/velocities are the persistent seed buffers; the radii +
+// bin scratch live here.
+function buildSimResources({ N, positions, velocities }, grid, radiiArray) {
+  const len = grid.numBins + 1;
+  const radii = instancedArray(radiiArray, 'float');
+  const nextVel = instancedArray(new Float32Array(N * 2), 'vec2');
+  const binCount = instancedArray(new Uint32Array(len), 'uint').toAtomic();
+  const scratch = instancedArray(new Uint32Array(len), 'uint');
+  const placeCounter = instancedArray(new Uint32Array(grid.numBins), 'uint').toAtomic();
+  const sortedIndices = instancedArray(new Uint32Array(N), 'uint');
+  const maxVelocitySquared = instancedArray(new Uint32Array(1), 'uint').toAtomic();
+
+  const scanSteps = [];
+  const iters = scanIterations(len);
+  for (let s = 0; s < iters; s++) {
+    const a2b = s % 2 === 0;
+    scanSteps.push(buildScanStep({
+      src: a2b ? binCount : scratch, dst: a2b ? scratch : binCount,
+      srcAtomic: a2b, dstAtomic: !a2b, step: 1 << s, length: len,
+    }));
+  }
+
+  return {
+    radii, // exposed so a cache hit can rewrite radii without rebuilding the pipeline
+    clearBin: buildClearAtomicU32({ buffer: binCount, length: len }),
+    clearPlace: buildClearAtomicU32({ buffer: placeCounter, length: grid.numBins }),
+    countBins: buildCountBins({ positions, velocities, binCount, grid, count: N }),
+    scanSteps,
+    place: buildPlaceParticles({ positions, velocities, binCount, placeCounter, sortedIndices, grid, count: N }),
+    // Full-strength push (no alpha multiplier): d3.forceCollide and the standalone
+    // WGSL collide both resolve overlaps at full strength every tick and use alpha
+    // only as a run clock. The earlier alpha-scaled push tapered the separation
+    // force to ~0 long before overlaps were resolved ("gives up too quickly"); the
+    // per-launch frame cap is the run clock now.
+    collide: buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count: N, strength: 1 }),
+    apply: buildApply({ positions, velocities, nextVel, count: N, velocityRetain: 0.6 }),
+    clearMetric: buildClearAtomicU32({ buffer: maxVelocitySquared, length: 1 }),
+    measureVelocity: buildMeasureMaxVelocitySquared({
+      velocities,
+      maxVelocitySquared,
+      count: N,
+      scale: CONVERGENCE_METRIC_SCALE,
+    }),
+    maxVelocitySquared,
+  };
+}
+
+async function readbackMaxVelocitySquared(renderer, metricBuffer) {
+  const arrayBuffer = await renderer.getArrayBufferAsync(metricBuffer.value);
+  return new Uint32Array(arrayBuffer)[0] ?? 0;
+}
+
+// Two trivial kernels for the GPU lerp: snapshot the live positions into fromPos
+// (one GPU→GPU copy at transition start), then mix fromPos→targetPos by a uniform
+// t each frame. No per-frame CPU↔GPU copy — just the t uniform.
+function buildLerpKernels({ N, positions, fromPos, targetPos }, tU) {
+  const snapshot = Fn(() => {
+    fromPos.element(instanceIndex).assign(positions.element(instanceIndex));
+  })().compute(N);
+  const mixStep = Fn(() => {
+    const i = instanceIndex;
+    const a = fromPos.element(i);
+    const b = targetPos.element(i);
+    positions.element(i).assign(a.mul(float(1).sub(tU)).add(b.mul(tU)));
+  })().compute(N);
+  return { snapshot, mixStep };
+}
+
 // Physics radius matches R3FDots: radiusOverride ?? item.size ?? defaultSize.
 // `dotStyles.r` (focus enlargement) is mirrored into radiusOverrides by the
-// caller, so it reaches the sim through that path — the physics buffers never
-// read dotStyles, which is what lets cosmetic style churn skip a rebuild.
+// caller, so it reaches the sim through that path. Used to build the per-launch
+// radii when the scheduler doesn't supply a dot-size fn (defensive default).
 function physicsRadius(item, { defaultSize, radiusOverrides }) {
   const baseSize = radiusOverrides?.get(item.id) ?? item.size ?? defaultSize;
   return Math.max(0.0001, baseSize);
 }
 
-// Build the position/velocity/grid storage buffers + the simulation's static
-// inputs (radii, sort scratch). Positions use R3FDots' world convention
-// (worldY = -item.y) and seed the GPU sim from the raw, un-decollided input —
-// the spread the decollision animates away from. Rebuilt only when the point
-// set or its physical sizes change, never on cosmetic restyle, so the alpha
-// schedule (created alongside, in `pipeline`) runs once to completion instead
-// of restarting on every hover/selection/pulse frame.
-function buildPhysicsBuffers(data, { defaultSize, radiusOverrides }) {
-  const N = data.length;
-  const pos = new Float32Array(N * 2);
-  const rad = new Float32Array(N);
-  const nodes = new Array(N);
-
-  for (let i = 0; i < N; i++) {
-    const item = data[i];
-    const x = item.x;
-    const y = -item.y;
-    pos[i * 2] = x; pos[i * 2 + 1] = y;
-    nodes[i] = { x, y };
-    rad[i] = physicsRadius(item, { defaultSize, radiusOverrides });
-  }
-
-  const grid = computeGridParams(nodes, rad);
-  const len = grid.numBins + 1;
-  return {
-    N,
-    grid, len,
-    positions: instancedArray(pos, 'vec2'),
-    velocities: instancedArray(new Float32Array(N * 2), 'vec2'),
-    radii: instancedArray(rad, 'float'),
-    nextVel: instancedArray(N, 'vec2'),
-    binCount: instancedArray(new Uint32Array(len), 'uint').toAtomic(),
-    scratch: instancedArray(new Uint32Array(len), 'uint'),
-    placeCounter: instancedArray(new Uint32Array(grid.numBins), 'uint').toAtomic(),
-    sortedIndices: instancedArray(new Uint32Array(N), 'uint'),
-  };
-}
-
 // Per-instance appearance: color/alpha/focus/scale. Lives in its own buffers so
 // restyling (hover, selection, pulse, semantic colors) writes these in place
-// without touching the position buffers or resetting the decollision alpha.
-// `scale` is the *render* size (base size × hover) and is separate from the
-// physics radii buffer, so hover enlargement never perturbs the sim. Seeded at
-// build so the first paint is correct (the restyle effect runs after commit).
+// without touching the position buffers. `scale` is the *render* size (base size
+// × hover) and is separate from the physics radii, so hover never perturbs the
+// sim. Seeded at build so the first paint is correct (the restyle effect runs
+// after commit).
 function buildCosmeticBuffers(N, data, opts) {
   const cosmetic = {
     colors: instancedArray(new Float32Array(N * 3), 'vec3'),
@@ -151,31 +249,29 @@ function writeCosmetics(cosmetic, data, opts) {
   scaleAttr.needsUpdate = true;
 }
 
-// Read the settled GPU positions back to the CPU once the sim has come to
-// rest. Positions are stored in world convention (worldY = -item.y; see
-// buildPhysicsBuffers), so the inverse negation restores viewBox-space y for
-// the caller. With decollisioning off the GPU never ran, so the seed IS final.
-async function readSettledData(renderer, buffers, data, decollisioned) {
-  if (!decollisioned) return data;
-  const arrayBuffer = await renderer.getArrayBufferAsync(buffers.positions.value);
+// Read the GPU positions back to the CPU. Positions are world convention
+// (worldY = -item.y; see buildSeedBuffers), so the inverse negation restores
+// viewBox-space y for the caller. `template` supplies the id/order (the launch's
+// sourceData), so the index→item mapping stays valid.
+async function readbackPositions(renderer, positionsBuffer, template) {
+  const arrayBuffer = await renderer.getArrayBufferAsync(positionsBuffer.value);
   const pos = new Float32Array(arrayBuffer);
-  const out = new Array(data.length);
+  const out = new Array(template.length);
   let nonFinite = 0;
-  for (let i = 0; i < data.length; i++) {
+  for (let i = 0; i < template.length; i++) {
     const x = pos[i * 2];
     const y = -pos[i * 2 + 1];
     if (Number.isFinite(x) && Number.isFinite(y)) {
-      out[i] = { ...data[i], x, y };
+      out[i] = { ...template[i], x, y };
     } else {
       // The GPU sim can diverge a dot to NaN (e.g. two dots at the exact same
-      // spot normalize a zero vector). Keep its finite seed position so
-      // processedData stays clean — a single NaN poisons boundsForData and
-      // every fit/zoom that reads it.
-      out[i] = data[i];
+      // spot normalize a zero vector). Keep its finite seed so a single NaN
+      // doesn't poison boundsForData and every fit/zoom that reads it.
+      out[i] = template[i];
       nonFinite++;
     }
   }
-  if (nonFinite > 0) console.warn(`[r3f-webgpu] readback kept seed for ${nonFinite}/${data.length} non-finite settled positions`);
+  if (nonFinite > 0) console.warn(`[r3f-webgpu] readback kept seed for ${nonFinite}/${template.length} non-finite settled positions`);
   return out;
 }
 
@@ -215,8 +311,7 @@ export function R3FDotsWebGPU({
   hoveredId = null,
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
-  enableDecollisioning = true,
-  onSettle,
+  gpuControlRef = null,
 }) {
   const gl = useThree((s) => s.gl);
 
@@ -225,18 +320,33 @@ export function R3FDotsWebGPU({
     hoveredId, hoverSizeMultiplier, hoverOpacity,
   };
 
-  // Physics buffers rebuild only when the point set or its sizes change —
-  // seeding the sim from raw positions and (via `pipeline`) resetting the
-  // alpha schedule. Cosmetic restyle deliberately does NOT invalidate these.
+  // Seed identity: changes only when the positional content (length + coords)
+  // changes — NOT when sizes/colors do. fingertip recomputes `data` (new array,
+  // same coords) whenever radii/folderColors resolve or a paint input changes;
+  // keying the buffers on the reference would destroy the sim mid-flight on
+  // every such churn (the scheduler is one-shot and wouldn't relaunch). Hashing
+  // x/y keeps the GPU buffers alive across cosmetic re-renders.
+  const seedKey = useMemo(() => {
+    if (!data || data.length === 0) return 'empty';
+    let h = (2166136261 ^ data.length) >>> 0;
+    for (let i = 0; i < data.length; i++) {
+      h = Math.imul(h ^ ((data[i].x * 8192) | 0), 16777619);
+      h = Math.imul(h ^ ((data[i].y * 8192) | 0), 16777619);
+    }
+    return h >>> 0;
+  }, [data]);
+
+  // Persistent per-seed buffers — rebuilt only when the seed identity changes
+  // (new point set / streaming flush / re-projection), never on cosmetic restyle
+  // or focus. buildSeedBuffers reads only x/y/length, all captured by seedKey.
   const buffers = useMemo(
-    () => (data && data.length ? buildPhysicsBuffers(data, { defaultSize, radiusOverrides }) : null),
-    [data, defaultSize, radiusOverrides],
+    () => (data && data.length ? buildSeedBuffers(data) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [seedKey],
   );
 
-  // Cosmetic buffers are sized to the physics buffers, seeded with the current
-  // style, and rewritten in place on restyle — so hover/selection/pulse never
-  // restart the decollision. The seed-at-build deps intentionally exclude the
-  // style inputs: the effect below handles restyle without a rebuild.
+  // Cosmetic buffers sized to the seed, seeded with the current style, rewritten
+  // in place on restyle — so hover/selection/pulse/focus never touch positions.
   const cosmetic = useMemo(
     () => (buffers && data && data.length
       ? buildCosmeticBuffers(buffers.N, data, cosmeticOpts)
@@ -262,9 +372,199 @@ export function R3FDotsWebGPU({
   const bandwidthPxU = useMemo(() => uniform(float(BANDWIDTH_PX)), []);
   const densityFadeU = useMemo(() => uniform(float(0)), []);
 
-  // Density-field "lens": splat the points into a float RT each frame, then a
-  // fullscreen quad resolves it (perceptual mean + density→brightness) and
-  // crossfades over the crisp dots by zoom. See densityField.js.
+  // GPU lerp: t uniform + snapshot/mix kernels over the persistent buffers.
+  const tU = useMemo(() => uniform(float(0)), []);
+  const lerpKernels = useMemo(
+    () => (buffers ? buildLerpKernels(buffers, tU) : null),
+    [buffers, tU],
+  );
+
+  // ── Decollision job state, driven by the scheduler's request channel ──────
+  // jobRef holds the current GPU job ({ mode: 'idle' | 'sim' | 'lerp' | 'settling' }
+  // plus its resources/clock). handledReqId tracks which request we've consumed.
+  // settledRef caches the last settled CPU positions for the pulse ring.
+  const jobRef = useRef({ mode: 'idle' });
+  const handledReqId = useRef(0);
+  const settledRef = useRef(null);
+
+  // Per-seed cache of sim resources keyed by grid signature. Reused across
+  // launches (a focus rewrites the radii buffer in place) so we don't leak a
+  // fresh pipeline + bin buffers per click. Fresh Map per seed: old resources
+  // referencing the previous buffers are dropped wholesale on a new seed.
+  const simCache = useMemo(() => new Map(), [buffers]);
+
+  // A job is tagged with the buffers it was built against (see startJob); the
+  // useFrame loop skips stepping a job whose buffers no longer match the live
+  // ones (a seed changed under it). We deliberately do NOT reset the job in a
+  // [buffers] effect: React flushes that effect asynchronously, and R3F's frame
+  // loop can run a frame *before* it — which would reset the job the loop just
+  // started on mount. Gating inside useFrame is synchronous with the loop.
+
+  // Start the GPU job named by a scheduler request. Side effects (buffer writes,
+  // pipeline build) run here, on the frame the request is first seen.
+  const startJob = (req) => {
+    if (!buffers) return;
+    if (req.type === 'stop') {
+      jobRef.current = { mode: 'idle' };
+      return;
+    }
+    if (req.type === 'sim') {
+      const { sourceData, fnDotSize, onComplete } = req;
+      const maxIterations = Number.isFinite(req.maxIterations)
+        ? Math.max(1, Math.floor(req.maxIterations))
+        : BASE_MAX_SOLVER_ITERATIONS;
+      const N = buffers.N;
+      // Seed positions from sourceData (raw cloud for base; the cached base
+      // layout with one enlarged dot for a constraint) and zero velocities.
+      const posArr = buffers.positions.value.array;
+      const velArr = buffers.velocities.value.array;
+      for (let i = 0; i < N; i++) {
+        posArr[i * 2] = sourceData[i].x;
+        posArr[i * 2 + 1] = -sourceData[i].y;
+        velArr[i * 2] = 0; velArr[i * 2 + 1] = 0;
+      }
+      buffers.positions.value.needsUpdate = true;
+      buffers.velocities.value.needsUpdate = true;
+      const radiiArray = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const r = fnDotSize ? Number(fnDotSize(sourceData[i])) : physicsRadius(sourceData[i], { defaultSize, radiusOverrides });
+        radiiArray[i] = Number.isFinite(r) ? Math.max(0.0001, r) : 0.0001;
+      }
+      // Grid from the just-seeded positions + this launch's radii. Reuse a cached
+      // pipeline when the grid matches (the common case for focuses); otherwise
+      // build one and cap the cache so pipelines don't accumulate.
+      const nodes = new Array(N);
+      for (let i = 0; i < N; i++) nodes[i] = { x: posArr[i * 2], y: posArr[i * 2 + 1] };
+      const grid = computeGridParams(nodes, radiiArray);
+      const sig = gridSignature(grid);
+      let sim = simCache.get(sig);
+      if (sim) {
+        sim.radii.value.array.set(radiiArray);
+        sim.radii.value.needsUpdate = true;
+        simCache.delete(sig); simCache.set(sig, sim); // mark most-recently-used
+      } else {
+        sim = buildSimResources(buffers, grid, radiiArray);
+        simCache.set(sig, sim);
+        if (simCache.size > MAX_SIM_CACHE) simCache.delete(simCache.keys().next().value);
+      }
+      jobRef.current = {
+        mode: 'sim',
+        buffers,
+        sim,
+        frameBatches: 0,
+        iterations: 0,
+        maxIterations,
+        metricPending: false,
+        lastMetric: Infinity,
+        onComplete,
+        template: sourceData,
+        jobId: req.id,
+      };
+      return;
+    }
+    if (req.type === 'lerp') {
+      const { target, duration, onComplete } = req;
+      const N = buffers.N;
+      const tgt = buffers.targetPos.value.array;
+      for (let i = 0; i < N; i++) {
+        tgt[i * 2] = target[i].x;
+        tgt[i * 2 + 1] = -target[i].y;
+      }
+      buffers.targetPos.value.needsUpdate = true;
+      if (lerpKernels) gl.compute(lerpKernels.snapshot); // fromPos = live positions
+      jobRef.current = {
+        mode: 'lerp',
+        buffers,
+        t0: performance.now(),
+        duration: Math.max(1, duration),
+        onComplete,
+        target,
+        jobId: req.id,
+      };
+      return;
+    }
+  };
+
+  const settleSimJob = (job) => {
+    if (!job || job.mode !== 'sim') return;
+    job.mode = 'settling'; // stop stepping; await the one-shot position readback
+    const jobId = job.jobId;
+    const onComplete = job.onComplete;
+    readbackPositions(gl, buffers.positions, job.template).then((settled) => {
+      if (jobRef.current.jobId !== jobId) return; // superseded by a newer launch
+      settledRef.current = settled;
+      jobRef.current = { mode: 'idle' };
+      onComplete?.(settled);
+    });
+  };
+
+  // Consume the latest request, then step the current job. One useFrame owns the
+  // GPU decollision; the density-RT render below reads the positions it writes.
+  useFrame(() => {
+    const channel = gpuControlRef && gpuControlRef.current;
+    if (channel && channel.request && channel.request.id !== handledReqId.current) {
+      handledReqId.current = channel.request.id;
+      startJob(channel.request);
+    }
+
+    const job = jobRef.current;
+    // Skip a job whose seed changed under it; the scheduler relaunches against
+    // the new buffers (and that launch's startJob retags job.buffers).
+    if (job.buffers && job.buffers !== buffers) return;
+    if (job.mode === 'sim') {
+      const p = job.sim;
+      const remaining = Math.max(0, job.maxIterations - job.iterations);
+      const iterationsThisFrame = Math.min(SOLVER_ITERATIONS_PER_FRAME, remaining);
+      for (let step = 0; step < iterationsThisFrame; step++) {
+        gl.compute(p.clearBin);
+        gl.compute(p.clearPlace);
+        gl.compute(p.countBins);
+        for (let i = 0; i < p.scanSteps.length; i++) gl.compute(p.scanSteps[i]);
+        gl.compute(p.place);
+        gl.compute(p.collide);
+        gl.compute(p.apply);
+        job.iterations += 1;
+      }
+      job.frameBatches += 1;
+
+      if (job.iterations >= job.maxIterations) {
+        settleSimJob(job);
+        return;
+      }
+
+      const shouldCheck = !job.metricPending
+        && job.frameBatches % CONVERGENCE_CHECK_FRAME_INTERVAL === 0;
+      if (shouldCheck) {
+        gl.compute(p.clearMetric);
+        gl.compute(p.measureVelocity);
+        job.metricPending = true;
+        const jobId = job.jobId;
+        readbackMaxVelocitySquared(gl, p.maxVelocitySquared).then((metric) => {
+          const current = jobRef.current;
+          if (current.jobId !== jobId || current.mode !== 'sim') return;
+          current.metricPending = false;
+          current.lastMetric = metric;
+          if (metric <= CONVERGED_MAX_VELOCITY_SQUARED_U32) {
+            settleSimJob(current);
+          }
+        });
+      }
+      return;
+    }
+    if (job.mode === 'lerp') {
+      const t = (performance.now() - job.t0) / job.duration;
+      tU.value = Math.min(1, easeCubicOut(Math.min(1, t)));
+      if (lerpKernels) gl.compute(lerpKernels.mixStep);
+      if (t >= 1) {
+        settledRef.current = job.target;
+        const onComplete = job.onComplete;
+        jobRef.current = { mode: 'idle' };
+        onComplete?.(job.target);
+      }
+    }
+  });
+
+  // ── Density-field "lens" (zoomed-out anti-aliasing) ───────────────────────
   const densityRT = useMemo(() => createDensityRenderTarget(2, 2), []);
   useEffect(() => () => densityRT.dispose(), [densityRT]);
 
@@ -293,13 +593,10 @@ export function R3FDotsWebGPU({
     densityFadeU.value = densityFadeForProjectedPx(defaultSize * pxPerWorld);
 
     if (!splat) return;
-    // Keep the RT at drawing-buffer resolution (full-res; bandwidth is px-based).
     const w = Math.max(1, Math.round(state.size.width * dpr));
     const h = Math.max(1, Math.round(state.size.height * dpr));
     if (densityRT.width !== w || densityRT.height !== h) densityRT.setSize(w, h);
 
-    // Accumulate splats → RT; R3F's auto-render then draws the scene (incl. the
-    // resolve quad sampling this RT). Priority 0 keeps R3F owning the screen render.
     const prevTarget = state.gl.getRenderTarget();
     state.gl.setRenderTarget(densityRT);
     state.gl.setClearColor(0x000000, 0);
@@ -326,69 +623,10 @@ export function R3FDotsWebGPU({
     return m;
   }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
 
-  const pipeline = useMemo(() => {
-    if (!buffers) return null;
-    const { positions, velocities, radii, nextVel, binCount, scratch, placeCounter, sortedIndices, grid, len, N } = buffers;
-    const scanSteps = [];
-    const iters = scanIterations(len);
-    for (let s = 0; s < iters; s++) {
-      const a2b = s % 2 === 0;
-      scanSteps.push(buildScanStep({
-        src: a2b ? binCount : scratch, dst: a2b ? scratch : binCount,
-        srcAtomic: a2b, dstAtomic: !a2b, step: 1 << s, length: len,
-      }));
-    }
-    const alphaU = uniform(1);
-    return {
-      alphaU,
-      clearBin: buildClearAtomicU32({ buffer: binCount, length: len }),
-      clearPlace: buildClearAtomicU32({ buffer: placeCounter, length: grid.numBins }),
-      countBins: buildCountBins({ positions, velocities, binCount, grid, count: N }),
-      scanSteps,
-      place: buildPlaceParticles({ positions, velocities, binCount, placeCounter, sortedIndices, grid, count: N }),
-      collide: buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count: N, strength: 1, alpha: alphaU }),
-      apply: buildApply({ positions, velocities, nextVel, count: N, velocityRetain: 0.6 }),
-    };
-  }, [buffers]);
-
-  // Settled positions cached for the pulse ring (which needs CPU positions to
-  // place its disc behind the playing dot). Set once at readback.
-  const settledRef = useRef(null);
-
-  // One-shot GPU→CPU readback at settle. The sim is GPU-resident, so the CPU
-  // has no idea where the dots ended up — camera-fit, hover, click, and the
-  // pulse ring all need those positions. Reset whenever the physics buffers
-  // rebuild (new point set), so each fresh decollision fires its own settle.
-  const settleFiredRef = useRef(false);
-  useEffect(() => { settleFiredRef.current = false; settledRef.current = null; }, [buffers]);
-
-  useFrame(() => {
-    if (!pipeline) return;
-    const p = pipeline;
-    if (enableDecollisioning && p.alphaU.value > ALPHA_MIN) {
-      gl.compute(p.clearBin);
-      gl.compute(p.clearPlace);
-      gl.compute(p.countBins);
-      for (let i = 0; i < p.scanSteps.length; i++) gl.compute(p.scanSteps[i]);
-      gl.compute(p.place);
-      gl.compute(p.collide);
-      gl.compute(p.apply);
-      p.alphaU.value += (0 - p.alphaU.value) * ALPHA_DECAY;
-      return;
-    }
-    if (settleFiredRef.current || !buffers || !data?.length) return;
-    settleFiredRef.current = true;
-    readSettledData(gl, buffers, data, enableDecollisioning).then((settled) => {
-      settledRef.current = settled;
-      onSettle?.(settled);
-    });
-  });
-
   // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────
   // Same machinery as R3FDots: usePulseAnimation drives a phase clock, this
   // useFrame reads it and writes pulsing dots' size/opacity into the cosmetic
-  // buffers + drives a separate ring layer. Renderer-agnostic timing/sizing
-  // (usePulseAnimation, calculateAdaptiveRingRadius) is reused as-is.
+  // buffers + drives a separate ring layer.
   const getPulseState = usePulseAnimation(dotStyles, undefined, false, true);
   const pulseIds = useMemo(() => {
     const ids = [];
