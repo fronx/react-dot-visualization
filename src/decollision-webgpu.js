@@ -191,8 +191,27 @@ export function computeGridParams(nodes, radii) {
   const minCellSize = 2 * maxRadius;
   const dataW = Math.max(maxX - minX, minCellSize);
   const dataH = Math.max(maxY - minY, minCellSize);
+  // Occupancy-aware cell size: the uniform target (≈3 dots/cell over the bbox)
+  // overpacks dense clusters when the layout is clumpy (dense islands + empty
+  // gaps), so each collision iteration scans hundreds of neighbours. Scale the
+  // target down by how much of the bbox the points actually occupy, estimated
+  // from a coarse grid (~16 pts/cell if uniform → fraction ≈1, so uniform layouts
+  // like the UMAP map are unchanged); clumpy layouts get a smaller cell → ~3
+  // dots/cell → cheap iterations. The MAX_CELLS_PER_SIDE clamp below bounds it.
+  const occSide = Math.max(1, Math.round(Math.sqrt(nodes.length / 16)));
+  const spanX = (maxX - minX) || 1;
+  const spanY = (maxY - minY) || 1;
+  const occCells = new Uint8Array(occSide * occSide);
+  let occupied = 0;
+  for (let i = 0; i < nodes.length; i++) {
+    const ox = Math.min(occSide - 1, Math.max(0, Math.floor(((nodes[i].x - minX) / spanX) * occSide)));
+    const oy = Math.min(occSide - 1, Math.max(0, Math.floor(((nodes[i].y - minY) / spanY) * occSide)));
+    const k = oy * occSide + ox;
+    if (occCells[k] === 0) { occCells[k] = 1; occupied += 1; }
+  }
+  const occupiedFraction = Math.max(1e-3, occupied / (occSide * occSide));
   const targetCellsPerSide = Math.max(1, Math.ceil(Math.sqrt(nodes.length / 3)));
-  const targetCellSize = Math.max(dataW, dataH) / targetCellsPerSide;
+  const targetCellSize = (Math.max(dataW, dataH) / targetCellsPerSide) * Math.sqrt(occupiedFraction);
   const cellSize = Math.max(minCellSize, targetCellSize);
 
   const margin = GRID_BOUNDS_MARGIN_CELLS * cellSize;
