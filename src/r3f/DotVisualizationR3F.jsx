@@ -30,15 +30,20 @@ const EMPTY_RADIUS_OVERRIDES = new Map();
 // ids/ordering — which keeps the settle readback's index→item mapping valid.
 function validateData(data) {
   if (!data || data.length === 0) return [];
-  const out = [];
+  let out = null;
   for (let i = 0; i < data.length; i += 1) {
     const item = data[i];
-    if (typeof item.x === 'number' && typeof item.y === 'number'
-        && Number.isFinite(item.x) && Number.isFinite(item.y)) {
-      out.push(item.id !== undefined ? item : { ...item, id: i });
+    const valid = typeof item.x === 'number' && typeof item.y === 'number'
+      && Number.isFinite(item.x) && Number.isFinite(item.y);
+    const needsFallbackId = valid && item.id === undefined;
+    if (!valid || needsFallbackId) {
+      if (!out) out = data.slice(0, i);
+      if (valid) out.push({ ...item, id: i });
+    } else if (out) {
+      out.push(item);
     }
   }
-  return out;
+  return out ?? data;
 }
 
 // Match DotVisualization's viewBox convention: height = 100, width = 100 *
@@ -69,6 +74,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const {
     backend = 'webgl',
     data = [],
+    streamingPositions = null,
     edges = [],
     dotStyles = new Map(),
     defaultColor = null,
@@ -180,12 +186,6 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const { updateStablePositions, shouldUseStablePositions } = useStablePositions();
   const hasPositionsChanged = usePositionChangeDetection(defaultSize);
 
-  // Validate and assign IDs
-  const ensureIds = useCallback((d) =>
-    d.map((item, i) => ({ ...item, id: item.id !== undefined ? item.id : i })),
-    []
-  );
-
   // Scheduler callback: every simulation tick pushes new node positions in.
   // Do NOT setState — that re-renders R3FDots and forces its full instance-
   // matrix rebuild for all dots, 60 times per second. Canvas avoids this by
@@ -220,10 +220,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       return;
     }
 
-    const dataWithIds = ensureIds(data);
-    const validData = dataWithIds.filter(item =>
-      typeof item.x === 'number' && typeof item.y === 'number'
-    );
+    const validData = validateData(data);
     if (validData.length === 0) return;
 
     let scopeChangedThisRender = false;
@@ -255,7 +252,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       hasPositionsChangedFn: hasPositionsChanged,
     });
 
-    previousDataRef.current = validData.map(item => ({ ...item }));
+    previousDataRef.current = positionsAreIntermediate
+      ? validData
+      : validData.map(item => ({ ...item }));
     if (!scopeChangedThisRender) {
       dataRef.current = processedValidData;
     }
@@ -276,7 +275,6 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     positionsAreIntermediate,
     sharedPositionCache,
     hasPositionsChanged,
-    ensureIds,
     shouldUseStablePositions,
     constraintKeyRef,
   ]);
@@ -526,6 +524,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           <R3FCamera onTransformChange={handleTransformChange} data={processedData} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
+            streamingPositions={streamingPositions}
             dotStyles={dotStyles}
             radiusOverrides={radiusOverrides}
             defaultSize={defaultSize}

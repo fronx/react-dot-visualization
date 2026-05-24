@@ -96,6 +96,28 @@ function writePositions(array, data) {
   }
 }
 
+function writePackedPositions(array, packed, indices = null, transform = null) {
+  if (!packed) return;
+  const xScale = transform?.xScale ?? 1;
+  const xOffset = transform?.xOffset ?? 0;
+  const yScale = transform?.yScale ?? 1;
+  const yOffset = transform?.yOffset ?? 0;
+  if (indices) {
+    const n = Math.min(indices.length, Math.floor(packed.length / 2));
+    for (let i = 0; i < n; i++) {
+      const dst = indices[i] * 2;
+      array[dst] = packed[i * 2] * xScale + xOffset;
+      array[dst + 1] = -(packed[i * 2 + 1] * yScale + yOffset);
+    }
+    return;
+  }
+  const n = Math.floor(packed.length / 2);
+  for (let i = 0; i < n; i++) {
+    array[i * 2] = packed[i * 2] * xScale + xOffset;
+    array[i * 2 + 1] = -(packed[i * 2 + 1] * yScale + yOffset);
+  }
+}
+
 // Persistent per-seed buffers: position/velocity for the sim, plus from/target
 // scratch for the GPU lerp. Created once per point set (data identity) and kept
 // across constraint changes — so focus restyle never re-seeds positions. Seeded
@@ -272,7 +294,7 @@ function buildCosmeticBuffers(N, data, opts) {
 function writeCosmetics(cosmetic, data, opts) {
   const {
     defaultColor, defaultSize, defaultOpacity, dotStyles, radiusOverrides,
-    hoveredId, hoverSizeMultiplier, hoverOpacity,
+    hoveredId, hoverSizeMultiplier, hoverOpacity, hideUnseen = false,
   } = opts;
   const colAttr = cosmetic.colors.value;
   const alphaAttr = cosmetic.alphas.value;
@@ -289,14 +311,39 @@ function writeCosmetics(cosmetic, data, opts) {
     const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
     _color.set(resolveFill(item, style, defaultColor));
     col[i * 3] = _color.r; col[i * 3 + 1] = _color.g; col[i * 3 + 2] = _color.b;
-    alpha[i] = resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
+    alpha[i] = hideUnseen ? 0 : resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
     focus[i] = resolveFocus(style);
-    scale[i] = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+    scale[i] = hideUnseen ? 0 : resolveScale(baseSize, isHovered, hoverSizeMultiplier);
   }
   colAttr.needsUpdate = true;
   alphaAttr.needsUpdate = true;
   focusAttr.needsUpdate = true;
   scaleAttr.needsUpdate = true;
+}
+
+function revealStreamingCosmetics(cosmetic, data, indices, opts) {
+  const {
+    defaultSize, defaultOpacity, dotStyles, radiusOverrides, hoveredId,
+    hoverSizeMultiplier, hoverOpacity,
+  } = opts;
+  const alpha = cosmetic.alphas.value.array;
+  const scale = cosmetic.scales.value.array;
+  const revealOne = (i) => {
+    if (i < 0 || i >= data.length) return;
+    const item = data[i];
+    const style = (dotStyles && dotStyles.get(item.id)) || EMPTY_STYLE;
+    const isHovered = item.id === hoveredId;
+    const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
+    alpha[i] = resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
+    scale[i] = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+  };
+  if (indices) {
+    for (let i = 0; i < indices.length; i++) revealOne(indices[i]);
+  } else {
+    for (let i = 0; i < data.length; i++) revealOne(i);
+  }
+  cosmetic.alphas.value.needsUpdate = true;
+  cosmetic.scales.value.needsUpdate = true;
 }
 
 function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
@@ -351,10 +398,15 @@ function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrok
     strokeColor: dotStroke,
     strokeWidthFraction: dotStrokeWidthFraction,
   });
-  // Floor the render radius at MIN_SCREEN_PX device px so dots don't vanish at
-  // sub-pixel size when zoomed out. Clamp the base scale *before* scaleMul so
-  // the hover-collapse-to-zero trick (scaleMul=0) still hides the main-mesh dot.
-  const baseScale = max(cosmetic.scales.element(indexNode), float(MIN_SCREEN_PX).div(pxPerWorldU));
+  // Floor visible dots at MIN_SCREEN_PX device px so they don't vanish when
+  // zoomed out, but preserve an exact zero scale for intentionally hidden
+  // streaming slots. Otherwise hidden dots flash as min-size dots.
+  const rawScale = cosmetic.scales.element(indexNode);
+  const baseScale = select(
+    rawScale.greaterThan(0),
+    max(rawScale, float(MIN_SCREEN_PX).div(pxPerWorldU)),
+    float(0),
+  );
   const scale = scaleMul ? baseScale.mul(scaleMul) : baseScale;
   const pos = buffers.positions.element(indexNode);
   material.positionNode = vec3(positionLocal.xy.mul(scale.mul(2.0)).add(pos), 0);
@@ -365,6 +417,7 @@ function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrok
 
 export function R3FDotsWebGPU({
   data,
+  streamingPositions = null,
   dotStyles,
   radiusOverrides = EMPTY_RADIUS_OVERRIDES,
   defaultSize = 6,
@@ -384,6 +437,7 @@ export function R3FDotsWebGPU({
   const cosmeticOpts = {
     defaultColor, defaultSize, defaultOpacity, dotStyles, radiusOverrides,
     hoveredId, hoverSizeMultiplier, hoverOpacity,
+    hideUnseen: !!streamingPositions?.hideUnseen,
   };
 
   // Seed identity = point COUNT only. Positions are always owned by the sim seed
@@ -414,11 +468,11 @@ export function R3FDotsWebGPU({
   // until intermediate ends (nothing else owns positions); gated on intermediate
   // so a settled cosmetic re-render can't stomp the decollided layout.
   useEffect(() => {
-    if (!positionsAreIntermediate || !buffers || !data?.length) return;
+    if (!positionsAreIntermediate || streamingPositions || !buffers || !data?.length) return;
     if (data.length !== buffers.N) return; // skip the frame where seedKey is mid-swap
     writePositions(buffers.positions.value.array, data);
     buffers.positions.value.needsUpdate = true;
-  }, [data, buffers, positionsAreIntermediate]);
+  }, [data, buffers, positionsAreIntermediate, streamingPositions]);
 
   // Cosmetic buffers sized to the seed, seeded with the current style, rewritten
   // in place on restyle — so hover/selection/pulse/focus never touch positions.
@@ -431,14 +485,43 @@ export function R3FDotsWebGPU({
   );
   useEffect(() => {
     if (cosmetic && data && data.length) {
+      if (streamingPositions?.hideUnseen) return;
       writeCosmetics(cosmetic, data, cosmeticOpts);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmetic, data, defaultColor, defaultSize, defaultOpacity, dotStyles,
-      radiusOverrides, hoverSizeMultiplier, hoverOpacity]);
+      radiusOverrides, hoverSizeMultiplier, hoverOpacity, streamingPositions?.hideUnseen]);
   useEffect(() => () => {
     if (cosmetic) disposeStorageBuffers(gl, [cosmetic.colors, cosmetic.alphas, cosmetic.focus, cosmetic.scales]);
   }, [cosmetic, gl]);
+
+  useEffect(() => {
+    if (!streamingPositions || !buffers) return;
+    const { coords, coordIndices, onApplied, hideUnseen, transform } = streamingPositions;
+    if (!coords) return;
+    writePackedPositions(buffers.positions.value.array, coords, coordIndices, transform);
+    buffers.positions.value.needsUpdate = true;
+    if (hideUnseen && cosmetic && data?.length) {
+      revealStreamingCosmetics(cosmetic, data, coordIndices, cosmeticOpts);
+    }
+    onApplied?.();
+  }, [streamingPositions, buffers, cosmetic, data]);
+
+  // The streaming path intentionally keeps buffers allocated by count so the
+  // live writer does not recreate the WebGPU graph every frame. When the final
+  // settled data arrives with the same count, that same optimization means
+  // buildSeedBuffers will not run again; upload the final positions once at the
+  // streaming→settled edge. A remount did this implicitly, which is why
+  // navigating away/back made the map reappear correctly.
+  const prevPositionsAreIntermediateRef = useRef(positionsAreIntermediate);
+  useEffect(() => {
+    const wasIntermediate = prevPositionsAreIntermediateRef.current;
+    prevPositionsAreIntermediateRef.current = positionsAreIntermediate;
+    if (!wasIntermediate || positionsAreIntermediate || streamingPositions || !buffers || !data?.length) return;
+    if (data.length !== buffers.N) return;
+    writePositions(buffers.positions.value.array, data);
+    buffers.positions.value.needsUpdate = true;
+  }, [positionsAreIntermediate, streamingPositions, buffers, data]);
 
   // Hovered instance index, read in-shader by the main mesh (to drop it) and the overlay (to redraw it on top).
   const hoveredIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
