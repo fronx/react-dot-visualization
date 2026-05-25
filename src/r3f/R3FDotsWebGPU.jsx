@@ -174,10 +174,11 @@ function buildSimResources({ N, positions, velocities }, grid, radiiArray) {
   const clearPlace = buildClearAtomicU32({ buffer: placeCounter, length: grid.numBins });
   const countBins = buildCountBins({ positions, velocities, binCount, grid, count: N });
   const place = buildPlaceParticles({ positions, velocities, binCount, placeCounter, sortedIndices, grid, count: N });
-  // Full strength every tick (strength: 1): d3.forceCollide and the standalone
-  // WGSL collide both resolve overlaps at full strength and stop on a run
-  // clock, not a tapering force. Here the per-launch iteration cap is that clock.
-  const collide = buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count: N, strength: 1 });
+  // Collide strength 2: at strength 1 the velocity-convergence metric settles while
+  // most pairs are still overlapping (the layout "stops" before it separates); 2
+  // resolves the overlaps and still converges, while 4 overshoots into the iteration
+  // cap. Bench: hnne-wasm/verify/bench_decollision_force.mjs (20k: 14185 -> 3 overlaps).
+  const collide = buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count: N, strength: 2 });
   const apply = buildApply({ positions, velocities, nextVel, count: N, velocityRetain: 0.6 });
   const clearMetric = buildClearAtomicU32({ buffer: maxVelocitySquared, length: 1 });
   const measureVelocity = buildMeasureMaxVelocitySquared({ velocities, maxVelocitySquared, count: N, scale: CONVERGENCE_METRIC_SCALE });
@@ -490,7 +491,7 @@ export function R3FDotsWebGPU({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmetic, data, defaultColor, defaultSize, defaultOpacity, dotStyles,
-      radiusOverrides, hoverSizeMultiplier, hoverOpacity, streamingPositions?.hideUnseen]);
+    radiusOverrides, hoverSizeMultiplier, hoverOpacity, streamingPositions?.hideUnseen]);
   useEffect(() => () => {
     if (cosmetic) disposeStorageBuffers(gl, [cosmetic.colors, cosmetic.alphas, cosmetic.focus, cosmetic.scales]);
   }, [cosmetic, gl]);
