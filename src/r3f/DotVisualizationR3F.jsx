@@ -113,6 +113,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     className = '',
     style = {},
     children,
+    sceneChildren,
   } = props;
 
   // Initialize with the input data (filtered for finite coords) so the very
@@ -551,6 +552,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onBackgroundClick={handleBackgroundClick}
             pickControlRef={pickControlRef}
           />
+          {/* In-scene overlay (e.g. ClusterLabels3D) — rendered inside the R3F
+              scene so it can read the camera/zoom via useThree/useFrame. */}
+          {sceneChildren}
         </Canvas>
       ) : (
         <Canvas
@@ -592,6 +596,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             setCameraRef={setCameraPositionRef}
             liveTransitionDataRef={liveTransitionDataRef}
           />
+          {sceneChildren}
         </Canvas>
       )}
 

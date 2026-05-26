@@ -12,6 +12,11 @@ import { lazy } from 'react';
 
 export { default as DotVisualization } from './DotVisualization.jsx';
 export const DotVisualizationR3F = lazy(() => import('./r3f/DotVisualizationR3F.jsx'));
+// In-scene cluster captions for the R3F renderer (passed via DotVisualizationR3F's
+// `sceneChildren`). Lazy like the renderer so three isn't pulled into canvas-only
+// consumers; the pure fade helpers (no three import) are safe to export directly.
+export const ClusterLabels3D = lazy(() => import('./r3f/ClusterLabels3D.jsx'));
+export { smoothstep, makeZoomFade, clamp01 } from './r3f/labelFade.js';
 export const DotVisualizationSigma = lazy(() => import('./DotVisualizationSigma.jsx'));
 export { default as ColoredDots } from './ColoredDots.jsx';
 export { default as InteractionLayer } from './InteractionLayer.jsx';
