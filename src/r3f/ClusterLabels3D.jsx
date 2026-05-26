@@ -39,23 +39,20 @@ function ClusterLabels3D({
     else registry.current.delete(id);
   }, []);
 
-  // One frame loop for every label: clamp on-screen size to a floor when zoomed
-  // out (fixed world size when zoomed in → grows on screen), and fade opacity by
-  // camera distance.
   useFrame(() => {
-    const fovRad = THREE.MathUtils.degToRad(camera.fov ?? 10);
-    const tanHalfFov = Math.tan(fovRad / 2);
     const zoomOpacity = fadeOpacity ? clamp01(fadeOpacity(camera.position.z)) : 1;
+    // minScreenPx <= 0 keeps each label at its own world size (here, scaled to
+    // the cluster footprint); only the floor path needs the per-frame distance.
+    const floored = minScreenPx > 0;
+    const tanHalfFov = floored ? Math.tan(THREE.MathUtils.degToRad(camera.fov ?? 10) / 2) : 0;
     registry.current.forEach((entry) => {
       const { billboard, material, shadowMaterial, baseOpacity } = entry;
       if (!billboard) return;
-      const distance = billboard.getWorldPosition(worldPos).distanceTo(camera.position);
-      const unitsPerPixel = (2 * tanHalfFov * Math.max(distance, 1e-3)) / viewport.height;
-      // minScreenPx <= 0 disables the floor → labels keep their world size (here,
-      // proportional to each cluster's footprint) and scale only with the camera.
-      const desiredScale =
-        minScreenPx > 0 ? Math.max(1, (minScreenPx * unitsPerPixel) / entry.fontSize) : 1;
-      billboard.scale.setScalar(desiredScale);
+      if (floored) {
+        const distance = billboard.getWorldPosition(worldPos).distanceTo(camera.position);
+        const unitsPerPixel = (2 * tanHalfFov * Math.max(distance, 1e-3)) / viewport.height;
+        billboard.scale.setScalar(Math.max(1, (minScreenPx * unitsPerPixel) / entry.fontSize));
+      }
 
       const opacity = zoomOpacity * baseOpacity;
       if (Math.abs(material.opacity - opacity) > 0.004) material.opacity = opacity;
@@ -108,8 +105,6 @@ function ClusterLabelSprite({
   const billboardRef = useRef(null);
   const entryRef = useRef(null);
 
-  // Per-cluster size wins over the shared default, so callers can scale each
-  // caption to its cluster's footprint.
   const labelFontSize = cluster.fontSize ?? fontSize;
 
   useEffect(() => {
@@ -216,7 +211,6 @@ function ClusterLabelSprite({
 
   if (!geometry) return null;
 
-  // Shadow offset scales with font size (mirrors the layout three-text bakes).
   const shadowOffset = labelFontSize * (2 / DEFAULT_FONT_SIZE);
 
   return (
