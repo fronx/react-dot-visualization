@@ -18,6 +18,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "celebrate": "vite --open /celebration.html",
     "build": "vite build",
     "build:lib": "vite build --config vite.lib.config.js",
     "preview": "vite preview",
