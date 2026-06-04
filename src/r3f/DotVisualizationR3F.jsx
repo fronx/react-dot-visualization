@@ -87,6 +87,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     dotStrokeWidthFraction = 0.05,
     hoverSizeMultiplier = 1.5,
     hoverOpacity = 1.0,
+    blockHoverDuringInteraction = false,
     edgeColor = '#999',
     edgeOpacity = 0.3,
     showEdges = true,
@@ -183,6 +184,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // click track the moving dots during decollision) instead of a CPU spatial
   // grid built from the settled layout.
   const pickControlRef = useRef(null);
+  // True while the camera is being dragged. R3FCamera flips it on pan
+  // start/end; HoverDetector reads it (when blockHoverDuringInteraction is on)
+  // to suppress hover acquisition during a pan.
+  const interactionRef = useRef(false);
   const gpuExecutor = useMemo(
     () => makeGpuExecutor(gpuControlRef, {
       baseMaxIterations: BASE_MAX_SOLVER_ITERATIONS,
@@ -530,7 +535,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} data={processedData} />
+          <R3FCamera onTransformChange={handleTransformChange} data={processedData} interactionRef={interactionRef} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dataKey={dataKey}
@@ -560,6 +565,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onDotClick={handleDotClick}
             onBackgroundClick={handleBackgroundClick}
             pickControlRef={pickControlRef}
+            interactionRef={blockHoverDuringInteraction ? interactionRef : null}
           />
           {/* In-scene overlay (e.g. ClusterLabels3D) — rendered inside the R3F
               scene so it can read the camera/zoom via useThree/useFrame. */}
@@ -604,6 +610,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onCameraStateChange={handleCameraStateChange}
             setCameraRef={setCameraPositionRef}
             liveTransitionDataRef={liveTransitionDataRef}
+            blockHoverDuringInteraction={blockHoverDuringInteraction}
           />
           {sceneChildren}
         </Canvas>

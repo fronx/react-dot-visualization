@@ -25,7 +25,7 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-export function R3FCamera({ onTransformChange, data = [] }) {
+export function R3FCamera({ onTransformChange, data = [], interactionRef = null }) {
   const controlsRef = useRef(null);
   const { camera, gl, size } = useThree();
 
@@ -62,6 +62,8 @@ export function R3FCamera({ onTransformChange, data = [] }) {
     return createPanHandler({
       canvas: gl.domElement,
       getCameraZ: () => camera.position.z,
+      onPanStart: () => { if (interactionRef) interactionRef.current = true; },
+      onPanEnd: () => { if (interactionRef) interactionRef.current = false; },
       onPan: (worldDeltaX, worldDeltaY) => {
         camera.position.x += worldDeltaX;
         camera.position.y += worldDeltaY;
@@ -72,7 +74,7 @@ export function R3FCamera({ onTransformChange, data = [] }) {
         onTransformChange?.();
       },
     });
-  }, [camera, gl]);
+  }, [camera, gl, interactionRef]);
 
   // Wheel: scroll-to-pan or zoom-to-cursor
   useEffect(() => {

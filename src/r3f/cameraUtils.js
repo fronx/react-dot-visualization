@@ -7,7 +7,7 @@ export const CAMERA_FOV_DEGREES = 10;
 const CAMERA_FOV_RADIANS = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const ZOOM_FACTOR_BASE = 1.003;
 const PINCH_ZOOM_MULTIPLIER = 3;
-const DRAG_THRESHOLD = 4;
+export const DRAG_THRESHOLD = 4;
 
 export function classifyWheelGesture(event) {
   if (event.ctrlKey) return 'pinch';
