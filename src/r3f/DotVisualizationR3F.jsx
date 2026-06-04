@@ -74,6 +74,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const {
     backend = 'webgl',
     data = [],
+    dataKey = null,
     streamingPositions = null,
     edges = [],
     dotStyles = new Map(),
@@ -525,6 +526,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           <R3FCamera onTransformChange={handleTransformChange} data={processedData} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
+            dataKey={dataKey}
             streamingPositions={streamingPositions}
             dotStyles={dotStyles}
             radiusOverrides={radiusOverrides}

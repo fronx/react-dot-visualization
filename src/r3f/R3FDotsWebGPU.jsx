@@ -418,6 +418,7 @@ function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrok
 
 export function R3FDotsWebGPU({
   data,
+  dataKey = null,
   streamingPositions = null,
   dotStyles,
   radiusOverrides = EMPTY_RADIUS_OVERRIDES,
@@ -441,15 +442,18 @@ export function R3FDotsWebGPU({
     hideUnseen: !!streamingPositions?.hideUnseen,
   };
 
-  // Seed identity = point COUNT only. Positions are always owned by the sim seed
-  // or the streaming write above, never the buffer identity, so only a count
-  // change needs a realloc. Keying on coords instead would rebuild the buffers
-  // at the streaming→settled edge (final coords arrive re-normalized) and orphan
-  // the base sim mid-flight — decollision would never run. Recompute passes
-  // through count 0, so a genuinely new layout still rebuilds.
+  // Seed identity = caller-provided dataset identity + point COUNT. Positions
+  // are otherwise owned by the sim seed or streaming writes, so cosmetic/focus
+  // changes must not realloc. Count-only was too weak for cache-hit layout
+  // switches: global→folder or folderA→folderB can keep the same N while
+  // needing a fresh position buffer. Keying on raw coords would rebuild at the
+  // streaming→settled edge and orphan the base sim mid-flight, so consumers pass
+  // a stable layout/scope identity instead.
   const seedKey = useMemo(
-    () => (!data || data.length === 0 ? 'empty' : `count:${data.length}`),
-    [data],
+    () => (!data || data.length === 0
+      ? 'empty'
+      : `${dataKey ?? 'default'}|count:${data.length}`),
+    [data, dataKey],
   );
 
   // Persistent per-seed buffers — rebuilt only when the seed identity changes
