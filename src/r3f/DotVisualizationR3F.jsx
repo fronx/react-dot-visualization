@@ -115,6 +115,12 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     style = {},
     children,
     sceneChildren,
+    // R3F render-loop mode for the WebGPU Canvas. Default 'always' (continuous
+    // 60fps). A consumer can pass 'never'/'demand' to stop the continuous render
+    // when the map isn't meaningfully visible (e.g. behind a loading overlay, or
+    // while an off-thread GPU layout compute needs the GPU) — rendering 100k+
+    // dots into a covered/hidden canvas otherwise starves that compute.
+    frameloop = 'always',
   } = props;
 
   // Initialize with the input data (filtered for finite coords) so the very
@@ -497,6 +503,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           style={{ position: 'absolute', inset: 0 }}
           flat
           linear
+          frameloop={frameloop}
           dpr={[1, 2]}
           camera={{
             fov: CAMERA_FOV_DEGREES,
