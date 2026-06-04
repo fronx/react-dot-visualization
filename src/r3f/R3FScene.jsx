@@ -4,7 +4,7 @@ import { useThree } from '@react-three/fiber';
 import { R3FDots } from './R3FDots.jsx';
 import { R3FEdges } from './R3FEdges.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
-import { computeFitZ, CAMERA_FOV_DEGREES, DRAG_THRESHOLD } from './cameraUtils.js';
+import { computeFitZ, CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { buildSpatialGrid, queryRadius } from '../spatialIndex.js';
 import { useHoverDispatcher } from '../useHoverDispatcher.js';
 import { resolveHoverRadius } from './dotAppearance.js';
@@ -83,7 +83,7 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
 // pick kernel that reads the live position buffer, so hit-testing tracks the
 // moving dots during decollision rather than the settled `data`. Touches no GPU
 // meshes either way, so the WebGPU backend mounts it directly.
-export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onBackgroundClick, pickControlRef = null, interactionRef = null }) {
+export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onBackgroundClick, pickControlRef = null, interactionRef = null, clickControlRef = null }) {
   const { camera, gl } = useThree();
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
   const useGpuPick = !!pickControlRef;
@@ -201,19 +201,14 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
     };
   }, [camera, gl, dispatcher, spatialIndex, useGpuPick, pickControlRef, publishPick, interactionRef]);
 
-  // Click detection
+  // Click detection. R3FCamera's pan handler is the single click-vs-drag
+  // authority: it calls clickControlRef only on a genuine click (never on the
+  // click the browser synthesizes after a drag), so we publish the pick logic
+  // here and let the pan handler invoke it.
   useEffect(() => {
-    const canvas = gl.domElement;
-    // Distinguish a click from the click that the browser fires at the end of a
-    // drag-pan: record the press position, and ignore the trailing click if the
-    // pointer travelled past the same threshold that starts a pan. Without this
-    // a pan that begins on a dot ends by selecting it.
-    let downX = 0, downY = 0;
-    const handleDown = (e) => { downX = e.clientX; downY = e.clientY; };
+    if (!clickControlRef) return undefined;
 
     const handleClick = (e) => {
-      const dx = e.clientX - downX, dy = e.clientY - downY;
-      if (dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD) return;
       const rect = rectRef.current;
       _mouse.set(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -243,13 +238,9 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       }
     };
 
-    canvas.addEventListener('mousedown', handleDown);
-    canvas.addEventListener('click', handleClick);
-    return () => {
-      canvas.removeEventListener('mousedown', handleDown);
-      canvas.removeEventListener('click', handleClick);
-    };
-  }, [camera, gl, onDotClick, onBackgroundClick, spatialIndex, useGpuPick, publishPick]);
+    clickControlRef.current = handleClick;
+    return () => { clickControlRef.current = null; };
+  }, [camera, gl, onDotClick, onBackgroundClick, spatialIndex, useGpuPick, publishPick, clickControlRef]);
 
   return null;
 }
@@ -380,6 +371,9 @@ export function R3FScene({
   // True while the camera is being dragged; HoverDetector reads it to suppress
   // hover acquisition during a pan when blockHoverDuringInteraction is on.
   const interactionRef = useRef(false);
+  // HoverDetector publishes its pick logic here; R3FCamera's pan handler invokes
+  // it on a genuine click (the single click-vs-drag authority).
+  const clickControlRef = useRef(null);
 
   const reportCameraRef = useRef(null);
   const handleTransformChange = useCallback(() => {
@@ -397,7 +391,7 @@ export function R3FScene({
       />
       <CameraReporter reportRef={reportCameraRef} onCameraStateChange={onCameraStateChange} />
       {setCameraRef && <CameraSetter setCameraRef={setCameraRef} />}
-      <R3FCamera onTransformChange={handleTransformChange} data={data} interactionRef={interactionRef} />
+      <R3FCamera onTransformChange={handleTransformChange} data={data} interactionRef={interactionRef} clickControlRef={clickControlRef} />
 
       {showEdges && edges.length > 0 && (
         <R3FEdges
@@ -434,6 +428,7 @@ export function R3FScene({
         onDotClick={onDotClick}
         onBackgroundClick={onBackgroundClick}
         interactionRef={blockHoverDuringInteraction ? interactionRef : null}
+        clickControlRef={clickControlRef}
       />
     </>
   );

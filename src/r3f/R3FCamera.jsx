@@ -25,7 +25,7 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-export function R3FCamera({ onTransformChange, data = [], interactionRef = null }) {
+export function R3FCamera({ onTransformChange, data = [], interactionRef = null, clickControlRef = null }) {
   const controlsRef = useRef(null);
   const { camera, gl, size } = useThree();
 
@@ -64,6 +64,11 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null 
       getCameraZ: () => camera.position.z,
       onPanStart: () => { if (interactionRef) interactionRef.current = true; },
       onPanEnd: () => { if (interactionRef) interactionRef.current = false; },
+      // Single click-vs-drag authority: createPanHandler fires onClick only on a
+      // genuine click, so the dot pick/select runs here and never on the click
+      // the browser synthesizes after a drag. HoverDetector publishes its pick
+      // logic into clickControlRef.
+      onClick: (e) => { if (clickControlRef) clickControlRef.current?.(e); },
       onPan: (worldDeltaX, worldDeltaY) => {
         camera.position.x += worldDeltaX;
         camera.position.y += worldDeltaY;
@@ -74,7 +79,7 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null 
         onTransformChange?.();
       },
     });
-  }, [camera, gl, interactionRef]);
+  }, [camera, gl, interactionRef, clickControlRef]);
 
   // Wheel: scroll-to-pan or zoom-to-cursor
   useEffect(() => {

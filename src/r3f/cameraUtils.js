@@ -7,7 +7,7 @@ export const CAMERA_FOV_DEGREES = 10;
 const CAMERA_FOV_RADIANS = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const ZOOM_FACTOR_BASE = 1.003;
 const PINCH_ZOOM_MULTIPLIER = 3;
-export const DRAG_THRESHOLD = 4;
+const DRAG_THRESHOLD = 4;
 
 export function classifyWheelGesture(event) {
   if (event.ctrlKey) return 'pinch';
@@ -90,25 +90,33 @@ export function createPanHandler({ canvas, getCameraZ, onPan, onPanStart, onPanE
     onPan(worldDeltaX, worldDeltaY);
   };
 
-  const up = (e) => {
+  // `fireClick` distinguishes a real release-on-canvas (mouseup) from the
+  // pointer merely leaving the canvas mid-press (mouseleave): only the former
+  // is a click. `isPanning` latches once the gesture passes DRAG_THRESHOLD, so
+  // a drag that wanders out and back never counts as a click.
+  const finish = (e, fireClick) => {
     if (isPanning) {
-      canvas.style.cursor = 'grab';
+      // Clear, not 'grab': restore the resting cursor (default) rather than
+      // leaving the canvas stuck showing a hand after every pan.
+      canvas.style.cursor = '';
       onPanEnd?.();
-    } else if (isPointerDown) {
+    } else if (isPointerDown && fireClick) {
       onClick?.(e);
     }
     isPanning = false;
     isPointerDown = false;
   };
+  const up = (e) => finish(e, true);
+  const leave = (e) => finish(e, false);
 
   canvas.addEventListener('mousedown', down);
   canvas.addEventListener('mousemove', move);
   canvas.addEventListener('mouseup', up);
-  canvas.addEventListener('mouseleave', up);
+  canvas.addEventListener('mouseleave', leave);
   return () => {
     canvas.removeEventListener('mousedown', down);
     canvas.removeEventListener('mousemove', move);
     canvas.removeEventListener('mouseup', up);
-    canvas.removeEventListener('mouseleave', up);
+    canvas.removeEventListener('mouseleave', leave);
   };
 }

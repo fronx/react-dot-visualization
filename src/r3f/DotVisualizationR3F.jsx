@@ -188,6 +188,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // start/end; HoverDetector reads it (when blockHoverDuringInteraction is on)
   // to suppress hover acquisition during a pan.
   const interactionRef = useRef(false);
+  // HoverDetector publishes its pick logic here; R3FCamera's pan handler invokes
+  // it on a genuine click (the single click-vs-drag authority).
+  const clickControlRef = useRef(null);
   const gpuExecutor = useMemo(
     () => makeGpuExecutor(gpuControlRef, {
       baseMaxIterations: BASE_MAX_SOLVER_ITERATIONS,
@@ -535,7 +538,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} data={processedData} interactionRef={interactionRef} />
+          <R3FCamera onTransformChange={handleTransformChange} data={processedData} interactionRef={interactionRef} clickControlRef={clickControlRef} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dataKey={dataKey}
@@ -566,6 +569,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onBackgroundClick={handleBackgroundClick}
             pickControlRef={pickControlRef}
             interactionRef={blockHoverDuringInteraction ? interactionRef : null}
+            clickControlRef={clickControlRef}
           />
           {/* In-scene overlay (e.g. ClusterLabels3D) — rendered inside the R3F
               scene so it can read the camera/zoom via useThree/useFrame. */}
