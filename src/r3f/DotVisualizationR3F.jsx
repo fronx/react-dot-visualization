@@ -122,6 +122,16 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     // while an off-thread GPU layout compute needs the GPU) — rendering 100k+
     // dots into a covered/hidden canvas otherwise starves that compute.
     frameloop = 'always',
+    // WebGPU-only: how many solver iterations to submit per rendered frame.
+    // Defaults to R3FDotsWebGPU's historical value; large non-interactive maps
+    // can raise this to avoid stretching cheap GPU work across congested frames.
+    webgpuSolverIterationsPerFrame = undefined,
+    // WebGPU-only: soft CPU submit budget for solver work in each frame.
+    // The GPU work is async, but this prevents command submission from growing
+    // past a bounded slice of the frame when the renderer is already busy.
+    webgpuSolverFrameBudgetMs = undefined,
+    // WebGPU-only: emit decollision timing diagnostics to console.
+    webgpuDecollisionDebug = false,
   } = props;
 
   // Initialize with the input data (filtered for finite coords) so the very
@@ -195,8 +205,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     () => makeGpuExecutor(gpuControlRef, {
       baseMaxIterations: BASE_MAX_SOLVER_ITERATIONS,
       constraintMaxIterations: CONSTRAINT_MAX_SOLVER_ITERATIONS,
+      solverIterationsPerFrame: webgpuSolverIterationsPerFrame,
+      solverFrameBudgetMs: webgpuSolverFrameBudgetMs,
     }),
-    [],
+    [webgpuSolverFrameBudgetMs, webgpuSolverIterationsPerFrame],
   );
 
   const { updateStablePositions, shouldUseStablePositions } = useStablePositions();
@@ -554,6 +566,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             hoverSizeMultiplier={hoverSizeMultiplier}
             hoverOpacity={hoverOpacity}
             positionsAreIntermediate={positionsAreIntermediate}
+            decollisionEnabled={enableDecollisioning}
+            decollisionDebug={webgpuDecollisionDebug}
             gpuControlRef={gpuControlRef}
             pickControlRef={pickControlRef}
           />

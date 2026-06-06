@@ -55,7 +55,10 @@ import { chooseBufferMismatchAction } from './webgpuDecollisionJobState.js';
 export const BASE_MAX_SOLVER_ITERATIONS = 2400;
 export const CONSTRAINT_MAX_SOLVER_ITERATIONS = 1200;
 const SOLVER_ITERATIONS_PER_FRAME = 4;
+const SOLVER_FRAME_BUDGET_MS = 6;
 const CONVERGENCE_CHECK_FRAME_INTERVAL = 8;
+const CONVERGENCE_CHECK_ITERATION_INTERVAL = CONVERGENCE_CHECK_FRAME_INTERVAL * SOLVER_ITERATIONS_PER_FRAME;
+const MIN_CONVERGENCE_CHECK_ITERATIONS = CONVERGENCE_CHECK_ITERATION_INTERVAL + SOLVER_ITERATIONS_PER_FRAME * 3;
 const CONVERGENCE_METRIC_SCALE = 1000000;
 const CONVERGED_MAX_VELOCITY = 0.002;
 const CONVERGED_MAX_VELOCITY_SQUARED_U32 = Math.ceil(
@@ -79,6 +82,26 @@ const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
+
+function fmtMs(ms) {
+  return Number.isFinite(ms) ? ms.toFixed(1) : 'n/a';
+}
+
+function fmtMetric(metric) {
+  return Number.isFinite(metric) ? String(metric) : 'n/a';
+}
+
+function resolveMaxSolverIterationsPerFrame(value) {
+  return Number.isFinite(value)
+    ? Math.max(SOLVER_ITERATIONS_PER_FRAME, Math.min(128, Math.floor(value)))
+    : SOLVER_ITERATIONS_PER_FRAME;
+}
+
+function resolveSolverFrameBudgetMs(value) {
+  return Number.isFinite(value)
+    ? Math.max(1, Math.min(16, Number(value)))
+    : SOLVER_FRAME_BUDGET_MS;
+}
 
 function scanIterations(n) {
   if (n <= 1) return 0;
@@ -366,7 +389,10 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // viewBox-space y for the caller. `template` supplies the id/order (the launch's
 // sourceData), so the index→item mapping stays valid.
 async function readbackPositions(renderer, positionsBuffer, template) {
+  const readbackStart = performance.now();
   const arrayBuffer = await renderer.getArrayBufferAsync(positionsBuffer.value);
+  const readbackMs = performance.now() - readbackStart;
+  const materializeStart = performance.now();
   const pos = new Float32Array(arrayBuffer);
   const out = new Array(template.length);
   let nonFinite = 0;
@@ -384,7 +410,12 @@ async function readbackPositions(renderer, positionsBuffer, template) {
     }
   }
   if (nonFinite > 0) console.warn(`[r3f-webgpu] readback kept seed for ${nonFinite}/${template.length} non-finite settled positions`);
-  return out;
+  return {
+    settled: out,
+    readbackMs,
+    materializeMs: performance.now() - materializeStart,
+    nonFinite,
+  };
 }
 
 // Bevel-stroke dot mesh: per-instance color/alpha/focus/scale from `cosmetic`
@@ -431,6 +462,8 @@ export function R3FDotsWebGPU({
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
   positionsAreIntermediate = false,
+  decollisionEnabled = true,
+  decollisionDebug = false,
   gpuControlRef = null,
   pickControlRef = null,
 }) {
@@ -522,11 +555,15 @@ export function R3FDotsWebGPU({
   useEffect(() => {
     const wasIntermediate = prevPositionsAreIntermediateRef.current;
     prevPositionsAreIntermediateRef.current = positionsAreIntermediate;
+    // When decollision is enabled, the scheduler launches a base sim on this
+    // same edge and that sim owns the position buffer. Uploading raw final
+    // coordinates here can race with, or overwrite, the decollided result.
+    if (decollisionEnabled) return;
     if (!wasIntermediate || positionsAreIntermediate || streamingPositions || !buffers || !data?.length) return;
     if (data.length !== buffers.N) return;
     writePositions(buffers.positions.value.array, data);
     buffers.positions.value.needsUpdate = true;
-  }, [positionsAreIntermediate, streamingPositions, buffers, data]);
+  }, [positionsAreIntermediate, decollisionEnabled, streamingPositions, buffers, data]);
 
   // Hovered instance index, read in-shader by the main mesh (to drop it) and the overlay (to redraw it on top).
   const hoveredIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
@@ -644,9 +681,12 @@ export function R3FDotsWebGPU({
     }
     if (req.type === 'sim') {
       const { sourceData, fnDotSize, onComplete } = req;
+      const startMs = performance.now();
       const maxIterations = Number.isFinite(req.maxIterations)
         ? Math.max(1, Math.floor(req.maxIterations))
         : BASE_MAX_SOLVER_ITERATIONS;
+      const maxSolverIterationsPerFrame = resolveMaxSolverIterationsPerFrame(req.solverIterationsPerFrame);
+      const solverFrameBudgetMs = resolveSolverFrameBudgetMs(req.solverFrameBudgetMs);
       const N = buffers.N;
       // Seed positions from sourceData (raw cloud for base; the cached base
       // layout with one enlarged dot for a constraint), zero velocities, and
@@ -665,13 +705,18 @@ export function R3FDotsWebGPU({
         radiiArray[i] = Number.isFinite(r) ? Math.max(0.0001, r) : 0.0001;
         nodes[i] = { x, y };
       }
+      const seedMs = performance.now() - startMs;
       buffers.positions.value.needsUpdate = true;
       buffers.velocities.value.needsUpdate = true;
       // Reuse a cached pipeline when the grid matches (the common case for
       // focuses); otherwise build one and cap the cache so pipelines don't pile up.
+      const gridStart = performance.now();
       const grid = computeGridParams(nodes, radiiArray);
+      const gridMs = performance.now() - gridStart;
       const sig = gridSignature(grid);
       let sim = simCache.get(sig);
+      const cacheHit = !!sim;
+      const simStart = performance.now();
       if (sim) {
         sim.radii.value.array.set(radiiArray);
         sim.radii.value.needsUpdate = true;
@@ -685,6 +730,21 @@ export function R3FDotsWebGPU({
           simCache.delete(oldestKey);
         }
       }
+      const simMs = performance.now() - simStart;
+      if (decollisionDebug) {
+        console.log(
+          `[rdv-decollision] start id=${req.id} n=${N} max=${maxIterations}`
+          + ` stepFrame=${SOLVER_ITERATIONS_PER_FRAME}..${maxSolverIterationsPerFrame}`
+          + ` frameBudget=${fmtMs(solverFrameBudgetMs)}ms`
+          + ` checkEveryIterations=${CONVERGENCE_CHECK_ITERATION_INTERVAL}`
+          + ` minCheckIterations=${MIN_CONVERGENCE_CHECK_ITERATIONS}`
+          + ` seed=${fmtMs(seedMs)}ms grid=${fmtMs(gridMs)}ms`
+          + ` sim=${cacheHit ? 'hit' : 'miss'}:${fmtMs(simMs)}ms`
+          + ` total=${fmtMs(performance.now() - startMs)}ms`
+          + ` bins=${grid.gridDimX}x${grid.gridDimY}/${grid.numBins}`
+          + ` cell=${Number.isFinite(grid.cellSize) ? grid.cellSize.toFixed(4) : 'n/a'}`,
+        );
+      }
       jobRef.current = {
         mode: 'sim',
         buffers,
@@ -692,6 +752,27 @@ export function R3FDotsWebGPU({
         frameBatches: 0,
         iterations: 0,
         maxIterations,
+        currentSolverIterationsPerFrame: SOLVER_ITERATIONS_PER_FRAME,
+        maxSolverIterationsPerFrame,
+        solverFrameBudgetMs,
+        nextMetricIteration: MIN_CONVERGENCE_CHECK_ITERATIONS,
+        stepAdjustments: 0,
+        iterationsPerFrameSum: 0,
+        iterationsPerFrameMax: 0,
+        budgetStops: 0,
+        metricChecks: 0,
+        metricWaitFrames: 0,
+        metricReadbackSumMs: 0,
+        metricReadbackMaxMs: 0,
+        lastMetric: null,
+        firstFrameDelayMs: null,
+        lastFrameStartMs: null,
+        frameGapSumMs: 0,
+        frameGapMaxMs: 0,
+        frameGapCount: 0,
+        computeSubmitSumMs: 0,
+        computeSubmitMaxMs: 0,
+        startMs,
         metricPending: false,
         onComplete,
         template: sourceData,
@@ -734,11 +815,39 @@ export function R3FDotsWebGPU({
   const settleSimJob = (job) => {
     if (!job || job.mode !== 'sim') return;
     job.mode = 'settling'; // stop stepping; await the one-shot position readback
+    job.settleStartMs = performance.now();
     const jobId = job.jobId;
     const onComplete = job.onComplete;
-    readbackPositions(gl, buffers.positions, job.template).then((settled) => {
+    readbackPositions(gl, buffers.positions, job.template).then(({ settled, readbackMs, materializeMs, nonFinite }) => {
       if (jobRef.current.jobId !== jobId) return; // superseded by a newer launch
+      const callbackStart = performance.now();
       finishJobIdle(settled, onComplete);
+      const callbackMs = performance.now() - callbackStart;
+      if (decollisionDebug) {
+        console.log(
+          `[rdv-decollision] finish id=${jobId} reason=${job.exitReason || 'unknown'}`
+          + ` n=${job.template.length} iterations=${job.iterations}/${job.maxIterations}`
+          + ` frames=${job.frameBatches} checks=${job.metricChecks || 0}`
+          + ` stepFrame=${SOLVER_ITERATIONS_PER_FRAME}..${job.maxSolverIterationsPerFrame || SOLVER_ITERATIONS_PER_FRAME}`
+          + ` stepAvg=${fmtMs(job.frameBatches ? job.iterationsPerFrameSum / job.frameBatches : 0)}`
+          + ` stepMax=${job.iterationsPerFrameMax || 0}`
+          + ` stepAdj=${job.stepAdjustments || 0}`
+          + ` budgetStops=${job.budgetStops || 0}`
+          + ` metricWaitFrames=${job.metricWaitFrames || 0}`
+          + ` metric=${fmtMetric(job.lastMetric)}`
+          + ` metricReadback=${fmtMs(job.metricReadbackSumMs || 0)}ms`
+          + ` metricReadbackMax=${fmtMs(job.metricReadbackMaxMs || 0)}ms`
+          + ` firstFrame=${fmtMs(job.firstFrameDelayMs ?? 0)}ms`
+          + ` frameGapAvg=${fmtMs(job.frameGapCount ? job.frameGapSumMs / job.frameGapCount : 0)}ms`
+          + ` frameGapMax=${fmtMs(job.frameGapMaxMs || 0)}ms`
+          + ` computeSubmit=${fmtMs(job.computeSubmitSumMs || 0)}ms`
+          + ` computeSubmitMax=${fmtMs(job.computeSubmitMaxMs || 0)}ms`
+          + ` simWall=${fmtMs(job.settleStartMs - job.startMs)}ms`
+          + ` settle=${fmtMs(performance.now() - job.settleStartMs)}ms`
+          + ` readback=${fmtMs(readbackMs)}ms materialize=${fmtMs(materializeMs)}ms`
+          + ` callback=${fmtMs(callbackMs)}ms nonFinite=${nonFinite}`,
+        );
+      }
     });
   };
 
@@ -798,10 +907,29 @@ export function R3FDotsWebGPU({
       return;
     }
     if (job.mode === 'sim') {
+      const frameStartMs = performance.now();
+      let frameGapMs = null;
+      if (job.firstFrameDelayMs == null) {
+        job.firstFrameDelayMs = frameStartMs - job.startMs;
+      } else if (job.lastFrameStartMs != null) {
+        frameGapMs = frameStartMs - job.lastFrameStartMs;
+        job.frameGapSumMs += frameGapMs;
+        job.frameGapMaxMs = Math.max(job.frameGapMaxMs, frameGapMs);
+        job.frameGapCount += 1;
+      }
+      job.lastFrameStartMs = frameStartMs;
+      if (job.metricPending) {
+        job.metricWaitFrames += 1;
+        return;
+      }
       const p = job.sim;
       const remaining = Math.max(0, job.maxIterations - job.iterations);
-      const iterationsThisFrame = Math.min(SOLVER_ITERATIONS_PER_FRAME, remaining);
-      for (let step = 0; step < iterationsThisFrame; step++) {
+      const maxIterationsThisFrame = Math.min(
+        job.currentSolverIterationsPerFrame || SOLVER_ITERATIONS_PER_FRAME,
+        remaining,
+      );
+      let iterationsThisFrame = 0;
+      for (let step = 0; step < maxIterationsThisFrame; step++) {
         gl.compute(p.clearBin);
         gl.compute(p.clearPlace);
         gl.compute(p.countBins);
@@ -810,26 +938,68 @@ export function R3FDotsWebGPU({
         gl.compute(p.collide);
         gl.compute(p.apply);
         job.iterations += 1;
+        iterationsThisFrame += 1;
+        if (
+          iterationsThisFrame >= SOLVER_ITERATIONS_PER_FRAME
+          && performance.now() - frameStartMs >= job.solverFrameBudgetMs
+        ) {
+          job.budgetStops += 1;
+          break;
+        }
       }
+      const computeSubmitMs = performance.now() - frameStartMs;
+      job.computeSubmitSumMs += computeSubmitMs;
+      job.computeSubmitMaxMs = Math.max(job.computeSubmitMaxMs, computeSubmitMs);
+      job.iterationsPerFrameSum += iterationsThisFrame;
+      job.iterationsPerFrameMax = Math.max(job.iterationsPerFrameMax, iterationsThisFrame);
       job.frameBatches += 1;
 
+      const maxStep = job.maxSolverIterationsPerFrame || SOLVER_ITERATIONS_PER_FRAME;
+      let nextStep = job.currentSolverIterationsPerFrame || SOLVER_ITERATIONS_PER_FRAME;
+      if (maxStep > SOLVER_ITERATIONS_PER_FRAME) {
+        const frameBudgetMs = job.solverFrameBudgetMs || SOLVER_FRAME_BUDGET_MS;
+        if (computeSubmitMs > frameBudgetMs && nextStep > SOLVER_ITERATIONS_PER_FRAME) {
+          nextStep = Math.max(SOLVER_ITERATIONS_PER_FRAME, Math.floor(nextStep / 2));
+        } else if (
+          nextStep < maxStep
+          && iterationsThisFrame >= nextStep
+          && computeSubmitMs < frameBudgetMs * 0.75
+          && (frameGapMs == null || frameGapMs > 24 || computeSubmitMs < 4)
+        ) {
+          nextStep = Math.min(maxStep, nextStep * 2);
+        }
+      }
+      if (nextStep !== job.currentSolverIterationsPerFrame) {
+        job.stepAdjustments += 1;
+        job.currentSolverIterationsPerFrame = nextStep;
+      }
+
       if (job.iterations >= job.maxIterations) {
+        job.exitReason = 'max-iterations';
         settleSimJob(job);
         return;
       }
 
       const shouldCheck = !job.metricPending
-        && job.frameBatches % CONVERGENCE_CHECK_FRAME_INTERVAL === 0;
+        && job.iterations >= (job.nextMetricIteration || CONVERGENCE_CHECK_ITERATION_INTERVAL);
       if (shouldCheck) {
+        job.nextMetricIteration = job.iterations + CONVERGENCE_CHECK_ITERATION_INTERVAL;
         gl.compute(p.clearMetric);
         gl.compute(p.measureVelocity);
         job.metricPending = true;
         const jobId = job.jobId;
+        const metricStartMs = performance.now();
         readbackMaxVelocitySquared(gl, p.maxVelocitySquared).then((metric) => {
           const current = jobRef.current;
           if (current.jobId !== jobId || current.mode !== 'sim') return;
+          const metricReadbackMs = performance.now() - metricStartMs;
           current.metricPending = false;
+          current.metricChecks = (current.metricChecks || 0) + 1;
+          current.metricReadbackSumMs = (current.metricReadbackSumMs || 0) + metricReadbackMs;
+          current.metricReadbackMaxMs = Math.max(current.metricReadbackMaxMs || 0, metricReadbackMs);
+          current.lastMetric = metric;
           if (metric <= CONVERGED_MAX_VELOCITY_SQUARED_U32) {
+            current.exitReason = 'converged';
             settleSimJob(current);
           }
         });

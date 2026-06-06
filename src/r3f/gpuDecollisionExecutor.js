@@ -26,7 +26,12 @@
  * request issued before the child's first frame simply waits there until the
  * frame loop reads it (latest request wins, matching cancelSimulation + relaunch).
  */
-export function makeGpuExecutor(gpuControlRef, { baseMaxIterations, constraintMaxIterations }) {
+export function makeGpuExecutor(gpuControlRef, {
+  baseMaxIterations,
+  constraintMaxIterations,
+  solverIterationsPerFrame,
+  solverFrameBudgetMs,
+}) {
   let reqSeq = 0;
 
   const issue = (req) => {
@@ -49,7 +54,15 @@ export function makeGpuExecutor(gpuControlRef, { baseMaxIterations, constraintMa
       // These are safety caps only. R3FDotsWebGPU stops earlier once the
       // velocity metric says the layout is at a visual fixpoint.
       const maxIterations = constraintKey ? constraintMaxIterations : baseMaxIterations;
-      return issue({ type: 'sim', sourceData, fnDotSize, maxIterations, onComplete });
+      return issue({
+        type: 'sim',
+        sourceData,
+        fnDotSize,
+        maxIterations,
+        solverIterationsPerFrame,
+        solverFrameBudgetMs,
+        onComplete,
+      });
     },
     runAnimation({ target, duration, onComplete }) {
       return issue({ type: 'lerp', target, duration, onComplete });
