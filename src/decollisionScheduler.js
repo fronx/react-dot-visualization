@@ -81,6 +81,12 @@ export function onBaseComplete(queuedConstraint) {
   return { phase: PHASE.READY, action: null };
 }
 
+function hasPositionTarget(target) {
+  if (!target) return false;
+  if (target.type === 'gpu-snapshot') return true;
+  return target.size > 0;
+}
+
 /**
  * Handle a constraint decollision request.
  *
@@ -105,7 +111,7 @@ export function onConstraintRequest(currentPhase, constraintKey, cachedPositions
 
   // Constraint-to-constraint: go through base first (unless returning to base)
   const isChangingConstraint = activeConstraintKey !== '' && constraintKey !== '' && activeConstraintKey !== constraintKey;
-  if (isChangingConstraint && baseCachedPositions && baseCachedPositions.size > 0) {
+  if (isChangingConstraint && hasPositionTarget(baseCachedPositions)) {
     const actions = [];
     if (isConstraintRunning) {
       actions.push({ type: 'cancel-constraint' });
@@ -116,7 +122,7 @@ export function onConstraintRequest(currentPhase, constraintKey, cachedPositions
   }
 
   // Direct transition (from base, or cache hit)
-  if (cachedPositions && cachedPositions.size > 0) {
+  if (hasPositionTarget(cachedPositions)) {
     const actions = [];
     if (isConstraintRunning) {
       actions.push({ type: 'cancel-constraint' });

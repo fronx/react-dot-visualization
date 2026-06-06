@@ -14,10 +14,11 @@
  * transitions; this layer only executes them on the GPU:
  *   - a 'sim' request seeds the positions buffer, builds the spatial-hash
  *     collide pipeline for the launch radii, and steps the kernels in-shader
- *     until the velocity metric converges. Settle stays GPU-owned; no full
- *     position readback is part of the WebGPU completion path.
- *   - a 'lerp' request snapshots the live positions, uploads the cached target,
- *     and mixes from→target in-shader each frame (zero per-frame copy).
+ *     until the velocity metric converges. Base settle snapshots positions into
+ *     a GPU-resident base buffer; no full position readback is part of the
+ *     WebGPU completion path.
+ *   - a 'lerp' request snapshots the live positions, then mixes from→a GPU
+ *     snapshot or uploaded target in-shader each frame (zero per-frame copy).
  * Focus therefore animates from the current settled layout (or a cached one),
  * never from the raw UMAP cloud — matching the Canvas/WebGL scheduler exactly.
  *
@@ -150,11 +151,11 @@ function writePackedPositions(array, packed, indices = null, transform = null) {
   }
 }
 
-// Persistent per-seed buffers: position/velocity for the sim, plus from/target
-// scratch for the GPU lerp. Created once per point set (data identity) and kept
-// across constraint changes — so focus restyle never re-seeds positions. Seeded
-// from the raw input so the first paint shows real positions before the base
-// decollision runs.
+// Persistent per-seed buffers: position/velocity for the sim, a GPU-owned base
+// snapshot, plus from/target scratch for the GPU lerp. Created once per point
+// set (data identity) and kept across constraint changes — so focus restyle
+// never re-seeds positions. Seeded from the raw input so the first paint shows
+// real positions before the base decollision runs.
 function buildSeedBuffers(data) {
   const N = data.length;
   const pos = new Float32Array(N * 2);
@@ -162,6 +163,7 @@ function buildSeedBuffers(data) {
   return {
     N,
     positions: instancedArray(pos, 'vec2'),
+    basePos: instancedArray(new Float32Array(pos), 'vec2'),
     velocities: instancedArray(new Float32Array(N * 2), 'vec2'),
     fromPos: instancedArray(new Float32Array(N * 2), 'vec2'),
     targetPos: instancedArray(new Float32Array(N * 2), 'vec2'),
@@ -270,34 +272,6 @@ async function readbackMaxVelocitySquared(renderer, metricBuffer) {
   return new Uint32Array(arrayBuffer)[0] ?? 0;
 }
 
-async function readbackSettledPositions(renderer, buffers, template) {
-  const readbackStart = performance.now();
-  const arrayBuffer = await renderer.getArrayBufferAsync(buffers.positions.value);
-  const readbackMs = performance.now() - readbackStart;
-  const materializeStart = performance.now();
-  const packed = new Float32Array(arrayBuffer);
-  const count = Math.min(buffers.N, template.length, Math.floor(packed.length / 2));
-  const positions = new Array(count);
-  let nonFinite = 0;
-  for (let i = 0; i < count; i++) {
-    const fallback = template[i];
-    let x = packed[i * 2];
-    let y = -packed[i * 2 + 1];
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      nonFinite += 1;
-      x = fallback.x;
-      y = fallback.y;
-    }
-    positions[i] = { id: fallback.id, x, y };
-  }
-  return {
-    positions,
-    readbackMs,
-    materializeMs: performance.now() - materializeStart,
-    nonFinite,
-  };
-}
-
 // Fill a per-dot pick-radius buffer via the shared resolveHoverRadius rule (same
 // hit geometry as the CPU spatial grid). A dedicated buffer, separate from the
 // sim's physics collision radii, so picking and decollision stay independent.
@@ -316,12 +290,16 @@ async function readbackPick(renderer, pickResult, indexBits) {
   return packed & ((2 ** indexBits) - 1);
 }
 
-// Two trivial kernels for the GPU lerp: snapshot the live positions into fromPos
-// (one GPU→GPU copy at transition start), then mix fromPos→targetPos by a uniform
-// t each frame. No per-frame CPU↔GPU copy — just the t uniform.
-function buildLerpKernels({ N, positions, fromPos, targetPos }, tU) {
+// Tiny kernels for GPU-owned transitions: snapshot the live positions into
+// fromPos (one GPU→GPU copy at transition start), snapshot the settled base
+// layout into basePos, then mix fromPos→target by a uniform t each frame. No
+// per-frame CPU↔GPU copy — just the t uniform.
+function buildLerpKernels({ N, positions, basePos, fromPos, targetPos }, tU) {
   const snapshot = Fn(() => {
     fromPos.element(instanceIndex).assign(positions.element(instanceIndex));
+  })().compute(N);
+  const snapshotBase = Fn(() => {
+    basePos.element(instanceIndex).assign(positions.element(instanceIndex));
   })().compute(N);
   const mixStep = Fn(() => {
     const i = instanceIndex;
@@ -329,7 +307,13 @@ function buildLerpKernels({ N, positions, fromPos, targetPos }, tU) {
     const b = targetPos.element(i);
     positions.element(i).assign(a.mul(float(1).sub(tU)).add(b.mul(tU)));
   })().compute(N);
-  return { snapshot, mixStep };
+  const mixBaseStep = Fn(() => {
+    const i = instanceIndex;
+    const a = fromPos.element(i);
+    const b = basePos.element(i);
+    positions.element(i).assign(a.mul(float(1).sub(tU)).add(b.mul(tU)));
+  })().compute(N);
+  return { snapshot, snapshotBase, mixStep, mixBaseStep };
 }
 
 // Per-instance appearance: color/alpha/focus/scale. Lives in its own buffers so
@@ -502,7 +486,7 @@ export function R3FDotsWebGPU({
     [seedKey],
   );
   useEffect(() => () => {
-    if (buffers) disposeStorageBuffers(gl, [buffers.positions, buffers.velocities, buffers.fromPos, buffers.targetPos]);
+    if (buffers) disposeStorageBuffers(gl, [buffers.positions, buffers.basePos, buffers.velocities, buffers.fromPos, buffers.targetPos]);
   }, [buffers, gl]);
 
   // While UMAP streams, write the moving coords into the persistent buffer in
@@ -586,7 +570,12 @@ export function R3FDotsWebGPU({
     [buffers, tU],
   );
   useEffect(() => () => {
-    if (lerpKernels) disposeComputeNodes([lerpKernels.snapshot, lerpKernels.mixStep]);
+    if (lerpKernels) disposeComputeNodes([
+      lerpKernels.snapshot,
+      lerpKernels.snapshotBase,
+      lerpKernels.mixStep,
+      lerpKernels.mixBaseStep,
+    ]);
   }, [lerpKernels]);
 
   // ── GPU hover/click picking ───────────────────────────────────────────────
@@ -651,10 +640,21 @@ export function R3FDotsWebGPU({
   const jobRef = useRef({ mode: 'idle' });
   const handledReqId = useRef(0);
   const hasSettledGpuLayoutRef = useRef(false);
+  const snapshotKeysRef = useRef(new Set());
+  useEffect(() => {
+    if (!gpuControlRef?.current) return undefined;
+    gpuControlRef.current.positionSnapshots = snapshotKeysRef.current;
+    return () => {
+      if (gpuControlRef.current?.positionSnapshots === snapshotKeysRef.current) {
+        delete gpuControlRef.current.positionSnapshots;
+      }
+    };
+  }, [gpuControlRef]);
   const prevBuffersRef = useRef(buffers);
   if (prevBuffersRef.current !== buffers) {
     prevBuffersRef.current = buffers;
     hasSettledGpuLayoutRef.current = false;
+    snapshotKeysRef.current.clear();
   }
 
   // Per-seed cache of sim resources keyed by grid signature. Reused across
@@ -779,12 +779,9 @@ export function R3FDotsWebGPU({
         metricWaitFrames: 0,
         metricReadbackSumMs: 0,
         metricReadbackMaxMs: 0,
-        completionReadbackMs: 0,
-        completionMaterializeMs: 0,
-        completionNonFinite: 0,
         lastMetric: null,
         skipConvergenceMetric: !!req.skipConvergenceMetric,
-        readbackPositionsOnComplete: !!req.readbackPositionsOnComplete,
+        snapshotOnCompleteKey: req.snapshotOnCompleteKey ?? null,
         firstFrameDelayMs: null,
         lastFrameStartMs: null,
         frameGapSumMs: 0,
@@ -801,14 +798,20 @@ export function R3FDotsWebGPU({
       return;
     }
     if (req.type === 'lerp') {
-      const { target, duration, onComplete } = req;
+      const { target, targetSnapshotKey = null, duration, onComplete } = req;
       const N = buffers.N;
-      const tgt = buffers.targetPos.value.array;
-      for (let i = 0; i < N; i++) {
-        tgt[i * 2] = target[i].x;
-        tgt[i * 2 + 1] = -target[i].y;
+      if (targetSnapshotKey != null && !snapshotKeysRef.current.has(targetSnapshotKey)) {
+        finishJobIdle(null, onComplete);
+        return;
       }
-      buffers.targetPos.value.needsUpdate = true;
+      if (targetSnapshotKey == null) {
+        const tgt = buffers.targetPos.value.array;
+        for (let i = 0; i < N; i++) {
+          tgt[i * 2] = target[i].x;
+          tgt[i * 2 + 1] = -target[i].y;
+        }
+        buffers.targetPos.value.needsUpdate = true;
+      }
       if (lerpKernels) gl.compute(lerpKernels.snapshot); // fromPos = live positions
       jobRef.current = {
         mode: 'lerp',
@@ -817,6 +820,7 @@ export function R3FDotsWebGPU({
         duration: Math.max(1, duration),
         onComplete,
         target,
+        targetSnapshotKey,
         jobId: req.id,
       };
       return;
@@ -848,14 +852,10 @@ export function R3FDotsWebGPU({
         if (jobRef.current.jobId !== jobId) return; // superseded by a newer launch
         let settled = null;
         let completionInfo = null;
-        if (job.readbackPositionsOnComplete) {
-          const result = await readbackSettledPositions(gl, job.buffers, job.template);
-          if (jobRef.current.jobId !== jobId) return; // superseded during readback
-          settled = result.positions;
-          completionInfo = { cacheOnly: true };
-          job.completionReadbackMs = result.readbackMs;
-          job.completionMaterializeMs = result.materializeMs;
-          job.completionNonFinite = result.nonFinite;
+        if (job.snapshotOnCompleteKey != null && lerpKernels && job.snapshotOnCompleteKey === '') {
+          gl.compute(lerpKernels.snapshotBase);
+          snapshotKeysRef.current.add(job.snapshotOnCompleteKey);
+          completionInfo = { ...(completionInfo || {}), gpuSnapshotKey: job.snapshotOnCompleteKey };
         }
         const callbackStart = performance.now();
         finishJobIdle(settled, onComplete, completionInfo);
@@ -881,9 +881,7 @@ export function R3FDotsWebGPU({
             + ` computeSubmitMax=${fmtMs(job.computeSubmitMaxMs || 0)}ms`
             + ` simWall=${fmtMs(job.settleStartMs - job.startMs)}ms`
             + ` settle=${fmtMs(performance.now() - job.settleStartMs)}ms`
-            + ` readback=${fmtMs(job.completionReadbackMs || 0)}ms`
-            + ` materialize=${fmtMs(job.completionMaterializeMs || 0)}ms`
-            + ` callback=${fmtMs(callbackMs)}ms nonFinite=${job.completionNonFinite || 0}`,
+            + ` callback=${fmtMs(callbackMs)}ms`,
           );
         }
       });
@@ -1054,8 +1052,10 @@ export function R3FDotsWebGPU({
     if (job.mode === 'lerp') {
       const t = (performance.now() - job.t0) / job.duration;
       tU.value = Math.min(1, easeCubicOut(Math.min(1, t)));
-      if (lerpKernels) gl.compute(lerpKernels.mixStep);
-      if (t >= 1) finishJobIdle(job.target, job.onComplete);
+      if (lerpKernels) {
+        gl.compute(job.targetSnapshotKey === '' ? lerpKernels.mixBaseStep : lerpKernels.mixStep);
+      }
+      if (t >= 1) finishJobIdle(job.target, job.onComplete, job.targetSnapshotKey != null ? { gpuSnapshotKey: job.targetSnapshotKey } : null);
     }
   });
 
@@ -1184,7 +1184,7 @@ export function R3FDotsWebGPU({
     if (count === 0) return { count: 0 };
     return {
       count,
-      positions: instancedArray(new Float32Array(count * 2), 'vec2'),
+      indices: instancedArray(new Uint32Array(count), 'uint'),
       scales: instancedArray(new Float32Array(count), 'float'),
       colors: instancedArray(new Float32Array(count * 3), 'vec3'),
       alphas: instancedArray(new Float32Array(count), 'float'),
@@ -1192,24 +1192,27 @@ export function R3FDotsWebGPU({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pulseKey]);
   useEffect(() => () => {
-    if (ringBuffers.count) disposeStorageBuffers(gl, [ringBuffers.positions, ringBuffers.scales, ringBuffers.colors, ringBuffers.alphas]);
+    if (ringBuffers.count) disposeStorageBuffers(gl, [ringBuffers.indices, ringBuffers.scales, ringBuffers.colors, ringBuffers.alphas]);
   }, [ringBuffers, gl]);
 
   const ringMesh = useMemo(() => {
-    if (!ringBuffers.count) return null;
+    if (!ringBuffers.count || !buffers) return null;
     const geometry = new THREE.PlaneGeometry(1, 1);
     const material = createPulseDiscNodeMaterial({
       instanceColor: ringBuffers.colors.element(instanceIndex),
       instanceAlpha: ringBuffers.alphas.element(instanceIndex),
     });
-    const rp = ringBuffers.positions.element(instanceIndex);
+    // Pulse rings must follow the same GPU-owned positions as the dots. The
+    // CPU `data` array is only the seed/source layout after decollision starts.
+    const dotIndex = ringBuffers.indices.element(instanceIndex);
+    const rp = buffers.positions.element(dotIndex);
     const rs = ringBuffers.scales.element(instanceIndex);
     material.positionNode = vec3(positionLocal.xy.mul(rs.mul(2.0)).add(rp), -0.1);
     const m = new THREE.InstancedMesh(geometry, material, ringBuffers.count);
     m.frustumCulled = false;
     m.renderOrder = -1; // behind the dots
     return m;
-  }, [ringBuffers]);
+  }, [buffers, ringBuffers]);
   useEffect(() => () => disposeMesh(ringMesh), [ringMesh]);
 
   useFrame((state) => {
@@ -1219,16 +1222,20 @@ export function R3FDotsWebGPU({
     const dpr = state.gl.getPixelRatio();
     const viewBoxScale = (state.size.height / (2 * state.camera.position.z * TAN_HALF_FOV)) * dpr;
     const rb = ringBuffers;
-    const ringPos = rb.count ? rb.positions.value.array : null;
+    const ringIndex = rb.count ? rb.indices.value.array : null;
     const ringScale = rb.count ? rb.scales.value.array : null;
     const ringCol = rb.count ? rb.colors.value.array : null;
     const ringAlpha = rb.count ? rb.alphas.value.array : null;
     let dotDirty = false;
+    let ringIndexDirty = false;
 
     for (let j = 0; j < pulseIds.length; j++) {
       const id = pulseIds[j];
       const idx = idToIndex.get(id);
-      if (idx === undefined) continue;
+      if (idx === undefined) {
+        if (ringAlpha) ringAlpha[j] = 0;
+        continue;
+      }
       const item = data[idx];
       const style = dotStyles.get(id) || EMPTY_STYLE;
       const isHovered = id === hoveredId;
@@ -1242,7 +1249,11 @@ export function R3FDotsWebGPU({
       alphaArr[idx] = baseAlpha * ps.opacityMultiplier;
       dotDirty = true;
 
-      if (!ringPos) continue;
+      if (ringIndex && ringIndex[j] !== idx) {
+        ringIndex[j] = idx;
+        ringIndexDirty = true;
+      }
+      if (!ringScale) continue;
       if (ps.ringData) {
         const ringRadius = calculateAdaptiveRingRadius({
           radius: baseSize,
@@ -1253,7 +1264,6 @@ export function R3FDotsWebGPU({
           minRatio: ps.ringData.options?.minRatio,
           canvasDPR: dpr,
         });
-        ringPos[j * 2] = item.x; ringPos[j * 2 + 1] = -item.y;
         ringScale[j] = ringRadius;
         _color.set(ps.ringData.color || fill);
         ringCol[j * 3] = _color.r; ringCol[j * 3 + 1] = _color.g; ringCol[j * 3 + 2] = _color.b;
@@ -1268,7 +1278,7 @@ export function R3FDotsWebGPU({
       cosmetic.alphas.value.needsUpdate = true;
     }
     if (rb.count) {
-      rb.positions.value.needsUpdate = true;
+      if (ringIndexDirty) rb.indices.value.needsUpdate = true;
       rb.scales.value.needsUpdate = true;
       rb.colors.value.needsUpdate = true;
       rb.alphas.value.needsUpdate = true;

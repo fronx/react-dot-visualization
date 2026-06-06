@@ -185,6 +185,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const processedDataRef = useRef([]);
   const liveTransitionDataRef = useRef(null);
   const previousDataRef = useRef([]);
+  const previousScopeKeyRef = useRef(null);
   const schedulerRef = useRef(null);
   const constraintKeyRef = useLatest(constraintKey);
 
@@ -267,7 +268,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     if (validData.length === 0) return;
 
     let scopeChangedThisRender = false;
-    if (sharedPositionCache) {
+    if (backend === 'webgpu') {
+      scopeChangedThisRender = previousScopeKeyRef.current !== null && previousScopeKeyRef.current !== scopeKey;
+      previousScopeKeyRef.current = scopeKey;
+      if (scopeChangedThisRender && schedulerRef.current) {
+        dataRef.current = validData;
+        schedulerRef.current.decollideForConstraint('');
+      }
+    } else if (sharedPositionCache) {
       scopeChangedThisRender = sharedPositionCache.checkScope(scopeKey);
       if (scopeChangedThisRender && schedulerRef.current) {
         dataRef.current = validData;
@@ -290,7 +298,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       validData,
       previousData: previousDataRef.current,
       positionsAreIntermediate,
-      cachedPositions: sharedPositionCache?.cache.get(constraintKeyRef.current) ?? null,
+      cachedPositions: backend === 'webgpu'
+        ? null
+        : sharedPositionCache?.cache.get(constraintKeyRef.current) ?? null,
       previousProcessedData: processedDataRef.current,
       hasPositionsChangedFn: hasPositionsChanged,
     });
@@ -329,7 +339,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     dataRef,
     processedDataRef,
     liveTransitionDataRef,
-    cache: sharedPositionCache,
+    cache: backend === 'webgpu' ? null : sharedPositionCache,
     positionsAreIntermediate,
     constraintKey,
     radiusOverrides,

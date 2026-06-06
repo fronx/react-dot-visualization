@@ -1,7 +1,7 @@
 import { describe, test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
-import React, { act, useMemo, useRef } from 'react';
+import React, { act, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useDecollisionScheduler } from '../src/useDecollisionScheduler.js';
 import { DecollisionCacheManager } from '../src/useDecollisionCache.js';
@@ -32,29 +32,39 @@ afterEach(() => {
   delete globalThis.HTMLElement;
 });
 
-function makeCacheOnlyPositions(positions) {
-  return positions.map((p) => ({ ...p }));
-}
-
 describe('useDecollisionScheduler WebGPU base cache bridge', () => {
-  test('base completion can populate cache without publishing CPU positions to onBaseReady', async () => {
+  test('WebGPU base snapshot lets clear-focus animate without CPU base cache', async () => {
     setupRoot();
 
     const cache = new DecollisionCacheManager();
     const sourceData = [{ id: 'a', x: 1, y: 2 }];
-    const settledBase = makeCacheOnlyPositions([{ id: 'a', x: 8, y: 13 }]);
-    let runRequest = null;
-    let publicBaseReadyArg = 'not-called';
-    let syncedFinalData = null;
+    let baseSnapshotAvailable = false;
+    const simRequests = [];
+    const animationRequests = [];
+    let constraintKey = '';
+    let radiusOverrides = new Map();
 
     const executor = {
+      canSnapshotPositions: true,
+      hasPositionSnapshot(key) {
+        return key === '' && baseSnapshotAvailable;
+      },
       runSimulation(request) {
-        runRequest = request;
-        setTimeout(() => request.onComplete(settledBase, { cacheOnly: true }), 0);
+        simRequests.push(request);
+        setTimeout(() => {
+          if (request.constraintKey === '') {
+            baseSnapshotAvailable = true;
+            request.onComplete(null, { gpuSnapshotKey: '' });
+          } else {
+            request.onComplete(null);
+          }
+        }, 0);
         return { stop() {} };
       },
-      runAnimation() {
-        throw new Error('base cold-start should not animate');
+      runAnimation(request) {
+        animationRequests.push(request);
+        setTimeout(() => request.onComplete(null, { gpuSnapshotKey: request.targetSnapshotKey }), 0);
+        return { stop() {} };
       },
     };
 
@@ -62,7 +72,6 @@ describe('useDecollisionScheduler WebGPU base cache bridge', () => {
       const dataRef = useRef(sourceData);
       const processedDataRef = useRef([]);
       const liveTransitionDataRef = useRef(null);
-      const radiusOverrides = useMemo(() => new Map(), []);
 
       useDecollisionScheduler({
         dataRef,
@@ -70,13 +79,13 @@ describe('useDecollisionScheduler WebGPU base cache bridge', () => {
         liveTransitionDataRef,
         cache,
         positionsAreIntermediate: false,
-        constraintKey: '',
+        constraintKey,
         radiusOverrides,
         defaultSize: 2,
         onUpdateNodes: () => {},
-        onBaseReady: (finalData) => { publicBaseReadyArg = finalData; },
+        onBaseReady: () => {},
         onConstraintReady: () => {},
-        syncDecollisionState: (finalData) => { syncedFinalData = finalData; },
+        syncDecollisionState: () => {},
         onSimulationRunningChange: () => {},
         executor,
       });
@@ -91,10 +100,33 @@ describe('useDecollisionScheduler WebGPU base cache bridge', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
-    assert.equal(runRequest.constraintKey, '');
-    assert.equal(runRequest.readbackPositionsOnComplete, true);
-    assert.equal(publicBaseReadyArg, null);
-    assert.equal(syncedFinalData, settledBase);
-    assert.deepEqual(cache.cache.get('').get('a'), { x: 8, y: 13 });
+    assert.equal(simRequests[0].constraintKey, '');
+    assert.equal(simRequests[0].snapshotOnCompleteKey, '');
+    assert.equal(cache.cache.get(''), null);
+
+    constraintKey = 'focus:a';
+    radiusOverrides = new Map([['a', 12]]);
+    await act(async () => {
+      root.render(React.createElement(Harness));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    assert.equal(simRequests[1].constraintKey, 'focus:a');
+
+    constraintKey = '';
+    radiusOverrides = new Map();
+    await act(async () => {
+      root.render(React.createElement(Harness));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    assert.equal(animationRequests.length, 1);
+    assert.equal(animationRequests[0].targetSnapshotKey, '');
+    assert.equal(animationRequests[0].target, null);
+    assert.equal(simRequests.length, 2);
   });
 });

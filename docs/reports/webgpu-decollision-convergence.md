@@ -39,14 +39,14 @@ That second effect was the unwanted global motion. The focus operation was not i
 - R3F/WebGPU injects a GPU-resident executor.
 - The scheduler still owns phase transitions, constraint cache semantics, and base/focus routing.
 
-This keeps renderer behavior aligned while letting WebGPU execute simulation and cached-position lerps without per-frame CPU readback.
+This keeps renderer behavior aligned while letting WebGPU execute simulation and cached-position lerps without per-frame CPU readback. Canvas/WebGL still use CPU position maps for their transition targets; WebGPU treats reusable layouts as GPU snapshots.
 
 ### GPU-Resident WebGPU Executor
 
 `R3FDotsWebGPU` now consumes scheduler requests through `gpuControlRef`:
 
-- `sim`: seed GPU position/velocity buffers, run spatial-hash collision kernels, read final positions back once.
-- `lerp`: snapshot live GPU positions and mix to cached target positions on the GPU.
+- `sim`: seed GPU position/velocity buffers and run spatial-hash collision kernels. Base completion snapshots live `positions` into a persistent GPU `basePos` buffer instead of materializing a CPU array by default.
+- `lerp`: snapshot live GPU positions and mix to either an uploaded CPU target or the GPU `basePos` snapshot.
 
 Per-seed buffers survive cosmetic restyles and focus changes. Sim resources are cached by grid signature so focusing repeatedly does not leak fresh pipelines and bin buffers.
 

@@ -25,7 +25,7 @@ These modules are renderer-agnostic. R3F should consume them directly instead of
 |---|---|---|
 | [`useDecollisionScheduler.js`](../src/useDecollisionScheduler.js) | Yes (full base + constraint state machine) | **Not used** — runs bare `decollisioning()` instead |
 | [`decollisionScheduler.js`](../src/decollisionScheduler.js) (state machine) | Yes | **Not used** |
-| [`useDecollisionCache.js`](../src/useDecollisionCache.js) | Yes | Consumed via `sharedPositionCache` prop — OK |
+| [`useDecollisionCache.js`](../src/useDecollisionCache.js) | Yes | Canvas/WebGL transition target cache; WebGPU uses GPU snapshots instead |
 | [`usePulseAnimation.js`](../src/usePulseAnimation.js) | Yes | **Not used** — R3F has its own ad-hoc pulse loop in [R3FDots.jsx:208-279](../src/r3f/R3FDots.jsx#L208-L279) |
 | [`useFrameBudget.js`](../src/useFrameBudget.js) | Yes (via `usePulseAnimation`) | **Not used** |
 | [`pulseRingUtils.js`](../src/pulseRingUtils.js) (`calculateAdaptiveRingRadius`) | Yes | **Not used** — R3F has a different sizing formula |
@@ -56,7 +56,7 @@ Severity is fingertip-impact. Reuse column says which shared module fixes it.
 | 6 | `constraintKey` triggers re-decollision with bumped radii | High | **scheduler** (R3F currently does a one-shot; doesn't model base + constraint phases) |
 | 7 | `isIncrementalUpdate` + `positionsAreIntermediate` semantics match Canvas | Medium | **scheduler** (Canvas already gets this for free via the scheduler) |
 | 8 | `onDecollisionComplete` fires on both initial settle AND constraint settle AND animate-from-cache path | High | **scheduler** |
-| 9 | `sharedPositionCache` round-trips | Medium | already partial — verify against scheduler behavior |
+| 9 | CPU `sharedPositionCache` round-trips on Canvas/WebGL; WebGPU restores from GPU snapshots | Medium | scheduler + WebGPU executor |
 
 ### Camera / fit
 

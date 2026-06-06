@@ -43,8 +43,14 @@ export function resolveOnScreenData(liveData, processedData, rawData) {
   return [...(rawData || [])];
 }
 
-function isCacheOnlyCompletion(completionInfo) {
-  return completionInfo?.cacheOnly === true;
+function gpuSnapshotTarget(key) {
+  return { type: 'gpu-snapshot', key };
+}
+
+function resolveCachedTarget(cache, executor, key, dataLength = 0) {
+  const cached = validateCachedPositions(cache?.cache.get(key) ?? null, dataLength);
+  if (cached) return cached;
+  return executor?.hasPositionSnapshot?.(key) ? gpuSnapshotTarget(key) : null;
 }
 
 /**
@@ -129,9 +135,9 @@ export function useDecollisionScheduler({
    * @param {Map} overrides - radiusOverrides to use for dot sizes
    * @param {Function} onComplete - called with (finalData, constraintKey) on completion
    * @param {object} [transitionConfig] - if provided, skip intermediate frames and animate from stablePositions to final
-   * @param {boolean} [readbackPositionsOnComplete] - executor-specific explicit CPU-position bridge for cache targets
+   * @param {string|null} [snapshotOnCompleteKey] - executor-specific GPU snapshot target to capture on completion
    */
-  const launchSimulation = useCallback((sourceData, constraintKeyForLaunch, overrides, onComplete, transitionConfig = null, readbackPositionsOnComplete = false) => {
+  const launchSimulation = useCallback((sourceData, constraintKeyForLaunch, overrides, onComplete, transitionConfig = null, snapshotOnCompleteKey = null) => {
     if (!sourceData || sourceData.length === 0) return;
 
     cancelSimulation();
@@ -144,7 +150,7 @@ export function useDecollisionScheduler({
       fnDotSize,
       transitionConfig,
       constraintKey: constraintKeyForLaunch,
-      readbackPositionsOnComplete,
+      snapshotOnCompleteKey,
       onUpdateNodes: stableOnUpdateNodes,
       onComplete: (finalData, completionInfo) => {
         simulationRef.current = null;
@@ -175,6 +181,7 @@ export function useDecollisionScheduler({
       easing: d3.easeCubicOut,
     } : null;
 
+    const canSnapshotBaseOnGpu = !!executor?.canSnapshotPositions;
     // Base uses empty overrides (no constraint = uniform sizes)
     launchSimulation([...data], '', new Map(), (finalData, _launchKey, completionInfo) => {
       if (cache && Array.isArray(finalData)) {
@@ -186,13 +193,13 @@ export function useDecollisionScheduler({
       queuedConstraintRef.current = null;
       phaseRef.current = result.phase;
 
-      stableOnBaseReady(isCacheOnlyCompletion(completionInfo) ? null : finalData);
+      stableOnBaseReady(completionInfo?.gpuSnapshotKey === '' ? null : finalData);
 
       if (result.action?.type === 'launch-constraint') {
         launchConstraintRef.current?.(result.action.constraintKey);
       }
-    }, transitionConfig, !!cache);
-  }, [dataRef, processedDataRef, launchSimulation, cache, stableOnBaseReady]);
+    }, transitionConfig, canSnapshotBaseOnGpu ? '' : null);
+  }, [dataRef, processedDataRef, launchSimulation, cache, stableOnBaseReady, executor]);
 
   const launchConstraint = useCallback((key) => {
     const data = dataRef.current;
@@ -244,14 +251,18 @@ export function useDecollisionScheduler({
     const from = getOnScreenData();
     cancelSimulation();
 
-    const target = data.map(item => {
-      const pos = positions.get(item.id);
-      return pos ? { ...item, x: pos.x, y: pos.y } : item;
-    });
+    const targetSnapshotKey = positions?.type === 'gpu-snapshot' ? positions.key : null;
+    const target = targetSnapshotKey == null
+      ? data.map(item => {
+        const pos = positions.get(item.id);
+        return pos ? { ...item, x: pos.x, y: pos.y } : item;
+      })
+      : null;
 
     const handle = executor.runAnimation({
       fromData: from,
       target,
+      targetSnapshotKey,
       duration,
       onUpdateNodes: stableOnUpdateNodes,
       onComplete: (finalData) => {
@@ -365,27 +376,26 @@ export function useDecollisionScheduler({
     prevRadiusOverridesRef.current = radiusOverrides;
 
     const key = constraintKeyRef.current;
-    const cachedPositions = validateCachedPositions(
-      cache?.cache.get(key) ?? null,
-      dataRef.current?.length ?? 0
-    );
-    const baseCachedPositions = cache?.cache.get('') ?? null;
+    const dataLength = dataRef.current?.length ?? 0;
+    const cachedPositions = resolveCachedTarget(cache, executor, key, dataLength);
+    const baseCachedPositions = resolveCachedTarget(cache, executor, '', dataLength);
     const isRunning = simulationRef.current != null && phaseRef.current === PHASE.READY;
     const activeKey = activeConstraintKeyRef.current;
 
     const result = onConstraintRequest(phaseRef.current, key, cachedPositions, isRunning, activeKey, baseCachedPositions);
     processAction(result.action);
-  }, [radiusOverrides, constraintKeyRef, cache, processAction]);
+  }, [radiusOverrides, constraintKeyRef, cache, executor, processAction]);
 
   // Imperative API — only for explicit re-decollision (e.g. track deletion)
   const decollideForConstraint = useCallback((key) => {
-    const cachedPositions = cache?.cache.get(key) ?? null;
-    const baseCachedPositions = cache?.cache.get('') ?? null;
+    const dataLength = dataRef.current?.length ?? 0;
+    const cachedPositions = resolveCachedTarget(cache, executor, key, dataLength);
+    const baseCachedPositions = resolveCachedTarget(cache, executor, '', dataLength);
     const isRunning = simulationRef.current != null && phaseRef.current === PHASE.READY;
     const activeKey = activeConstraintKeyRef.current;
     const result = onConstraintRequest(phaseRef.current, key, cachedPositions, isRunning, activeKey, baseCachedPositions);
     processAction(result.action);
-  }, [cache, processAction]);
+  }, [cache, executor, processAction, dataRef]);
 
   // ── enabled toggle ────────────────────────────────────────────────────
   // false → true: re-decollide from current raw positions.
