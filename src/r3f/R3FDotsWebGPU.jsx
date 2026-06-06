@@ -13,8 +13,9 @@
  * every decision — base vs. constraint, the position cache, go-through-base
  * transitions; this layer only executes them on the GPU:
  *   - a 'sim' request seeds the positions buffer, builds the spatial-hash
- *     collide pipeline for the launch radii, steps the kernels in-shader until
- *     the velocity metric converges, then reads positions back ONCE at settle.
+ *     collide pipeline for the launch radii, and steps the kernels in-shader
+ *     until the velocity metric converges. Settle stays GPU-owned; no full
+ *     position readback is part of the WebGPU completion path.
  *   - a 'lerp' request snapshots the live positions, uploads the cached target,
  *     and mixes from→target in-shader each frame (zero per-frame copy).
  * Focus therefore animates from the current settled layout (or a cached one),
@@ -392,40 +393,6 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
   return true;
 }
 
-// Read the GPU positions back to the CPU. Positions are world convention
-// (worldY = -item.y; see buildSeedBuffers), so the inverse negation restores
-// viewBox-space y for the caller. `template` supplies the id/order (the launch's
-// sourceData), so the index→item mapping stays valid.
-async function readbackPositions(renderer, positionsBuffer, template) {
-  const readbackStart = performance.now();
-  const arrayBuffer = await renderer.getArrayBufferAsync(positionsBuffer.value);
-  const readbackMs = performance.now() - readbackStart;
-  const materializeStart = performance.now();
-  const pos = new Float32Array(arrayBuffer);
-  const out = new Array(template.length);
-  let nonFinite = 0;
-  for (let i = 0; i < template.length; i++) {
-    const x = pos[i * 2];
-    const y = -pos[i * 2 + 1];
-    if (Number.isFinite(x) && Number.isFinite(y)) {
-      out[i] = { ...template[i], x, y };
-    } else {
-      // The GPU sim can diverge a dot to NaN (e.g. two dots at the exact same
-      // spot normalize a zero vector). Keep its finite seed so a single NaN
-      // doesn't poison boundsForData and every fit/zoom that reads it.
-      out[i] = template[i];
-      nonFinite++;
-    }
-  }
-  if (nonFinite > 0) console.warn(`[r3f-webgpu] readback kept seed for ${nonFinite}/${template.length} non-finite settled positions`);
-  return {
-    settled: out,
-    readbackMs,
-    materializeMs: performance.now() - materializeStart,
-    nonFinite,
-  };
-}
-
 // Bevel-stroke dot mesh: per-instance color/alpha/focus/scale from `cosmetic`
 // and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
@@ -653,10 +620,14 @@ export function R3FDotsWebGPU({
   // ── Decollision job state, driven by the scheduler's request channel ──────
   // jobRef holds the current GPU job ({ mode: 'idle' | 'sim' | 'lerp' | 'settling' }
   // plus its resources/clock). handledReqId tracks which request we've consumed.
-  // settledRef caches the last settled CPU positions for the pulse ring.
   const jobRef = useRef({ mode: 'idle' });
   const handledReqId = useRef(0);
-  const settledRef = useRef(null);
+  const hasSettledGpuLayoutRef = useRef(false);
+  const prevBuffersRef = useRef(buffers);
+  if (prevBuffersRef.current !== buffers) {
+    prevBuffersRef.current = buffers;
+    hasSettledGpuLayoutRef.current = false;
+  }
 
   // Per-seed cache of sim resources keyed by grid signature. Reused across
   // launches (a focus rewrites the radii buffer in place) so we don't leak a
@@ -697,9 +668,11 @@ export function R3FDotsWebGPU({
       const maxSolverIterationsPerFrame = resolveMaxSolverIterationsPerFrame(req.solverIterationsPerFrame);
       const solverFrameBudgetMs = resolveSolverFrameBudgetMs(req.solverFrameBudgetMs);
       const N = buffers.N;
-      // Seed positions from sourceData (raw cloud for base; the cached base
-      // layout with one enlarged dot for a constraint), zero velocities, and
-      // build this launch's radii + grid nodes — all in one pass over sourceData.
+      // The first sim for a seed writes the CPU source positions into the GPU.
+      // Later sims keep the current GPU positions and only update velocities
+      // and radii. CPU sourceData is then metadata/radii/grid input, not an
+      // ownership transfer of positions back to the CPU path.
+      const seedFromCurrentPositions = !!req.seedFromCurrentPositions && hasSettledGpuLayoutRef.current;
       const posArr = buffers.positions.value.array;
       const velArr = buffers.velocities.value.array;
       const radiiArray = new Float32Array(N);
@@ -708,14 +681,18 @@ export function R3FDotsWebGPU({
         const src = sourceData[i];
         const x = src.x;
         const y = -src.y;
-        posArr[i * 2] = x; posArr[i * 2 + 1] = y;
+        if (!seedFromCurrentPositions) {
+          posArr[i * 2] = x; posArr[i * 2 + 1] = y;
+        }
         velArr[i * 2] = 0; velArr[i * 2 + 1] = 0;
         const r = fnDotSize ? Number(fnDotSize(src)) : resolveBaseSize(src, EMPTY_STYLE, radiusOverrides, defaultSize);
         radiiArray[i] = Number.isFinite(r) ? Math.max(0.0001, r) : 0.0001;
         nodes[i] = { x, y };
       }
       const seedMs = performance.now() - startMs;
-      buffers.positions.value.needsUpdate = true;
+      if (!seedFromCurrentPositions) {
+        buffers.positions.value.needsUpdate = true;
+      }
       buffers.velocities.value.needsUpdate = true;
       // Reuse a cached pipeline when the grid matches (the common case for
       // focuses); otherwise build one and cap the cache so pipelines don't pile up.
@@ -747,6 +724,7 @@ export function R3FDotsWebGPU({
           + ` frameBudget=${fmtMs(solverFrameBudgetMs)}ms`
           + ` checkEveryIterations=${CONVERGENCE_CHECK_ITERATION_INTERVAL}`
           + ` minCheckIterations=${MIN_CONVERGENCE_CHECK_ITERATIONS}`
+          + ` seedFrom=${seedFromCurrentPositions ? 'gpu-current' : 'source'}`
           + ` seed=${fmtMs(seedMs)}ms grid=${fmtMs(gridMs)}ms`
           + ` sim=${cacheHit ? 'hit' : 'miss'}:${fmtMs(simMs)}ms`
           + ` total=${fmtMs(performance.now() - startMs)}ms`
@@ -813,18 +791,18 @@ export function R3FDotsWebGPU({
     }
   };
 
-  // Single exit for every finished job: cache the settled layout, drop to idle,
-  // notify the scheduler. Centralizing it keeps the idle transition coupled to
-  // the completion callback so no path can notify while leaving a stale job.
+  // Single exit for every finished job: mark the GPU layout settled, drop to
+  // idle, notify the scheduler. The WebGPU path does not materialize settled
+  // positions into a CPU array as part of completion.
   const finishJobIdle = (settled, onComplete) => {
-    settledRef.current = settled;
+    hasSettledGpuLayoutRef.current = true;
     jobRef.current = { mode: 'idle' };
     onComplete?.(settled);
   };
 
   const settleSimJob = (job) => {
     if (!job || job.mode !== 'sim') return;
-    job.mode = 'settling'; // stop stepping; await the one-shot position readback
+    job.mode = 'settling'; // stop stepping; complete after one paint
     job.settleStartMs = performance.now();
     const jobId = job.jobId;
     const onComplete = job.onComplete;
@@ -834,10 +812,10 @@ export function R3FDotsWebGPU({
       jobId,
     });
     scheduleAfterPaint(() => {
-      readbackPositions(gl, buffers.positions, job.template).then(({ settled, readbackMs, materializeMs, nonFinite }) => {
+      Promise.resolve().then(() => {
         if (jobRef.current.jobId !== jobId) return; // superseded by a newer launch
         const callbackStart = performance.now();
-        finishJobIdle(settled, onComplete);
+        finishJobIdle(null, onComplete);
         const callbackMs = performance.now() - callbackStart;
         if (decollisionDebug) {
           console.log(
@@ -860,8 +838,8 @@ export function R3FDotsWebGPU({
             + ` computeSubmitMax=${fmtMs(job.computeSubmitMaxMs || 0)}ms`
             + ` simWall=${fmtMs(job.settleStartMs - job.startMs)}ms`
             + ` settle=${fmtMs(performance.now() - job.settleStartMs)}ms`
-            + ` readback=${fmtMs(readbackMs)}ms materialize=${fmtMs(materializeMs)}ms`
-            + ` callback=${fmtMs(callbackMs)}ms nonFinite=${nonFinite}`,
+            + ` readback=0.0ms materialize=0.0ms`
+            + ` callback=${fmtMs(callbackMs)}ms nonFinite=0`,
           );
         }
       });
@@ -917,7 +895,7 @@ export function R3FDotsWebGPU({
       if (mismatchAction === 'rebind') {
         startJob(req); // rebind the sim to the live buffers
       } else if (mismatchAction === 'complete-live') {
-        finishJobIdle(Array.isArray(data) ? data : [], job.onComplete);
+        finishJobIdle(null, job.onComplete);
       } else {
         jobRef.current = { mode: 'idle' };
       }
@@ -1231,9 +1209,7 @@ export function R3FDotsWebGPU({
           minRatio: ps.ringData.options?.minRatio,
           canvasDPR: dpr,
         });
-        const settled = settledRef.current;
-        const pos = (settled && settled[idx]) ? settled[idx] : item;
-        ringPos[j * 2] = pos.x; ringPos[j * 2 + 1] = -pos.y;
+        ringPos[j * 2] = item.x; ringPos[j * 2 + 1] = -item.y;
         ringScale[j] = ringRadius;
         _color.set(ps.ringData.color || fill);
         ringCol[j * 3] = _color.r; ringCol[j * 3 + 1] = _color.g; ringCol[j * 3 + 2] = _color.b;

@@ -9,16 +9,16 @@
  * channel (gpuControlRef.current.request) that R3FDotsWebGPU consumes inside
  * its useFrame loop and executes entirely on the GPU:
  *   - runSimulation -> a 'sim' request: seed the positions buffer, build the
- *     spatial-hash collide pipeline for the launch radii, step the kernels
- *     in-shader, and read positions back ONCE at settle -> onComplete.
+ *     spatial-hash collide pipeline for the launch radii, and step the kernels
+ *     in-shader. Completion reports readiness, not a CPU position array.
  *   - runAnimation  -> a 'lerp' request: snapshot the live positions, upload
  *     the cached target, and mix(from, target, easeOut(t)) in-shader each
  *     frame -> onComplete(target) at t=1.
  *
  * onUpdateNodes (the per-tick CPU publish the Canvas/WebGL paths consume) is
- * intentionally ignored: positions never leave the GPU during a sim or lerp,
- * which is the entire reason this path exists. Only the one-shot readback at a
- * sim's settle crosses the boundary.
+ * intentionally ignored: positions never leave the GPU during a sim, which is
+ * the entire reason this path exists. Explicit CPU-position APIs must request a
+ * separate snapshot; settle itself is GPU-owned.
  *
  * The request channel is a plain object on gpuControlRef.current. It decouples
  * the scheduler (parent component, outside the R3F Canvas) from the GPU work
@@ -63,6 +63,7 @@ export function makeGpuExecutor(gpuControlRef, {
         maxIterations,
         solverIterationsPerFrame,
         solverFrameBudgetMs,
+        seedFromCurrentPositions: true,
         skipConvergenceMetric: !constraintKey && !!baseFixedIterations,
         onComplete,
       });

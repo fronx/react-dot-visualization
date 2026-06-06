@@ -27,7 +27,7 @@ const EMPTY_RADIUS_OVERRIDES = new Map();
 
 // Filter to finite-coordinate items and assign fallback ids. Shared by the
 // initial processedData seed and the WebGPU seed memo so both produce the same
-// ids/ordering — which keeps the settle readback's index→item mapping valid.
+// ids/ordering for metadata, picking, and explicit callback payloads.
 function validateData(data) {
   if (!data || data.length === 0) return [];
   let out = null;
@@ -226,9 +226,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // calling `renderCanvasWithData` imperatively; R3F's equivalent is the
   // useFrame loop inside R3FDots, which reads `liveTransitionDataRef` per
   // frame and updates only the instance positions. State only changes at
-  // simulation completion via `syncDecollisionState`. WebGPU completion records
-  // the settled CPU readback in a ref for explicit APIs/callbacks only; it does
-  // not publish those positions through React state.
+  // simulation completion via `syncDecollisionState`. WebGPU completion is
+  // GPU-owned and does not publish settled positions through React state.
   const onUpdateNodes = useCallback((nodes) => {
     liveTransitionDataRef.current = nodes;
   }, []);

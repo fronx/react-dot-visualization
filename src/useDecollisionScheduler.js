@@ -171,7 +171,7 @@ export function useDecollisionScheduler({
 
     // Base uses empty overrides (no constraint = uniform sizes)
     launchSimulation([...data], '', new Map(), (finalData) => {
-      if (cache) {
+      if (cache && Array.isArray(finalData)) {
         cache.store('', finalData);
       }
 
@@ -209,7 +209,7 @@ export function useDecollisionScheduler({
     const overrides = radiusOverridesRef.current;
 
     launchSimulation(sourceData, key, overrides, (finalData, launchKey) => {
-      if (cache) {
+      if (cache && Array.isArray(finalData)) {
         cache.store(launchKey, finalData);
       }
       phaseRef.current = PHASE.READY;
