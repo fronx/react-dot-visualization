@@ -31,6 +31,7 @@ export function makeGpuExecutor(gpuControlRef, {
   constraintMaxIterations,
   solverIterationsPerFrame,
   solverFrameBudgetMs,
+  baseFixedIterations,
 }) {
   let reqSeq = 0;
 
@@ -58,9 +59,11 @@ export function makeGpuExecutor(gpuControlRef, {
         type: 'sim',
         sourceData,
         fnDotSize,
+        constraintKey,
         maxIterations,
         solverIterationsPerFrame,
         solverFrameBudgetMs,
+        skipConvergenceMetric: !constraintKey && !!baseFixedIterations,
         onComplete,
       });
     },

@@ -103,6 +103,14 @@ function resolveSolverFrameBudgetMs(value) {
     : SOLVER_FRAME_BUDGET_MS;
 }
 
+function scheduleAfterPaint(callback) {
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => setTimeout(callback, 0));
+  } else {
+    setTimeout(callback, 0);
+  }
+}
+
 function scanIterations(n) {
   if (n <= 1) return 0;
   let iters = Math.ceil(Math.log2(n));
@@ -464,6 +472,7 @@ export function R3FDotsWebGPU({
   positionsAreIntermediate = false,
   decollisionEnabled = true,
   decollisionDebug = false,
+  onDecollisionVisualComplete,
   gpuControlRef = null,
   pickControlRef = null,
 }) {
@@ -765,6 +774,7 @@ export function R3FDotsWebGPU({
         metricReadbackSumMs: 0,
         metricReadbackMaxMs: 0,
         lastMetric: null,
+        skipConvergenceMetric: !!req.skipConvergenceMetric,
         firstFrameDelayMs: null,
         lastFrameStartMs: null,
         frameGapSumMs: 0,
@@ -818,36 +828,43 @@ export function R3FDotsWebGPU({
     job.settleStartMs = performance.now();
     const jobId = job.jobId;
     const onComplete = job.onComplete;
-    readbackPositions(gl, buffers.positions, job.template).then(({ settled, readbackMs, materializeMs, nonFinite }) => {
-      if (jobRef.current.jobId !== jobId) return; // superseded by a newer launch
-      const callbackStart = performance.now();
-      finishJobIdle(settled, onComplete);
-      const callbackMs = performance.now() - callbackStart;
-      if (decollisionDebug) {
-        console.log(
-          `[rdv-decollision] finish id=${jobId} reason=${job.exitReason || 'unknown'}`
-          + ` n=${job.template.length} iterations=${job.iterations}/${job.maxIterations}`
-          + ` frames=${job.frameBatches} checks=${job.metricChecks || 0}`
-          + ` stepFrame=${SOLVER_ITERATIONS_PER_FRAME}..${job.maxSolverIterationsPerFrame || SOLVER_ITERATIONS_PER_FRAME}`
-          + ` stepAvg=${fmtMs(job.frameBatches ? job.iterationsPerFrameSum / job.frameBatches : 0)}`
-          + ` stepMax=${job.iterationsPerFrameMax || 0}`
-          + ` stepAdj=${job.stepAdjustments || 0}`
-          + ` budgetStops=${job.budgetStops || 0}`
-          + ` metricWaitFrames=${job.metricWaitFrames || 0}`
-          + ` metric=${fmtMetric(job.lastMetric)}`
-          + ` metricReadback=${fmtMs(job.metricReadbackSumMs || 0)}ms`
-          + ` metricReadbackMax=${fmtMs(job.metricReadbackMaxMs || 0)}ms`
-          + ` firstFrame=${fmtMs(job.firstFrameDelayMs ?? 0)}ms`
-          + ` frameGapAvg=${fmtMs(job.frameGapCount ? job.frameGapSumMs / job.frameGapCount : 0)}ms`
-          + ` frameGapMax=${fmtMs(job.frameGapMaxMs || 0)}ms`
-          + ` computeSubmit=${fmtMs(job.computeSubmitSumMs || 0)}ms`
-          + ` computeSubmitMax=${fmtMs(job.computeSubmitMaxMs || 0)}ms`
-          + ` simWall=${fmtMs(job.settleStartMs - job.startMs)}ms`
-          + ` settle=${fmtMs(performance.now() - job.settleStartMs)}ms`
-          + ` readback=${fmtMs(readbackMs)}ms materialize=${fmtMs(materializeMs)}ms`
-          + ` callback=${fmtMs(callbackMs)}ms nonFinite=${nonFinite}`,
-        );
-      }
+    onDecollisionVisualComplete?.({
+      count: job.template.length,
+      reason: job.exitReason || 'unknown',
+      jobId,
+    });
+    scheduleAfterPaint(() => {
+      readbackPositions(gl, buffers.positions, job.template).then(({ settled, readbackMs, materializeMs, nonFinite }) => {
+        if (jobRef.current.jobId !== jobId) return; // superseded by a newer launch
+        const callbackStart = performance.now();
+        finishJobIdle(settled, onComplete);
+        const callbackMs = performance.now() - callbackStart;
+        if (decollisionDebug) {
+          console.log(
+            `[rdv-decollision] finish id=${jobId} reason=${job.exitReason || 'unknown'}`
+            + ` n=${job.template.length} iterations=${job.iterations}/${job.maxIterations}`
+            + ` frames=${job.frameBatches} checks=${job.metricChecks || 0}`
+            + ` stepFrame=${SOLVER_ITERATIONS_PER_FRAME}..${job.maxSolverIterationsPerFrame || SOLVER_ITERATIONS_PER_FRAME}`
+            + ` stepAvg=${fmtMs(job.frameBatches ? job.iterationsPerFrameSum / job.frameBatches : 0)}`
+            + ` stepMax=${job.iterationsPerFrameMax || 0}`
+            + ` stepAdj=${job.stepAdjustments || 0}`
+            + ` budgetStops=${job.budgetStops || 0}`
+            + ` metricWaitFrames=${job.metricWaitFrames || 0}`
+            + ` metric=${fmtMetric(job.lastMetric)}`
+            + ` metricReadback=${fmtMs(job.metricReadbackSumMs || 0)}ms`
+            + ` metricReadbackMax=${fmtMs(job.metricReadbackMaxMs || 0)}ms`
+            + ` firstFrame=${fmtMs(job.firstFrameDelayMs ?? 0)}ms`
+            + ` frameGapAvg=${fmtMs(job.frameGapCount ? job.frameGapSumMs / job.frameGapCount : 0)}ms`
+            + ` frameGapMax=${fmtMs(job.frameGapMaxMs || 0)}ms`
+            + ` computeSubmit=${fmtMs(job.computeSubmitSumMs || 0)}ms`
+            + ` computeSubmitMax=${fmtMs(job.computeSubmitMaxMs || 0)}ms`
+            + ` simWall=${fmtMs(job.settleStartMs - job.startMs)}ms`
+            + ` settle=${fmtMs(performance.now() - job.settleStartMs)}ms`
+            + ` readback=${fmtMs(readbackMs)}ms materialize=${fmtMs(materializeMs)}ms`
+            + ` callback=${fmtMs(callbackMs)}ms nonFinite=${nonFinite}`,
+          );
+        }
+      });
     });
   };
 
@@ -976,6 +993,12 @@ export function R3FDotsWebGPU({
 
       if (job.iterations >= job.maxIterations) {
         job.exitReason = 'max-iterations';
+        settleSimJob(job);
+        return;
+      }
+
+      if (job.skipConvergenceMetric && job.iterations >= MIN_CONVERGENCE_CHECK_ITERATIONS) {
+        job.exitReason = 'fixed-iterations';
         settleSimJob(job);
         return;
       }

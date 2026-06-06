@@ -97,6 +97,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onBackgroundClick,
     onDragStart,
     onDecollisionComplete,
+    onDecollisionVisualComplete,
     enableDecollisioning = true,
     decollisionEngine = 'auto',
     isIncrementalUpdate = false,
@@ -130,6 +131,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     // The GPU work is async, but this prevents command submission from growing
     // past a bounded slice of the frame when the renderer is already busy.
     webgpuSolverFrameBudgetMs = undefined,
+    // WebGPU-only: for base solves, stop after RDV's known-good visual minimum
+    // iteration count instead of synchronizing the GPU queue for a convergence
+    // metric readback. Constraint/focus solves still use the metric.
+    webgpuBaseFixedIterations = false,
     // WebGPU-only: emit decollision timing diagnostics to console.
     webgpuDecollisionDebug = false,
   } = props;
@@ -142,12 +147,12 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const [processedData, setProcessedData] = useState(() => validateData(data));
   const [hoveredId, setHoveredId] = useState(null);
 
-  // The WebGPU dots layer is seeded once from the validated input and then owns
-  // position animation on the GPU; processedData is the CPU-side *mirror* of the
-  // settled GPU state. Seeding the renderer from this `data`-keyed memo instead
-  // of processedData is what stops the settle→setProcessedData→rebuild→re-settle
-  // loop: a settle updates processedData without changing webgpuSeedData.
+  // The WebGPU dots layer is seeded from the validated input and then owns
+  // position animation on the GPU. The React data surface in the WebGPU branch
+  // is metadata/order only; settled positions stay out of React state so clients
+  // cannot accidentally depend on a huge hidden CPU mirror.
   const webgpuSeedData = useMemo(() => validateData(data), [data]);
+  const controlData = backend === 'webgpu' ? webgpuSeedData : processedData;
 
   const cameraInitialized = useRef(false);
 
@@ -170,8 +175,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // ── Decollision plumbing ─────────────────────────────────────────────────
   // Same refs Canvas uses, so `useDecollisionScheduler` drives both renderers
   // identically. `liveTransitionDataRef` carries per-tick simulation frames;
-  // we mirror it into React state so R3FDots (which consumes `data` as a prop)
-  // sees the moving positions and updates its instance matrices each render.
+  // R3FDots reads that ref directly instead of receiving those frames through
+  // React state.
   const dataRef = useRef([]);
   const processedDataRef = useRef([]);
   const liveTransitionDataRef = useRef(null);
@@ -207,8 +212,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       constraintMaxIterations: CONSTRAINT_MAX_SOLVER_ITERATIONS,
       solverIterationsPerFrame: webgpuSolverIterationsPerFrame,
       solverFrameBudgetMs: webgpuSolverFrameBudgetMs,
+      baseFixedIterations: webgpuBaseFixedIterations,
     }),
-    [webgpuSolverFrameBudgetMs, webgpuSolverIterationsPerFrame],
+    [webgpuBaseFixedIterations, webgpuSolverFrameBudgetMs, webgpuSolverIterationsPerFrame],
   );
 
   const { updateStablePositions, shouldUseStablePositions } = useStablePositions();
@@ -220,7 +226,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // calling `renderCanvasWithData` imperatively; R3F's equivalent is the
   // useFrame loop inside R3FDots, which reads `liveTransitionDataRef` per
   // frame and updates only the instance positions. State only changes at
-  // simulation completion via `syncDecollisionState`.
+  // simulation completion via `syncDecollisionState`. WebGPU completion records
+  // the settled CPU readback in a ref for explicit APIs/callbacks only; it does
+  // not publish those positions through React state.
   const onUpdateNodes = useCallback((nodes) => {
     liveTransitionDataRef.current = nodes;
   }, []);
@@ -232,10 +240,12 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const syncDecollisionState = useCallback((finalData) => {
     liveTransitionDataRef.current = null;
     if (finalData) {
-      setProcessedData(finalData);
       processedDataRef.current = finalData;
+      if (backend !== 'webgpu') {
+        setProcessedData(finalData);
+      }
     }
-  }, []);
+  }, [backend]);
 
   // Data effect — mirrors Canvas's data effect minus the zoom/auto-fit pieces.
   // Validates input, detects scope/length changes (which need a fresh base
@@ -243,8 +253,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // hands off to the scheduler for actual simulation.
   useEffect(() => {
     if (!data || data.length === 0) {
-      setProcessedData([]);
       processedDataRef.current = [];
+      if (backend !== 'webgpu') {
+        setProcessedData([]);
+      }
       return;
     }
 
@@ -293,10 +305,13 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       validData.length,
     );
     if (!keepStable) {
-      setProcessedData(processedValidData);
       processedDataRef.current = processedValidData;
+      if (backend !== 'webgpu') {
+        setProcessedData(processedValidData);
+      }
     }
   }, [
+    backend,
     data,
     scopeKey,
     isIncrementalUpdate,
@@ -382,6 +397,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     return computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
   }, [defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
+  const getCpuPositionData = useCallback(() => {
+    const refData = processedDataRef.current;
+    return refData?.length ? refData : controlData;
+  }, [controlData]);
+
   // Initial-fit camera target for CameraInitializer's bounds-fit branch.
   // Reuses the occlusion-aware computeFit + d3ToCamera pipeline that
   // zoomToVisible uses, so the first paint centers identically to Canvas's
@@ -389,11 +409,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // centering the raw centroid on the full canvas.
   const computeInitialFitTarget = useCallback(() => {
     if (!containerRef.current) return null;
-    const fit = computeFit(processedData, 0.9);
+    const fit = computeFit(controlData, 0.9);
     if (!fit) return null;
     const rect = containerRef.current.getBoundingClientRect();
     return d3ToCamera(fit, rect.width, rect.height);
-  }, [computeFit, d3ToCamera, processedData]);
+  }, [computeFit, d3ToCamera, controlData]);
 
   // Imperative handle — implements the DotVisualization API surface
   useImperativeHandle(ref, () => ({
@@ -406,7 +426,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       maxScale = Infinity
     ) => {
       if (!containerRef.current || !setCameraPositionRef.current) return false;
-      const dataToUse = dataOverride || processedData;
+      const dataToUse = dataOverride || getCpuPositionData();
       const margin = marginOverride ?? 0.9;
       const fit = computeFit(dataToUse, margin);
       if (!fit) return false;
@@ -464,7 +484,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         requestAnimationFrame(tick);
       });
     },
-    getVisibleDotCount: () => processedData.length,
+    getVisibleDotCount: () => getCpuPositionData().length,
     getZoomTransform: () => {
       const cam = cameraStateRef.current;
       if (!cam || !containerRef.current) return null;
@@ -482,7 +502,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       };
     },
     getFitTransform: (dataOverride = null, marginOverride = null) => {
-      const dataToUse = dataOverride || processedData;
+      const dataToUse = dataOverride || getCpuPositionData();
       const margin = marginOverride ?? 0.9;
       return computeFit(dataToUse, margin);
     },
@@ -499,8 +519,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     cancelDecollision: () => {
       scheduler.cancelSimulation();
     },
-    getCurrentPositions: () => processedData,
-  }), [processedData, defaultSize, computeFit, d3ToCamera, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler]);
+    getCurrentPositions: () => getCpuPositionData(),
+  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler]);
 
   return (
     <div
@@ -542,7 +562,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           }}
         >
           <CameraInitializer
-            data={processedData}
+            data={controlData}
             initialized={cameraInitialized}
             initialTransform={initialTransform}
             computeFitTarget={computeInitialFitTarget}
@@ -550,7 +570,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} data={processedData} interactionRef={interactionRef} clickControlRef={clickControlRef} />
+          <R3FCamera onTransformChange={handleTransformChange} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dataKey={dataKey}
@@ -568,11 +588,12 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             positionsAreIntermediate={positionsAreIntermediate}
             decollisionEnabled={enableDecollisioning}
             decollisionDebug={webgpuDecollisionDebug}
+            onDecollisionVisualComplete={onDecollisionVisualComplete}
             gpuControlRef={gpuControlRef}
             pickControlRef={pickControlRef}
           />
           <HoverDetector
-            data={processedData}
+            data={controlData}
             radiusOverrides={radiusOverrides}
             defaultSize={defaultSize}
             hoverSizeMultiplier={hoverSizeMultiplier}
