@@ -10,15 +10,18 @@
  * its useFrame loop and executes entirely on the GPU:
  *   - runSimulation -> a 'sim' request: seed the positions buffer, build the
  *     spatial-hash collide pipeline for the launch radii, and step the kernels
- *     in-shader. Completion reports readiness, not a CPU position array.
+ *     in-shader. Completion reports readiness by default; callers that need a
+ *     cache target can explicitly ask for a one-shot position readback.
  *   - runAnimation  -> a 'lerp' request: snapshot the live positions, upload
  *     the cached target, and mix(from, target, easeOut(t)) in-shader each
  *     frame -> onComplete(target) at t=1.
  *
  * onUpdateNodes (the per-tick CPU publish the Canvas/WebGL paths consume) is
- * intentionally ignored: positions never leave the GPU during a sim, which is
- * the entire reason this path exists. Explicit CPU-position APIs must request a
- * separate snapshot; settle itself is GPU-owned.
+ * intentionally ignored: positions never leave the GPU during a sim by default,
+ * which is the entire reason this path exists. The base-position cache is an
+ * explicit bridge: it asks for one completion snapshot so focus-clear can lerp
+ * to the real neutral layout without making rendering depend on React-owned
+ * settled positions.
  *
  * The request channel is a plain object on gpuControlRef.current. It decouples
  * the scheduler (parent component, outside the R3F Canvas) from the GPU work
@@ -51,7 +54,7 @@ export function makeGpuExecutor(gpuControlRef, {
   };
 
   return {
-    runSimulation({ sourceData, fnDotSize, constraintKey, onComplete }) {
+    runSimulation({ sourceData, fnDotSize, constraintKey, readbackPositionsOnComplete = false, onComplete }) {
       // These are safety caps only. R3FDotsWebGPU stops earlier once the
       // velocity metric says the layout is at a visual fixpoint.
       const maxIterations = constraintKey ? constraintMaxIterations : baseMaxIterations;
@@ -65,6 +68,7 @@ export function makeGpuExecutor(gpuControlRef, {
         solverFrameBudgetMs,
         seedFromCurrentPositions: true,
         skipConvergenceMetric: !constraintKey && !!baseFixedIterations,
+        readbackPositionsOnComplete: !!readbackPositionsOnComplete,
         onComplete,
       });
     },

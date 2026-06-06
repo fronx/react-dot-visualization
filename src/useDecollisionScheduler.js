@@ -43,6 +43,10 @@ export function resolveOnScreenData(liveData, processedData, rawData) {
   return [...(rawData || [])];
 }
 
+function isCacheOnlyCompletion(completionInfo) {
+  return completionInfo?.cacheOnly === true;
+}
+
 /**
  * React hook wrapping the decollision scheduler state machine.
  *
@@ -125,8 +129,9 @@ export function useDecollisionScheduler({
    * @param {Map} overrides - radiusOverrides to use for dot sizes
    * @param {Function} onComplete - called with (finalData, constraintKey) on completion
    * @param {object} [transitionConfig] - if provided, skip intermediate frames and animate from stablePositions to final
+   * @param {boolean} [readbackPositionsOnComplete] - executor-specific explicit CPU-position bridge for cache targets
    */
-  const launchSimulation = useCallback((sourceData, constraintKeyForLaunch, overrides, onComplete, transitionConfig = null) => {
+  const launchSimulation = useCallback((sourceData, constraintKeyForLaunch, overrides, onComplete, transitionConfig = null, readbackPositionsOnComplete = false) => {
     if (!sourceData || sourceData.length === 0) return;
 
     cancelSimulation();
@@ -139,12 +144,13 @@ export function useDecollisionScheduler({
       fnDotSize,
       transitionConfig,
       constraintKey: constraintKeyForLaunch,
+      readbackPositionsOnComplete,
       onUpdateNodes: stableOnUpdateNodes,
-      onComplete: (finalData) => {
+      onComplete: (finalData, completionInfo) => {
         simulationRef.current = null;
         stableOnSimulationRunningChange(false);
         stableSyncDecollisionState(finalData);
-        onComplete(finalData, constraintKeyForLaunch);
+        onComplete(finalData, constraintKeyForLaunch, completionInfo);
       },
     });
 
@@ -170,7 +176,7 @@ export function useDecollisionScheduler({
     } : null;
 
     // Base uses empty overrides (no constraint = uniform sizes)
-    launchSimulation([...data], '', new Map(), (finalData) => {
+    launchSimulation([...data], '', new Map(), (finalData, _launchKey, completionInfo) => {
       if (cache && Array.isArray(finalData)) {
         cache.store('', finalData);
       }
@@ -180,12 +186,12 @@ export function useDecollisionScheduler({
       queuedConstraintRef.current = null;
       phaseRef.current = result.phase;
 
-      stableOnBaseReady(finalData);
+      stableOnBaseReady(isCacheOnlyCompletion(completionInfo) ? null : finalData);
 
       if (result.action?.type === 'launch-constraint') {
         launchConstraintRef.current?.(result.action.constraintKey);
       }
-    }, transitionConfig);
+    }, transitionConfig, !!cache);
   }, [dataRef, processedDataRef, launchSimulation, cache, stableOnBaseReady]);
 
   const launchConstraint = useCallback((key) => {

@@ -270,6 +270,34 @@ async function readbackMaxVelocitySquared(renderer, metricBuffer) {
   return new Uint32Array(arrayBuffer)[0] ?? 0;
 }
 
+async function readbackSettledPositions(renderer, buffers, template) {
+  const readbackStart = performance.now();
+  const arrayBuffer = await renderer.getArrayBufferAsync(buffers.positions.value);
+  const readbackMs = performance.now() - readbackStart;
+  const materializeStart = performance.now();
+  const packed = new Float32Array(arrayBuffer);
+  const count = Math.min(buffers.N, template.length, Math.floor(packed.length / 2));
+  const positions = new Array(count);
+  let nonFinite = 0;
+  for (let i = 0; i < count; i++) {
+    const fallback = template[i];
+    let x = packed[i * 2];
+    let y = -packed[i * 2 + 1];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      nonFinite += 1;
+      x = fallback.x;
+      y = fallback.y;
+    }
+    positions[i] = { id: fallback.id, x, y };
+  }
+  return {
+    positions,
+    readbackMs,
+    materializeMs: performance.now() - materializeStart,
+    nonFinite,
+  };
+}
+
 // Fill a per-dot pick-radius buffer via the shared resolveHoverRadius rule (same
 // hit geometry as the CPU spatial grid). A dedicated buffer, separate from the
 // sim's physics collision radii, so picking and decollision stay independent.
@@ -751,8 +779,12 @@ export function R3FDotsWebGPU({
         metricWaitFrames: 0,
         metricReadbackSumMs: 0,
         metricReadbackMaxMs: 0,
+        completionReadbackMs: 0,
+        completionMaterializeMs: 0,
+        completionNonFinite: 0,
         lastMetric: null,
         skipConvergenceMetric: !!req.skipConvergenceMetric,
+        readbackPositionsOnComplete: !!req.readbackPositionsOnComplete,
         firstFrameDelayMs: null,
         lastFrameStartMs: null,
         frameGapSumMs: 0,
@@ -792,12 +824,12 @@ export function R3FDotsWebGPU({
   };
 
   // Single exit for every finished job: mark the GPU layout settled, drop to
-  // idle, notify the scheduler. The WebGPU path does not materialize settled
-  // positions into a CPU array as part of completion.
-  const finishJobIdle = (settled, onComplete) => {
+  // idle, notify the scheduler. The WebGPU path only materializes settled
+  // positions when the scheduler asks for an explicit cache target.
+  const finishJobIdle = (settled, onComplete, completionInfo = null) => {
     hasSettledGpuLayoutRef.current = true;
     jobRef.current = { mode: 'idle' };
-    onComplete?.(settled);
+    onComplete?.(settled, completionInfo);
   };
 
   const settleSimJob = (job) => {
@@ -812,10 +844,21 @@ export function R3FDotsWebGPU({
       jobId,
     });
     scheduleAfterPaint(() => {
-      Promise.resolve().then(() => {
+      Promise.resolve().then(async () => {
         if (jobRef.current.jobId !== jobId) return; // superseded by a newer launch
+        let settled = null;
+        let completionInfo = null;
+        if (job.readbackPositionsOnComplete) {
+          const result = await readbackSettledPositions(gl, job.buffers, job.template);
+          if (jobRef.current.jobId !== jobId) return; // superseded during readback
+          settled = result.positions;
+          completionInfo = { cacheOnly: true };
+          job.completionReadbackMs = result.readbackMs;
+          job.completionMaterializeMs = result.materializeMs;
+          job.completionNonFinite = result.nonFinite;
+        }
         const callbackStart = performance.now();
-        finishJobIdle(null, onComplete);
+        finishJobIdle(settled, onComplete, completionInfo);
         const callbackMs = performance.now() - callbackStart;
         if (decollisionDebug) {
           console.log(
@@ -838,8 +881,9 @@ export function R3FDotsWebGPU({
             + ` computeSubmitMax=${fmtMs(job.computeSubmitMaxMs || 0)}ms`
             + ` simWall=${fmtMs(job.settleStartMs - job.startMs)}ms`
             + ` settle=${fmtMs(performance.now() - job.settleStartMs)}ms`
-            + ` readback=0.0ms materialize=0.0ms`
-            + ` callback=${fmtMs(callbackMs)}ms nonFinite=0`,
+            + ` readback=${fmtMs(job.completionReadbackMs || 0)}ms`
+            + ` materialize=${fmtMs(job.completionMaterializeMs || 0)}ms`
+            + ` callback=${fmtMs(callbackMs)}ms nonFinite=${job.completionNonFinite || 0}`,
           );
         }
       });
