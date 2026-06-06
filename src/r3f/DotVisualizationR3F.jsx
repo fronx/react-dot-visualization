@@ -144,7 +144,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // `processedData = []` on render 1 made R3FDots fall through to its
   // `count = data.length || 1` path and render one identity-matrix instance
   // at world origin — the "rogue centered dot" symptom.
-  const [processedData, setProcessedData] = useState(() => validateData(data));
+  // The WebGPU branch reads `webgpuSeedData` instead, so skip the duplicate
+  // full validateData pass at mount when it would never be read.
+  const [processedData, setProcessedData] = useState(() =>
+    backend === 'webgpu' ? [] : validateData(data),
+  );
   const [hoveredId, setHoveredId] = useState(null);
 
   // The WebGPU dots layer is seeded from the validated input and then owns
