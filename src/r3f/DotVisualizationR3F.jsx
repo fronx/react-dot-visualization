@@ -483,6 +483,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       const t0 = performance.now();
       return new Promise((resolve) => {
         const tick = () => {
+          // CameraSetter nulls setCameraPositionRef.current on camera
+          // remount/unmount; the ref can go non-callable mid-animation (backend
+          // switch, component unmount). Re-check the live value each frame
+          // rather than trusting the once-only guard at animation start.
+          if (typeof setCameraPositionRef.current !== 'function') {
+            resolve(false);
+            return;
+          }
           const elapsed = performance.now() - t0;
           const t = Math.min(1, elapsed / duration);
           const e = easing(t);
