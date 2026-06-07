@@ -386,8 +386,14 @@ export function useDecollisionScheduler({
     processAction(result.action);
   }, [radiusOverrides, constraintKeyRef, cache, executor, processAction]);
 
-  // Imperative API — only for explicit re-decollision (e.g. track deletion)
+  // Imperative API — explicit re-decollision (scope change, length change,
+  // track deletion). The caller is asking for a fresh simulation of `key`, so
+  // any cached layout for it is stale by definition. The CPU/WebGL cache is
+  // already wiped by the caller (checkScope); drop the WebGPU GPU snapshot here
+  // too, otherwise resolveCachedTarget returns it and we'd lerp to the old
+  // layout (only sizes change) instead of relaunching from raw input.
   const decollideForConstraint = useCallback((key) => {
+    executor?.invalidatePositionSnapshot?.(key);
     const dataLength = dataRef.current?.length ?? 0;
     const cachedPositions = resolveCachedTarget(cache, executor, key, dataLength);
     const baseCachedPositions = resolveCachedTarget(cache, executor, '', dataLength);

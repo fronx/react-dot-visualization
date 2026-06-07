@@ -696,10 +696,13 @@ export function R3FDotsWebGPU({
       const maxSolverIterationsPerFrame = resolveMaxSolverIterationsPerFrame(req.solverIterationsPerFrame);
       const solverFrameBudgetMs = resolveSolverFrameBudgetMs(req.solverFrameBudgetMs);
       const N = buffers.N;
-      // The first sim for a seed writes the CPU source positions into the GPU.
-      // Later sims keep the current GPU positions and only update velocities
-      // and radii. CPU sourceData is then metadata/radii/grid input, not an
-      // ownership transfer of positions back to the CPU path.
+      // seedFromCurrentPositions (set per launch by the executor: false for a
+      // base launch, true for a constraint launch) decides whether this sim
+      // keeps the live GPU positions or rewrites them from CPU sourceData. The
+      // hasSettledGpuLayoutRef gate forces the very first base sim to seed from
+      // source even if a stale flag slipped through. When seeding from current,
+      // sourceData supplies metadata/radii/grid input only — not a position
+      // transfer back into the GPU buffer.
       const seedFromCurrentPositions = !!req.seedFromCurrentPositions && hasSettledGpuLayoutRef.current;
       const posArr = buffers.positions.value.array;
       const velArr = buffers.velocities.value.array;

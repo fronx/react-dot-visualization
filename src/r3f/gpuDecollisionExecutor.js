@@ -57,6 +57,14 @@ export function makeGpuExecutor(gpuControlRef, {
     hasPositionSnapshot(key) {
       return !!gpuControlRef.current?.positionSnapshots?.has(key);
     },
+    // Drop the GPU snapshot for a key so the next decollideForConstraint(key)
+    // relaunches the sim instead of lerping to a now-stale layout. This is the
+    // WebGPU half of a scope change: the CPU/WebGL backend wipes
+    // sharedPositionCache via checkScope(); WebGPU keeps its settled layout in
+    // GPU buffers, so the matching invalidation is forgetting the snapshot key.
+    invalidatePositionSnapshot(key) {
+      gpuControlRef.current?.positionSnapshots?.delete(key);
+    },
     runSimulation({
       sourceData,
       fnDotSize,
@@ -75,7 +83,13 @@ export function makeGpuExecutor(gpuControlRef, {
         maxIterations,
         solverIterationsPerFrame,
         solverFrameBudgetMs,
-        seedFromCurrentPositions: true,
+        // Base launches (constraintKey === '') reseed from sourceData: a fresh
+        // layout or a dot-size change must re-spread from the raw projection,
+        // and the push-only collide solver can't re-spread positions that are
+        // already settled. Constraint launches (focus/clear) seed from the
+        // current GPU positions — nudging from where dots already are is the
+        // entire point of the GPU-current speedup.
+        seedFromCurrentPositions: !!constraintKey,
         skipConvergenceMetric: !constraintKey && !!baseFixedIterations,
         snapshotOnCompleteKey,
         onComplete,

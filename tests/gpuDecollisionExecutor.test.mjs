@@ -1,0 +1,42 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { makeGpuExecutor } from '../src/r3f/gpuDecollisionExecutor.js';
+
+// Guards the slider/re-layout regression: a base launch (constraintKey === '')
+// must reseed from sourceData so a dot-size change re-spreads from the raw
+// projection. A constraint launch (focus) seeds from the current GPU positions
+// for speed. The bug was an unconditional `seedFromCurrentPositions: true`,
+// which left base re-decollisions seeding from already-settled positions — the
+// push-only collide solver then never moved a dot, so the slider only resized.
+
+function makeExecutor() {
+  const gpuControlRef = { current: { request: null, positionSnapshots: new Map() } };
+  const executor = makeGpuExecutor(gpuControlRef, {
+    baseMaxIterations: 100,
+    constraintMaxIterations: 50,
+    solverIterationsPerFrame: 4,
+    solverFrameBudgetMs: 8,
+    baseFixedIterations: 0,
+  });
+  return { executor, gpuControlRef };
+}
+
+const SOURCE = [{ id: 'a', x: 1, y: 2 }, { id: 'b', x: 3, y: 4 }];
+
+test('base launch reseeds from source (seedFromCurrentPositions=false)', () => {
+  const { executor, gpuControlRef } = makeExecutor();
+  executor.runSimulation({ sourceData: SOURCE, fnDotSize: () => 1, constraintKey: '', onComplete() {} });
+  const req = gpuControlRef.current.request;
+  assert.equal(req.type, 'sim');
+  assert.equal(req.constraintKey, '');
+  assert.equal(req.seedFromCurrentPositions, false);
+});
+
+test('constraint launch seeds from current GPU positions (seedFromCurrentPositions=true)', () => {
+  const { executor, gpuControlRef } = makeExecutor();
+  executor.runSimulation({ sourceData: SOURCE, fnDotSize: () => 1, constraintKey: 'focus:a', onComplete() {} });
+  const req = gpuControlRef.current.request;
+  assert.equal(req.type, 'sim');
+  assert.equal(req.constraintKey, 'focus:a');
+  assert.equal(req.seedFromCurrentPositions, true);
+});
