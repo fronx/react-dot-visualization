@@ -211,6 +211,24 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // HoverDetector publishes its pick logic here; R3FCamera's pan handler invokes
   // it on a genuine click (the single click-vs-drag authority).
   const clickControlRef = useRef(null);
+  const webgpuRendererPromiseRef = useRef(null);
+  const createWebgpuRenderer = useCallback(async (props) => {
+    // R3F's Canvas config effect can run again while an async WebGPU renderer is
+    // still initializing. Reuse the same init promise so one canvas mount owns
+    // exactly one WebGPU renderer/context.
+    if (!webgpuRendererPromiseRef.current) {
+      webgpuRendererPromiseRef.current = (async () => {
+        // depth:false — flat 2D scene writes no depth (materials are
+        // depthWrite:false, layering is renderOrder). Also dodges a three
+        // r184 stale-depth-attachment-on-resize bug that intermittently
+        // blanks the graph (see memory: webgpu-depth-stale-on-resize).
+        const renderer = new WebGPURenderer({ ...props, depth: false });
+        await renderer.init();
+        return renderer;
+      })();
+    }
+    return webgpuRendererPromiseRef.current;
+  }, []);
   const gpuExecutor = useMemo(
     () => makeGpuExecutor(gpuControlRef, {
       baseMaxIterations: BASE_MAX_SOLVER_ITERATIONS,
@@ -572,15 +590,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             far: 100000,
             position: [0, 0, 65],
           }}
-          gl={async (props) => {
-            // depth:false — flat 2D scene writes no depth (materials are
-            // depthWrite:false, layering is renderOrder). Also dodges a three
-            // r184 stale-depth-attachment-on-resize bug that intermittently
-            // blanks the graph (see memory: webgpu-depth-stale-on-resize).
-            const renderer = new WebGPURenderer({ ...props, depth: false });
-            await renderer.init();
-            return renderer;
-          }}
+          gl={createWebgpuRenderer}
         >
           <CameraInitializer
             data={controlData}

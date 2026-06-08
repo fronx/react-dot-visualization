@@ -1065,6 +1065,7 @@ export function R3FDotsWebGPU({
   // ── Density-field "lens" (zoomed-out anti-aliasing) ───────────────────────
   const densityRT = useMemo(() => createDensityRenderTarget(2, 2), []);
   useEffect(() => () => densityRT.dispose(), [densityRT]);
+  const densityClearColorRef = useRef(new THREE.Color());
 
   const splat = useMemo(() => {
     if (!buffers || !cosmetic) return null;
@@ -1095,11 +1096,18 @@ export function R3FDotsWebGPU({
     if (densityRT.width !== w || densityRT.height !== h) densityRT.setSize(w, h);
 
     const prevTarget = state.gl.getRenderTarget();
-    state.gl.setRenderTarget(densityRT);
-    state.gl.setClearColor(0x000000, 0);
-    state.gl.clear();
-    state.gl.render(splat.scene, state.camera);
-    state.gl.setRenderTarget(prevTarget);
+    const prevClearColor = densityClearColorRef.current;
+    const prevClearAlpha = state.gl.getClearAlpha();
+    state.gl.getClearColor(prevClearColor);
+    try {
+      state.gl.setRenderTarget(densityRT);
+      state.gl.setClearColor(0x000000, 0);
+      state.gl.clear();
+      state.gl.render(splat.scene, state.camera);
+    } finally {
+      state.gl.setRenderTarget(prevTarget);
+      state.gl.setClearColor(prevClearColor, prevClearAlpha);
+    }
   });
 
   const mesh = useMemo(() => {
