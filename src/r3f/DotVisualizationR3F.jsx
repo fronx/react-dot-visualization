@@ -9,11 +9,11 @@ import React, {
 } from 'react';
 import * as d3 from 'd3';
 import { Canvas } from '@react-three/fiber';
-import { WebGPURenderer } from 'three/webgpu';
 import { R3FScene, CameraInitializer, HoverDetector, CameraSetter, CameraReporter } from './R3FScene.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
 import { R3FDotsWebGPU, BASE_MAX_SOLVER_ITERATIONS, CONSTRAINT_MAX_SOLVER_ITERATIONS } from './R3FDotsWebGPU.jsx';
 import { makeGpuExecutor } from './gpuDecollisionExecutor.js';
+import { createSingleFlightWebGpuRendererFactory } from './webgpuRendererFactory.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { boundsForData, computeFitTransformToVisible } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
@@ -211,24 +211,16 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // HoverDetector publishes its pick logic here; R3FCamera's pan handler invokes
   // it on a genuine click (the single click-vs-drag authority).
   const clickControlRef = useRef(null);
-  const webgpuRendererPromiseRef = useRef(null);
-  const createWebgpuRenderer = useCallback(async (props) => {
-    // R3F's Canvas config effect can run again while an async WebGPU renderer is
-    // still initializing. Reuse the same init promise so one canvas mount owns
-    // exactly one WebGPU renderer/context.
-    if (!webgpuRendererPromiseRef.current) {
-      webgpuRendererPromiseRef.current = (async () => {
-        // depth:false — flat 2D scene writes no depth (materials are
-        // depthWrite:false, layering is renderOrder). Also dodges a three
-        // r184 stale-depth-attachment-on-resize bug that intermittently
-        // blanks the graph (see memory: webgpu-depth-stale-on-resize).
-        const renderer = new WebGPURenderer({ ...props, depth: false });
-        await renderer.init();
-        return renderer;
-      })();
-    }
-    return webgpuRendererPromiseRef.current;
-  }, []);
+  const createWebgpuRenderer = useMemo(
+    () => createSingleFlightWebGpuRendererFactory({
+      // depth:false: this flat 2D scene writes no depth (materials are
+      // depthWrite:false, layering is renderOrder). It also dodges a three
+      // r184 stale-depth-attachment-on-resize bug that intermittently blanks
+      // the graph (see memory: webgpu-depth-stale-on-resize).
+      rendererOptions: { depth: false },
+    }),
+    [],
+  );
   const gpuExecutor = useMemo(
     () => makeGpuExecutor(gpuControlRef, {
       baseMaxIterations: BASE_MAX_SOLVER_ITERATIONS,

@@ -36,6 +36,7 @@ import {
   createDensityRenderTarget, createSplatScene, createDensityResolveMesh,
   densityFadeForProjectedPx, BANDWIDTH_PX,
 } from './densityField.js';
+import { withTemporaryRenderTarget } from './renderTargetState.js';
 import { computeGridParams } from '../decollision-webgpu.js';
 import {
   buildCountBins, buildScanStep, buildPlaceParticles, buildCollideSpatial,
@@ -1095,19 +1096,10 @@ export function R3FDotsWebGPU({
     const h = Math.max(1, Math.round(state.size.height * dpr));
     if (densityRT.width !== w || densityRT.height !== h) densityRT.setSize(w, h);
 
-    const prevTarget = state.gl.getRenderTarget();
-    const prevClearColor = densityClearColorRef.current;
-    const prevClearAlpha = state.gl.getClearAlpha();
-    state.gl.getClearColor(prevClearColor);
-    try {
-      state.gl.setRenderTarget(densityRT);
-      state.gl.setClearColor(0x000000, 0);
+    withTemporaryRenderTarget(state.gl, densityRT, densityClearColorRef.current, () => {
       state.gl.clear();
       state.gl.render(splat.scene, state.camera);
-    } finally {
-      state.gl.setRenderTarget(prevTarget);
-      state.gl.setClearColor(prevClearColor, prevClearAlpha);
-    }
+    });
   });
 
   const mesh = useMemo(() => {
