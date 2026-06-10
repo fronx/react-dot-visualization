@@ -98,5 +98,18 @@ export function makeGpuExecutor(gpuControlRef, {
     runAnimation({ target, targetSnapshotKey = null, duration, onComplete }) {
       return issue({ type: 'lerp', target, targetSnapshotKey, duration, onComplete });
     },
+    // runKeyframes -> a 'keyframes' request: play a captured chain of packed
+    // position keyframes segment-by-segment with the GPU lerp kernels (see
+    // keyframePlayer.js). `frames` is Float32Array[] of N*2 RENDER-SPACE
+    // coords ([x0, y0, …]) — the caller does any data→render y-flip up front;
+    // no negation happens downstream (unlike runAnimation's {x, y} targets).
+    // `easing` names the CPU-side global-clock easing ('linear' | 'ease-out' |
+    // 'ease-in-out', default linear). duration <= 0 jumps straight to the last
+    // frame; a single-frame chain lerps from the current GPU positions to it.
+    // onComplete(null) fires after the final t=1 dispatch lands positions
+    // bit-equal on the last frame — the same edge as a finished lerp.
+    runKeyframes({ frames, duration, easing = 'linear', onComplete }) {
+      return issue({ type: 'keyframes', frames, duration, easing, onComplete });
+    },
   };
 }

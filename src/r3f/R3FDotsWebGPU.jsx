@@ -29,7 +29,7 @@
 import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { Fn, instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
+import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
 import { easeCubicOut } from 'd3';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import {
@@ -46,6 +46,8 @@ import {
 import {
   resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus, resolveHoverRadius,
 } from './dotAppearance.js';
+import { buildLerpKernels } from './lerpKernels.js';
+import { createKeyframePlayer, jumpToLastKeyframe } from './keyframePlayer.js';
 import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
@@ -289,32 +291,6 @@ async function readbackPick(renderer, pickResult, indexBits) {
   const packed = new Uint32Array(arrayBuffer)[0] >>> 0;
   if (packed === 0xffffffff) return -1;
   return packed & ((2 ** indexBits) - 1);
-}
-
-// Tiny kernels for GPU-owned transitions: snapshot the live positions into
-// fromPos (one GPU→GPU copy at transition start), snapshot the settled base
-// layout into basePos, then mix fromPos→target by a uniform t each frame. No
-// per-frame CPU↔GPU copy — just the t uniform.
-function buildLerpKernels({ N, positions, basePos, fromPos, targetPos }, tU) {
-  const snapshot = Fn(() => {
-    fromPos.element(instanceIndex).assign(positions.element(instanceIndex));
-  })().compute(N);
-  const snapshotBase = Fn(() => {
-    basePos.element(instanceIndex).assign(positions.element(instanceIndex));
-  })().compute(N);
-  const mixStep = Fn(() => {
-    const i = instanceIndex;
-    const a = fromPos.element(i);
-    const b = targetPos.element(i);
-    positions.element(i).assign(a.mul(float(1).sub(tU)).add(b.mul(tU)));
-  })().compute(N);
-  const mixBaseStep = Fn(() => {
-    const i = instanceIndex;
-    const a = fromPos.element(i);
-    const b = basePos.element(i);
-    positions.element(i).assign(a.mul(float(1).sub(tU)).add(b.mul(tU)));
-  })().compute(N);
-  return { snapshot, snapshotBase, mixStep, mixBaseStep };
 }
 
 // Per-instance appearance: color/alpha/focus/scale. Lives in its own buffers so
@@ -636,7 +612,7 @@ export function R3FDotsWebGPU({
   }, [pickControlRef]);
 
   // ── Decollision job state, driven by the scheduler's request channel ──────
-  // jobRef holds the current GPU job ({ mode: 'idle' | 'sim' | 'lerp' | 'settling' }
+  // jobRef holds the current GPU job ({ mode: 'idle' | 'sim' | 'lerp' | 'keyframes' | 'settling' }
   // plus its resources/clock). handledReqId tracks which request we've consumed.
   const jobRef = useRef({ mode: 'idle' });
   const handledReqId = useRef(0);
@@ -825,6 +801,38 @@ export function R3FDotsWebGPU({
         onComplete,
         target,
         targetSnapshotKey,
+        jobId: req.id,
+      };
+      return;
+    }
+    if (req.type === 'keyframes') {
+      // Keyframe chain: play frames[0]→…→frames[last] segment-by-segment with
+      // the lerp kernels (see keyframePlayer.js). Frames are packed
+      // render-space coords (Float32Array, N*2) — unlike 'lerp' targets, no y
+      // negation happens here; the caller provides render-space data.
+      const { frames, duration, easing = 'linear', onComplete } = req;
+      const N = buffers.N;
+      if (!lerpKernels || !frames || frames.length === 0
+        || frames.some((f) => !f || f.length !== N * 2)) {
+        finishJobIdle(null, onComplete);
+        return;
+      }
+      if (!(duration > 0)) {
+        // Jump straight to the last frame through the same kernel path.
+        jumpToLastKeyframe({ gl, buffers, mixKernel: lerpKernels.mixStep, tU, frames });
+        finishJobIdle(null, onComplete);
+        return;
+      }
+      // A single-frame chain lerps from the current positions to that frame.
+      if (frames.length === 1) gl.compute(lerpKernels.snapshot); // fromPos = live positions
+      jobRef.current = {
+        mode: 'keyframes',
+        buffers,
+        player: createKeyframePlayer({
+          gl, buffers, mixKernel: lerpKernels.mixStep, tU,
+          frames, duration, easing, startMs: performance.now(),
+        }),
+        onComplete,
         jobId: req.id,
       };
       return;
@@ -1060,6 +1068,14 @@ export function R3FDotsWebGPU({
         gl.compute(job.targetSnapshotKey === '' ? lerpKernels.mixBaseStep : lerpKernels.mixStep);
       }
       if (t >= 1) finishJobIdle(job.target, job.onComplete, job.targetSnapshotKey != null ? { gpuSnapshotKey: job.targetSnapshotKey } : null);
+      return;
+    }
+    if (job.mode === 'keyframes') {
+      // The player owns the chain clock: segment-boundary buffer writes plus
+      // one t-uniform update + mix dispatch per frame. Supersession is handled
+      // above (a newer request replaces jobRef before this runs) — a replaced
+      // player is simply never stepped again, so it can't issue stale writes.
+      if (job.player.step(performance.now())) finishJobIdle(null, job.onComplete);
     }
   });
 

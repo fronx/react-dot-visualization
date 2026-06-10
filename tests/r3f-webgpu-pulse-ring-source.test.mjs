@@ -6,6 +6,9 @@ import assert from 'node:assert/strict';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(__dirname, '..', 'src', 'r3f', 'R3FDotsWebGPU.jsx'), 'utf8');
+// The lerp/snapshot kernels live in their own module (lerpKernels.js) so the
+// headless Dawn tests can compile the production kernels; the guard reads both.
+const kernelsSource = readFileSync(join(__dirname, '..', 'src', 'r3f', 'lerpKernels.js'), 'utf8');
 
 test('WebGPU pulse rings read live GPU dot positions, not seed data positions', () => {
   assert.match(
@@ -19,11 +22,11 @@ test('WebGPU pulse rings read live GPU dot positions, not seed data positions', 
 test('WebGPU base layout is snapshotted and restored from GPU buffers', () => {
   assert.match(source, /basePos:\s*instancedArray\(new Float32Array\(pos\), 'vec2'\)/);
   assert.match(
-    source,
+    kernelsSource,
     /const snapshotBase = Fn\(\(\) => \{[\s\S]*basePos\.element\(instanceIndex\)\.assign\(positions\.element\(instanceIndex\)\);/,
   );
   assert.match(
-    source,
+    kernelsSource,
     /const mixBaseStep = Fn\(\(\) => \{[\s\S]*const b = basePos\.element\(i\);[\s\S]*positions\.element\(i\)\.assign/,
   );
   assert.match(source, /targetSnapshotKey === '' \? lerpKernels\.mixBaseStep : lerpKernels\.mixStep/);
