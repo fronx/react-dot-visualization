@@ -105,8 +105,13 @@ function createSplatMaterial({ positions, colors, alphas, pxPerWorldU, bandwidth
   const lab = varying(linearToOKLab(colors.element(instanceIndex)));
   const alpha = varying(alphas.element(instanceIndex));
   const w = g.mul(alpha);
-  m.colorNode = lab.mul(w);  // rgb accumulates Σ(OKLabᵢ·αᵢ·gᵢ)
-  m.opacityNode = w;         // a accumulates Σ(αᵢ·gᵢ)  (the density weight)
+  // Colour is weighted by α a SECOND time so the resolve's Σ(OKLab·α²·g)/Σ(α·g)
+  // carries the dim as a lightness attenuation (≈ OKLab·α for a uniform region).
+  // With a single α the resolve divides it straight back out and dimmed regions
+  // paint at full lightness — the "dimmed greys read light when zoomed out" bug.
+  // Matched dots (α=1) are unchanged.
+  m.colorNode = lab.mul(w).mul(alpha);  // rgb accumulates Σ(OKLabᵢ·αᵢ²·gᵢ)
+  m.opacityNode = w;                    // a accumulates Σ(αᵢ·gᵢ)  (the density weight)
   return m;
 }
 
