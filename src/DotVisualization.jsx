@@ -111,6 +111,7 @@ const DotVisualization = forwardRef((props, ref) => {
     onHover,
     onLeave,
     onClick,
+    onContextMenu,
     onBackgroundClick,
     onDragStart,
     dragIcon,
@@ -941,6 +942,7 @@ const DotVisualization = forwardRef((props, ref) => {
             onHover={handleDotHover}
             onLeave={handleDotLeave}
             onClick={onClick}
+            onContextMenu={onContextMenu}
             onBackgroundClick={onBackgroundClick}
             onDragStart={onDragStart}
             isZooming={isZooming}

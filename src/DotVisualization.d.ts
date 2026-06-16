@@ -12,6 +12,7 @@ export interface DotVisualizationProps {
   onHover?: (node: any) => void;
   onLeave?: () => void;
   onClick?: (node: any, event?: MouseEvent) => void;
+  onContextMenu?: (node: any, event?: MouseEvent) => void;
   onBackgroundClick?: () => void;
   onDragStart?: (node: any) => void;
   dragIcon?: any;

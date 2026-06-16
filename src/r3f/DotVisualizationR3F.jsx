@@ -94,6 +94,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onHover,
     onLeave,
     onClick,
+    onContextMenu,
     onBackgroundClick,
     onDragStart,
     onDecollisionComplete,
@@ -375,6 +376,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onClick?.(item, event);
   }, [onClick]);
 
+  const handleDotContextMenu = useCallback((item, event) => {
+    onContextMenu?.(item, event);
+  }, [onContextMenu]);
+
   const handleBackgroundClick = useCallback((event) => {
     onBackgroundClick?.(event);
   }, [onBackgroundClick]);
@@ -624,6 +629,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onLeave={onLeave}
             onHoveredIdChange={setHoveredId}
             onDotClick={handleDotClick}
+            onContextMenu={handleDotContextMenu}
             onBackgroundClick={handleBackgroundClick}
             pickControlRef={pickControlRef}
             interactionRef={blockHoverDuringInteraction ? interactionRef : null}
@@ -659,6 +665,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onLeave={onLeave}
             onHoveredIdChange={setHoveredId}
             onDotClick={handleDotClick}
+            onContextMenu={handleDotContextMenu}
             onBackgroundClick={handleBackgroundClick}
             hoverSizeMultiplier={hoverSizeMultiplier}
             hoverOpacity={hoverOpacity}

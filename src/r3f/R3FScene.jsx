@@ -83,7 +83,7 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
 // pick kernel that reads the live position buffer, so hit-testing tracks the
 // moving dots during decollision rather than the settled `data`. Touches no GPU
 // meshes either way, so the WebGPU backend mounts it directly.
-export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onBackgroundClick, pickControlRef = null, interactionRef = null, clickControlRef = null }) {
+export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onContextMenu, onBackgroundClick, pickControlRef = null, interactionRef = null, clickControlRef = null }) {
   const { camera, gl } = useThree();
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
   const useGpuPick = !!pickControlRef;
@@ -242,6 +242,45 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
     return () => { clickControlRef.current = null; };
   }, [camera, gl, onDotClick, onBackgroundClick, spatialIndex, useGpuPick, publishPick, clickControlRef]);
 
+  // Right-click (context menu) detection. Unlike left-click there's no click-vs-
+  // drag ambiguity, so we listen on the canvas directly rather than routing
+  // through R3FCamera's pan handler. preventDefault unconditionally — the
+  // browser context menu is never useful over the dot canvas — then resolve the
+  // dot under the cursor and fire `onContextMenu` only on a hit. Reuses the
+  // 'click' GPU pick slot: a right-click and a left-click never resolve in the
+  // same frame, and the slot is callback-agnostic.
+  useEffect(() => {
+    if (!onContextMenu) return undefined;
+    const canvas = gl.domElement;
+
+    const handleContextMenu = (e) => {
+      e.preventDefault();
+      const rect = rectRef.current;
+      _mouse.set(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      _raycaster.setFromCamera(_mouse, camera);
+      if (!_raycaster.ray.intersectPlane(_zeroPlane, _worldPos)) return;
+
+      const threshold = 0.015 * camera.position.z;
+
+      if (useGpuPick) {
+        publishPick('click', threshold, (index) => {
+          const item = index >= 0 ? dataRef.current[index] : null;
+          if (item) onContextMenu(item, e);
+        });
+        return;
+      }
+
+      const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
+      if (nearest) onContextMenu(nearest, e);
+    };
+
+    canvas.addEventListener('contextmenu', handleContextMenu);
+    return () => canvas.removeEventListener('contextmenu', handleContextMenu);
+  }, [camera, gl, onContextMenu, spatialIndex, useGpuPick, publishPick]);
+
   return null;
 }
 
@@ -348,6 +387,7 @@ export function R3FScene({
   onLeave,
   onHoveredIdChange,
   onDotClick,
+  onContextMenu,
   onBackgroundClick,
   hoverSizeMultiplier,
   hoverOpacity,
@@ -426,6 +466,7 @@ export function R3FScene({
         onLeave={onLeave}
         onHoveredIdChange={onHoveredIdChange}
         onDotClick={onDotClick}
+        onContextMenu={onContextMenu}
         onBackgroundClick={onBackgroundClick}
         interactionRef={blockHoverDuringInteraction ? interactionRef : null}
         clickControlRef={clickControlRef}
