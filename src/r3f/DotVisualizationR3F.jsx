@@ -9,7 +9,7 @@ import React, {
 } from 'react';
 import * as d3 from 'd3';
 import { Canvas } from '@react-three/fiber';
-import { R3FScene, CameraInitializer, HoverDetector, CameraSetter, CameraReporter } from './R3FScene.jsx';
+import { R3FScene, CameraInitializer, HoverDetector, CameraSetter, CameraReporter, WebGpuCanvasReady } from './R3FScene.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
 import { R3FDotsWebGPU, BASE_MAX_SOLVER_ITERATIONS, CONSTRAINT_MAX_SOLVER_ITERATIONS } from './R3FDotsWebGPU.jsx';
 import { makeGpuExecutor } from './gpuDecollisionExecutor.js';
@@ -176,6 +176,24 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const containerRef = useRef(null);
   // Ref to programmatically set camera position from outside the Canvas.
   const setCameraPositionRef = useRef(null);
+
+  // Heal the WebGPU "blank map until you resize the window" bug on a fresh mount.
+  // On a fast (packaged) startup the canvas's compositor layer is established
+  // before its layout box settles, and Chromium does not re-present the WebGPU
+  // canvas until a real layout/size change — which is why a manual window resize
+  // fixes it. Reconfiguring the WebGPU context (setSize → updateSize) does NOT
+  // heal it; only a layout change recomposites the canvas layer. So once the
+  // canvas buffer has reached its real size (WebGpuCanvasReady, inside the
+  // Canvas), drive a 1px container-height change through React state and restore
+  // it a beat later — forcing Chromium to recomposite. State (not an imperative
+  // style write) so a re-render can't clobber it; timing keyed to the settled
+  // canvas (a nudge during the 300x150 pre-layout phase is wasted). The 1px
+  // round-trip is imperceptible. WebGPU only — WebGL/Canvas present on first paint.
+  const [presentNudge, setPresentNudge] = useState(false);
+  const handleCanvasReady = useCallback(() => {
+    setPresentNudge(true);
+    setTimeout(() => setPresentNudge(false), 150);
+  }, []);
 
   // ── Decollision plumbing ─────────────────────────────────────────────────
   // Same refs Canvas uses, so `useDecollisionScheduler` drives both renderers
@@ -562,7 +580,13 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     <div
       ref={containerRef}
       className={`dot-visualization-r3f ${className}`}
-      style={{ width: '100%', height: '100%', position: 'relative', ...style }}
+      style={{
+        width: '100%',
+        height: '100%',
+        position: 'relative',
+        ...style,
+        ...(presentNudge ? { height: `calc(${style?.height ?? '100%'} - 1px)` } : null),
+      }}
     >
       {backend === 'webgpu' ? (
         // `flat linear` make the dots blend in gamma space, matching the 2D
@@ -589,6 +613,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           }}
           gl={createWebgpuRenderer}
         >
+          <WebGpuCanvasReady onReady={handleCanvasReady} />
           <CameraInitializer
             data={controlData}
             initialized={cameraInitialized}

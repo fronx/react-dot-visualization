@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useMemo, useCallback } from 'react';
 import * as THREE from 'three';
-import { useThree } from '@react-three/fiber';
+import { useThree, useFrame } from '@react-three/fiber';
 import { R3FDots } from './R3FDots.jsx';
 import { R3FEdges } from './R3FEdges.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
@@ -365,6 +365,40 @@ export function CameraReporter({ reportRef, onCameraStateChange }) {
     };
   }, [camera, reportRef]);
 
+  return null;
+}
+
+/**
+ * Fires `onReady` once the WebGPU canvas's drawing buffer has reached its real,
+ * stable size (i.e. left three's intrinsic 300x150 default and held for two
+ * frames). Used to time the fresh-mount compositor nudge in DotVisualizationR3F:
+ * the nudge only heals the blank when it lands AFTER the canvas is sized, not
+ * during the pre-layout 300x150 phase.
+ */
+export function WebGpuCanvasReady({ onReady }) {
+  const { gl } = useThree();
+  const firedRef = useRef(false);
+  const lastRef = useRef({ w: 0, h: 0, stable: 0 });
+  useFrame(() => {
+    if (firedRef.current) return;
+    const c = gl?.domElement;
+    if (!c) return;
+    const w = c.width;
+    const h = c.height;
+    // three's default canvas before R3F applies the measured size.
+    if (w === 300 && h === 150) return;
+    if (w < 2 || h < 2) return;
+    const prev = lastRef.current;
+    if (prev.w === w && prev.h === h) {
+      prev.stable += 1;
+      if (prev.stable >= 2) {
+        firedRef.current = true;
+        onReady();
+      }
+    } else {
+      lastRef.current = { w, h, stable: 0 };
+    }
+  });
   return null;
 }
 
