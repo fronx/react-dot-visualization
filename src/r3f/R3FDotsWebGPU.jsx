@@ -375,6 +375,8 @@ function makeSemanticDisableMaskBuffer(input, count) {
 }
 
 function buildSemanticScoringResources(scoring, semantic, count) {
+  const debug = scoring?.debug === true;
+  const started = debug ? performance.now() : 0;
   const matrix = scoring?.matrix;
   const dims = Math.floor(scoring?.dims ?? 0);
   if (!matrix || !semantic || !Number.isFinite(dims) || dims <= 0 || count <= 0) return null;
@@ -406,6 +408,14 @@ function buildSemanticScoringResources(scoring, semantic, count) {
         disableBelowThreshold: scoring?.disableBelowThreshold !== false,
       }),
     });
+  }
+  if (debug) {
+    console.log(
+      `[rdv-semantic] resources rows=${rowCount} dims=${dims} ` +
+        `chunks=${chunks.length} rowsPerChunk=${rowsPerChunk} ` +
+        `matrixMB=${((rowCount * dims * 4) / 1e6).toFixed(0)} ` +
+        `build=${(performance.now() - started).toFixed(1)}ms`,
+    );
   }
   return { count: rowCount, dims, query, filenameMatches, semanticDisableMask, uniforms, chunks };
 }
@@ -646,6 +656,7 @@ export function R3FDotsWebGPU({
       semanticGpuScoring?.filenameMatches,
       semanticGpuScoring?.semanticDisableMask,
       semanticGpuScoring?.disableBelowThreshold,
+      semanticGpuScoring?.debug,
     ],
   );
   const semanticScoreDispatchRef = useRef(0);
@@ -1097,8 +1108,19 @@ export function R3FDotsWebGPU({
   // GPU decollision; the density-RT render below reads the positions it writes.
   useFrame(() => {
     if (semanticScoring && semanticScoreDispatchRef.current !== semanticScoreHandledRef.current) {
-      semanticScoreHandledRef.current = semanticScoreDispatchRef.current;
+      const dispatchId = semanticScoreDispatchRef.current;
+      const debug = semanticGpuScoring?.debug === true;
+      const started = debug ? performance.now() : 0;
+      semanticScoreHandledRef.current = dispatchId;
       for (const chunk of semanticScoring.chunks) gl.compute(chunk.kernel);
+      if (debug) {
+        console.log(
+          `[rdv-semantic] score-dispatch dispatch=${dispatchId} ` +
+            `rows=${semanticScoring.count} dims=${semanticScoring.dims} ` +
+            `chunks=${semanticScoring.chunks.length} ` +
+            `submit=${(performance.now() - started).toFixed(1)}ms`,
+        );
+      }
     }
 
     // Service the highest-priority pending pick (click over hover-move) when none
