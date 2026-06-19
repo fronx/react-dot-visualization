@@ -5,9 +5,14 @@
  * per-instance score buffer the dot material reads. This module is plain JS so
  * headless Dawn tests and R3FDotsWebGPU can share the exact same TSL compute.
  */
-import { Fn, Loop, instanceIndex, float, uint, clamp, select, uniform } from 'three/tsl';
+import {
+  Fn, Loop, If, instanceIndex, float, uint, clamp, select, uniform, floor,
+  atomicAdd, atomicMax,
+} from 'three/tsl';
 
 export const SEMANTIC_SCORE_DISABLED = -1;
+export const SEMANTIC_SCORE_SUMMARY_BUCKETS = 256;
+export const SEMANTIC_SCORE_SUMMARY_SCALE = 1000000;
 
 export function createSemanticScoreUniforms({
   cosineCeiling = 0.32,
@@ -72,5 +77,32 @@ export function buildSemanticScoreChunkKernel({
       disabled,
       thresholded,
     ));
+  })().compute(count);
+}
+
+/**
+ * Reduce renderer-ready semantic scores to a small summary buffer.
+ *
+ * The score pass writes values in [0, 1], or SEMANTIC_SCORE_DISABLED for rows
+ * whose normal paint should win. This summary keeps full score payloads on the
+ * GPU: the app can read back a fixed-size histogram plus max score and derive
+ * approximate quantiles/ranges without pulling N floats over the bridge.
+ */
+export function buildSemanticScoreSummaryKernel({
+  scores,
+  histogram,
+  maxScoreFixed,
+  count,
+  bucketCount = SEMANTIC_SCORE_SUMMARY_BUCKETS,
+  scale = SEMANTIC_SCORE_SUMMARY_SCALE,
+}) {
+  return Fn(() => {
+    const score = scores.element(instanceIndex);
+    If(score.greaterThanEqual(float(0)), () => {
+      const clamped = clamp(score, float(0), float(1));
+      const bucket = uint(floor(clamped.mul(float(bucketCount - 1))));
+      atomicAdd(histogram.element(bucket), uint(1));
+      atomicMax(maxScoreFixed.element(uint(0)), uint(clamped.mul(float(scale))));
+    });
   })().compute(count);
 }

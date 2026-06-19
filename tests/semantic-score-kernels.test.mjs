@@ -7,10 +7,13 @@ import './tslShims.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { instancedArray } from 'three/tsl';
-import { makeRenderer, readbackF32 } from './tslHeadless.mjs';
+import { makeRenderer, readbackF32, readbackU32 } from './tslHeadless.mjs';
 import {
   SEMANTIC_SCORE_DISABLED,
+  SEMANTIC_SCORE_SUMMARY_BUCKETS,
+  SEMANTIC_SCORE_SUMMARY_SCALE,
   buildSemanticScoreChunkKernel,
+  buildSemanticScoreSummaryKernel,
   createSemanticScoreUniforms,
 } from '../src/r3f/semanticScoreKernels.js';
 
@@ -184,6 +187,46 @@ test('semantic score kernels reuse resident buffers for a new query and threshol
         threshold: 0.7,
       }),
     );
+  } finally {
+    h.dispose();
+  }
+});
+
+test('semantic score summary kernel reduces histogram and max without full score readback', async () => {
+  const h = await makeHarness({
+    disableBelowThreshold: false,
+    semanticDisableMask: new Uint32Array([0, 1, 0, 0, 0]),
+  });
+  try {
+    for (const kernel of h.kernels) h.renderer.compute(kernel);
+
+    const histogram = instancedArray(new Uint32Array(SEMANTIC_SCORE_SUMMARY_BUCKETS), 'uint').toAtomic();
+    const maxScoreFixed = instancedArray(new Uint32Array(1), 'uint').toAtomic();
+    h.renderer.compute(buildSemanticScoreSummaryKernel({
+      scores: h.scores,
+      histogram,
+      maxScoreFixed,
+      count: h.count,
+    }));
+
+    const expectedScores = oracle(h.matrix, h.dims, h.queryArray, h.filenameMatchesArray, PARAMS, {
+      disableBelowThreshold: false,
+      semanticDisableMask: h.semanticDisableMaskArray,
+    });
+    const expectedHistogram = new Uint32Array(SEMANTIC_SCORE_SUMMARY_BUCKETS);
+    let expectedMax = 0;
+    for (const score of expectedScores) {
+      if (score < 0) continue;
+      const clamped = Math.max(0, Math.min(1, score));
+      expectedHistogram[Math.floor(clamped * (SEMANTIC_SCORE_SUMMARY_BUCKETS - 1))] += 1;
+      expectedMax = Math.max(expectedMax, Math.floor(clamped * SEMANTIC_SCORE_SUMMARY_SCALE));
+    }
+
+    assert.deepEqual(
+      Array.from(await readbackU32(h.renderer, histogram, SEMANTIC_SCORE_SUMMARY_BUCKETS)),
+      Array.from(expectedHistogram),
+    );
+    assert.equal((await readbackU32(h.renderer, maxScoreFixed, 1))[0], expectedMax);
   } finally {
     h.dispose();
   }

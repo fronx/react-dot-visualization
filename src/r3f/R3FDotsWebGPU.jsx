@@ -49,7 +49,10 @@ import {
 import { buildLerpKernels } from './lerpKernels.js';
 import {
   SEMANTIC_SCORE_DISABLED,
+  SEMANTIC_SCORE_SUMMARY_BUCKETS,
+  SEMANTIC_SCORE_SUMMARY_SCALE,
   buildSemanticScoreChunkKernel,
+  buildSemanticScoreSummaryKernel,
   createSemanticScoreUniforms,
 } from './semanticScoreKernels.js';
 import { createKeyframePlayer, jumpToLastKeyframe } from './keyframePlayer.js';
@@ -414,6 +417,8 @@ function buildSemanticScoringResources(scoring, semantic, count) {
   const query = instancedArray(new Float32Array(dims), 'float');
   const filenameMatches = instancedArray(makeFilenameMatchBuffer(scoring, rowCount, matrixRowIndices), 'uint');
   const semanticDisableMask = instancedArray(makeSemanticDisableMaskBuffer(scoring, rowCount), 'uint');
+  const summaryHistogram = instancedArray(new Uint32Array(SEMANTIC_SCORE_SUMMARY_BUCKETS), 'uint').toAtomic();
+  const summaryMaxScoreFixed = instancedArray(new Uint32Array(1), 'uint').toAtomic();
   const chunks = [];
   const rowsPerChunk = Math.max(1, Math.floor(SEMANTIC_SCORE_CHUNK_FLOATS / dims));
   for (let baseRow = 0; baseRow < rowCount; baseRow += rowsPerChunk) {
@@ -437,6 +442,22 @@ function buildSemanticScoringResources(scoring, semantic, count) {
       }),
     });
   }
+  const summary = {
+    bucketCount: SEMANTIC_SCORE_SUMMARY_BUCKETS,
+    scale: SEMANTIC_SCORE_SUMMARY_SCALE,
+    histogram: summaryHistogram,
+    maxScoreFixed: summaryMaxScoreFixed,
+    clearHistogram: buildClearAtomicU32({ buffer: summaryHistogram, length: SEMANTIC_SCORE_SUMMARY_BUCKETS }),
+    clearMax: buildClearAtomicU32({ buffer: summaryMaxScoreFixed, length: 1 }),
+    measure: buildSemanticScoreSummaryKernel({
+      scores: semantic.scores,
+      histogram: summaryHistogram,
+      maxScoreFixed: summaryMaxScoreFixed,
+      count: rowCount,
+      bucketCount: SEMANTIC_SCORE_SUMMARY_BUCKETS,
+      scale: SEMANTIC_SCORE_SUMMARY_SCALE,
+    }),
+  };
   if (debug) {
     console.log(
       `[rdv-semantic] resources rows=${rowCount} dims=${dims} ` +
@@ -446,7 +467,16 @@ function buildSemanticScoringResources(scoring, semantic, count) {
         `build=${(performance.now() - started).toFixed(1)}ms`,
     );
   }
-  return { count: rowCount, dims, query, filenameMatches, semanticDisableMask, uniforms, chunks };
+  return {
+    count: rowCount,
+    dims,
+    query,
+    filenameMatches,
+    semanticDisableMask,
+    uniforms,
+    chunks,
+    summary,
+  };
 }
 
 function updateSemanticScoringUniforms(resources, scoring) {
@@ -691,6 +721,7 @@ export function R3FDotsWebGPU({
   );
   const semanticScoreDispatchRef = useRef(0);
   const semanticScoreHandledRef = useRef(0);
+  const semanticSummaryReadRef = useRef(0);
   useEffect(() => {
     if (!semantic || !buffers) return;
     const gpuScoringActive = !!semanticGpuScoring?.matrix;
@@ -727,9 +758,16 @@ export function R3FDotsWebGPU({
       semanticScoring.query,
       semanticScoring.filenameMatches,
       semanticScoring.semanticDisableMask,
+      semanticScoring.summary.histogram,
+      semanticScoring.summary.maxScoreFixed,
       ...semanticScoring.chunks.map((chunk) => chunk.matrix),
     ]);
-    disposeComputeNodes(semanticScoring.chunks.map((chunk) => chunk.kernel));
+    disposeComputeNodes([
+      ...semanticScoring.chunks.map((chunk) => chunk.kernel),
+      semanticScoring.summary.clearHistogram,
+      semanticScoring.summary.clearMax,
+      semanticScoring.summary.measure,
+    ]);
   }, [semanticScoring, gl]);
 
   useEffect(() => {
@@ -1143,6 +1181,9 @@ export function R3FDotsWebGPU({
       const started = debug ? performance.now() : 0;
       semanticScoreHandledRef.current = dispatchId;
       for (const chunk of semanticScoring.chunks) gl.compute(chunk.kernel);
+      gl.compute(semanticScoring.summary.clearHistogram);
+      gl.compute(semanticScoring.summary.clearMax);
+      gl.compute(semanticScoring.summary.measure);
       if (debug) {
         console.log(
           `[rdv-semantic] score-dispatch dispatch=${dispatchId} ` +
@@ -1150,6 +1191,31 @@ export function R3FDotsWebGPU({
             `chunks=${semanticScoring.chunks.length} ` +
             `submit=${(performance.now() - started).toFixed(1)}ms`,
         );
+      }
+      const onSummary = semanticGpuScoring?.onSummary;
+      if (typeof onSummary === 'function') {
+        const readStarted = performance.now();
+        semanticSummaryReadRef.current = dispatchId;
+        void Promise.all([
+          gl.getArrayBufferAsync(semanticScoring.summary.histogram.value),
+          gl.getArrayBufferAsync(semanticScoring.summary.maxScoreFixed.value),
+        ]).then(([histogramBuffer, maxScoreBuffer]) => {
+          if (semanticSummaryReadRef.current !== dispatchId) return;
+          const histogram = new Uint32Array(histogramBuffer)
+            .slice(0, semanticScoring.summary.bucketCount);
+          const maxScoreFixed = new Uint32Array(maxScoreBuffer)[0] ?? 0;
+          const maxScore = maxScoreFixed / semanticScoring.summary.scale;
+          onSummary({
+            dispatchId,
+            count: semanticScoring.count,
+            histogram,
+            maxScore,
+            bucketCount: semanticScoring.summary.bucketCount,
+            readbackMs: performance.now() - readStarted,
+          });
+        }).catch((err) => {
+          if (debug) console.warn('[rdv-semantic] summary readback failed:', err);
+        });
       }
     }
 
