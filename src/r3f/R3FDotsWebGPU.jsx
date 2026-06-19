@@ -29,7 +29,7 @@
 import React, { useMemo, useEffect, useRef } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max } from 'three/tsl';
+import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max, mix, clamp } from 'three/tsl';
 import { easeCubicOut } from 'd3';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import {
@@ -87,6 +87,9 @@ const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
+const NO_SEMANTIC_SCORE = -1;
+const DEFAULT_SEMANTIC_DIM_RGB = [0x2e / 255, 0x1f / 255, 0x0f / 255];
+const DEFAULT_SEMANTIC_HOT_RGB = [0xff / 255, 0xaa / 255, 0x55 / 255];
 
 function fmtMs(ms) {
   return Number.isFinite(ms) ? ms.toFixed(1) : 'n/a';
@@ -310,6 +313,33 @@ function buildCosmeticBuffers(N, data, opts) {
   return cosmetic;
 }
 
+function buildSemanticBuffers(N) {
+  const scores = new Float32Array(N);
+  scores.fill(NO_SEMANTIC_SCORE);
+  return {
+    scores: instancedArray(scores, 'float'),
+  };
+}
+
+function writeSemanticScores(semantic, semanticScores, count) {
+  const out = semantic.scores.value.array;
+  out.fill(NO_SEMANTIC_SCORE);
+  const input = semanticScores?.scores;
+  if (input) {
+    out.set(input.subarray(0, Math.min(count, input.length)));
+  }
+  semantic.scores.value.needsUpdate = true;
+}
+
+function colorVector(value, fallback) {
+  const rgb = Array.isArray(value) ? value : fallback;
+  return new THREE.Vector3(
+    Number.isFinite(rgb?.[0]) ? rgb[0] : fallback[0],
+    Number.isFinite(rgb?.[1]) ? rgb[1] : fallback[1],
+    Number.isFinite(rgb?.[2]) ? rgb[2] : fallback[2],
+  );
+}
+
 // Resolve fill/opacity/focus/scale for every dot via the shared appearance
 // rules (dotAppearance.js) and upload them. Identical rule set to R3FDots'
 // applyDotStylesToInstances — the renderers differ only in the write target.
@@ -386,9 +416,13 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
-function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU }) {
+function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU }) {
+  const baseColor = cosmetic.colors.element(indexNode);
+  const instanceColor = semantic
+    ? semanticColorNode(baseColor, semantic.scores.element(indexNode), semantic)
+    : baseColor;
   const material = createBevelStrokeNodeMaterial({
-    instanceColor: cosmetic.colors.element(indexNode),
+    instanceColor,
     instanceAlpha: cosmetic.alphas.element(indexNode),
     instanceFocus: cosmetic.focus.element(indexNode),
     strokeColor: dotStroke,
@@ -411,6 +445,13 @@ function buildDotMesh(indexNode, count, { cosmetic, buffers, dotStroke, dotStrok
   return m;
 }
 
+function semanticColorNode(baseColor, score, semantic) {
+  const span = max(semantic.hiU.sub(semantic.loU), float(0.000001));
+  const t = clamp(score.sub(semantic.loU).div(span), float(0), float(1));
+  const color = mix(semantic.dimColorU, semantic.hotColorU, t);
+  return select(score.greaterThan(float(NO_SEMANTIC_SCORE)), color, baseColor);
+}
+
 export function R3FDotsWebGPU({
   data,
   dataKey = null,
@@ -425,6 +466,7 @@ export function R3FDotsWebGPU({
   hoveredId = null,
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
+  semanticScores = null,
   positionsAreIntermediate = false,
   decollisionEnabled = true,
   decollisionDebug = false,
@@ -497,6 +539,33 @@ export function R3FDotsWebGPU({
   useEffect(() => () => {
     if (cosmetic) disposeStorageBuffers(gl, [cosmetic.colors, cosmetic.alphas, cosmetic.focus, cosmetic.scales]);
   }, [cosmetic, gl]);
+
+  const semanticLoU = useMemo(() => uniform(float(0)), []);
+  const semanticHiU = useMemo(() => uniform(float(1)), []);
+  const semanticDimColorU = useMemo(() => uniform(colorVector(null, DEFAULT_SEMANTIC_DIM_RGB)), []);
+  const semanticHotColorU = useMemo(() => uniform(colorVector(null, DEFAULT_SEMANTIC_HOT_RGB)), []);
+  const semantic = useMemo(
+    () => (buffers ? {
+      scores: buildSemanticBuffers(buffers.N).scores,
+      loU: semanticLoU,
+      hiU: semanticHiU,
+      dimColorU: semanticDimColorU,
+      hotColorU: semanticHotColorU,
+    } : null),
+    [buffers, semanticLoU, semanticHiU, semanticDimColorU, semanticHotColorU],
+  );
+  useEffect(() => {
+    if (!semantic || !buffers) return;
+    const range = semanticScores?.range;
+    semantic.loU.value = Number.isFinite(range?.lo) ? range.lo : 0;
+    semantic.hiU.value = Number.isFinite(range?.hi) ? range.hi : 1;
+    semantic.dimColorU.value.copy(colorVector(semanticScores?.dimColor, DEFAULT_SEMANTIC_DIM_RGB));
+    semantic.hotColorU.value.copy(colorVector(semanticScores?.hotColor, DEFAULT_SEMANTIC_HOT_RGB));
+    writeSemanticScores(semantic, semanticScores, buffers.N);
+  }, [semantic, semanticScores, buffers]);
+  useEffect(() => () => {
+    if (semantic) disposeStorageBuffers(gl, [semantic.scores]);
+  }, [semantic, gl]);
 
   useEffect(() => {
     if (!streamingPositions || !buffers) return;
@@ -1119,23 +1188,23 @@ export function R3FDotsWebGPU({
   });
 
   const mesh = useMemo(() => {
-    if (!buffers || !cosmetic) return null;
+    if (!buffers || !cosmetic || !semantic) return null;
     // Collapse the hovered instance to zero size so it draws once: the overlay
     // redraws it on top (the canvas renderer draws the hovered dot last).
     const scaleMul = select(instanceIndex.equal(hoveredIndexU), float(0), float(1));
-    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU });
-  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
+    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU });
+  }, [buffers, cosmetic, semantic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
   useEffect(() => () => disposeMesh(mesh), [mesh]);
 
   // Redraw the hovered dot after the main mesh (renderOrder 1) so it sits on top
   // of overlapping dots, matching the canvas renderer.
   const hoverMesh = useMemo(() => {
-    if (!buffers || !cosmetic) return null;
-    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU });
+    if (!buffers || !cosmetic || !semantic) return null;
+    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU });
     m.renderOrder = 1;
     m.visible = false;
     return m;
-  }, [buffers, cosmetic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
+  }, [buffers, cosmetic, semantic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
   useEffect(() => () => disposeMesh(hoverMesh), [hoverMesh]);
 
   // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────
