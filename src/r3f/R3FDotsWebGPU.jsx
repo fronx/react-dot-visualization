@@ -98,6 +98,7 @@ const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
 const NO_SEMANTIC_SCORE = SEMANTIC_SCORE_DISABLED;
+const SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER = 0.5;
 const DEFAULT_SEMANTIC_DIM_RGB = [0x2e / 255, 0x1f / 255, 0x0f / 255];
 const DEFAULT_SEMANTIC_HOT_RGB = [0xff / 255, 0xaa / 255, 0x55 / 255];
 const SEMANTIC_SCORE_CHUNK_FLOATS = 4_000_000;
@@ -641,12 +642,17 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
 function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU }) {
   const baseColor = cosmetic.colors.element(indexNode);
+  const semanticScore = semantic ? semantic.scores.element(indexNode) : null;
   const instanceColor = semantic
-    ? semanticColorNode(baseColor, semantic.scores.element(indexNode), semantic)
+    ? semanticColorNode(baseColor, semanticScore, semantic)
     : baseColor;
+  const baseAlpha = cosmetic.alphas.element(indexNode);
+  const instanceAlpha = semantic
+    ? semanticAlphaNode(baseAlpha, semanticScore, semantic)
+    : baseAlpha;
   const material = createBevelStrokeNodeMaterial({
     instanceColor,
-    instanceAlpha: cosmetic.alphas.element(indexNode),
+    instanceAlpha,
     instanceFocus: cosmetic.focus.element(indexNode),
     strokeColor: dotStroke,
     strokeWidthFraction: dotStrokeWidthFraction,
@@ -673,6 +679,18 @@ function semanticColorNode(baseColor, score, semantic) {
   const t = clamp(score.sub(semantic.loU).div(span), float(0), float(1));
   const color = mix(semantic.dimColorU, semantic.hotColorU, t);
   return select(score.greaterThan(float(NO_SEMANTIC_SCORE)), color, baseColor);
+}
+
+function semanticAlphaNode(baseAlpha, score, semantic) {
+  return select(
+    score.greaterThan(float(NO_SEMANTIC_SCORE)),
+    select(
+      score.lessThan(semantic.loU),
+      baseAlpha.mul(float(SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER)),
+      baseAlpha,
+    ),
+    baseAlpha,
+  );
 }
 
 export function R3FDotsWebGPU({
