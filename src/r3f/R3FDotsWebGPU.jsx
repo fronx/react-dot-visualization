@@ -365,6 +365,15 @@ function makeFilenameMatchBuffer(input, count) {
   return out;
 }
 
+function makeSemanticDisableMaskBuffer(input, count) {
+  const out = new Uint32Array(count);
+  const src = input?.semanticDisableMask;
+  if (!src) return out;
+  const n = Math.min(count, src.length);
+  for (let i = 0; i < n; i++) out[i] = src[i] ? 1 : 0;
+  return out;
+}
+
 function buildSemanticScoringResources(scoring, semantic, count) {
   const matrix = scoring?.matrix;
   const dims = Math.floor(scoring?.dims ?? 0);
@@ -374,6 +383,7 @@ function buildSemanticScoringResources(scoring, semantic, count) {
   const uniforms = createSemanticScoreUniforms(semanticCombineParams(scoring));
   const query = instancedArray(new Float32Array(dims), 'float');
   const filenameMatches = instancedArray(makeFilenameMatchBuffer(scoring, rowCount), 'uint');
+  const semanticDisableMask = instancedArray(makeSemanticDisableMaskBuffer(scoring, rowCount), 'uint');
   const chunks = [];
   const rowsPerChunk = Math.max(1, Math.floor(SEMANTIC_SCORE_CHUNK_FLOATS / dims));
   for (let baseRow = 0; baseRow < rowCount; baseRow += rowsPerChunk) {
@@ -387,15 +397,17 @@ function buildSemanticScoringResources(scoring, semantic, count) {
         matrix: chunkMatrix,
         query,
         filenameMatches,
+        semanticDisableMask,
         scores: semantic.scores,
         dims,
         count: chunkRows,
         baseRow,
         uniforms,
+        disableBelowThreshold: scoring?.disableBelowThreshold !== false,
       }),
     });
   }
-  return { count: rowCount, dims, query, filenameMatches, uniforms, chunks };
+  return { count: rowCount, dims, query, filenameMatches, semanticDisableMask, uniforms, chunks };
 }
 
 function updateSemanticScoringUniforms(resources, scoring) {
@@ -626,7 +638,15 @@ export function R3FDotsWebGPU({
     () => (buffers && semantic && semanticGpuScoring?.matrix
       ? buildSemanticScoringResources(semanticGpuScoring, semantic, buffers.N)
       : null),
-    [buffers, semantic, semanticGpuScoring?.matrix, semanticGpuScoring?.dims, semanticGpuScoring?.filenameMatches],
+    [
+      buffers,
+      semantic,
+      semanticGpuScoring?.matrix,
+      semanticGpuScoring?.dims,
+      semanticGpuScoring?.filenameMatches,
+      semanticGpuScoring?.semanticDisableMask,
+      semanticGpuScoring?.disableBelowThreshold,
+    ],
   );
   const semanticScoreDispatchRef = useRef(0);
   const semanticScoreHandledRef = useRef(0);
@@ -665,6 +685,7 @@ export function R3FDotsWebGPU({
     disposeStorageBuffers(gl, [
       semanticScoring.query,
       semanticScoring.filenameMatches,
+      semanticScoring.semanticDisableMask,
       ...semanticScoring.chunks.map((chunk) => chunk.matrix),
     ]);
     disposeComputeNodes(semanticScoring.chunks.map((chunk) => chunk.kernel));

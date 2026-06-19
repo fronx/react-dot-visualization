@@ -27,19 +27,24 @@ export function createSemanticScoreUniforms({
  * Build one chunk of the exact semantic score pass.
  *
  * `matrix` is chunk-local, row-major normalized audio vectors. `query` is the
- * normalized text vector. `filenameMatches` and `scores` are full-layout
- * buffers indexed by global row (`baseRow + localRow`). The output is the
- * renderer-ready combined score, or `SEMANTIC_SCORE_DISABLED` below threshold.
+ * normalized text vector. `filenameMatches`, `semanticDisableMask`, and
+ * `scores` are full-layout buffers indexed by global row (`baseRow + localRow`).
+ * The output is the renderer-ready combined score. By default scores below the
+ * threshold are disabled to preserve the legacy CPU-filtered paint path; direct
+ * map coloring can set `disableBelowThreshold: false` and use the material
+ * range to draw below-threshold rows at the dim end.
  */
 export function buildSemanticScoreChunkKernel({
   matrix,
   query,
   filenameMatches,
+  semanticDisableMask,
   scores,
   dims,
   count,
   baseRow = 0,
   uniforms,
+  disableBelowThreshold = true,
 }) {
   const dimsU = uint(dims);
   const baseRowU = uint(baseRow);
@@ -59,6 +64,13 @@ export function buildSemanticScoreChunkKernel({
     const semantic = clamp(dot.div(uniforms.cosineCeilingU), float(0), float(1)).pow(uniforms.curveGammaU);
     const filename = float(filenameMatches.element(globalRow));
     const combined = uniforms.filenameAlphaU.mul(filename).add(oneMinusAlpha.mul(semantic));
-    scores.element(globalRow).assign(select(combined.greaterThanEqual(uniforms.thresholdU), combined, disabled));
+    const thresholded = disableBelowThreshold
+      ? select(combined.greaterThanEqual(uniforms.thresholdU), combined, disabled)
+      : combined;
+    scores.element(globalRow).assign(select(
+      semanticDisableMask.element(globalRow).greaterThan(uint(0)),
+      disabled,
+      thresholded,
+    ));
   })().compute(count);
 }

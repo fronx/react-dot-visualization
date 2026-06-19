@@ -33,12 +33,20 @@ function combinedScore(cosine, filenameMatch, params = PARAMS) {
   return params.filenameAlpha * filenameMatch + (1 - params.filenameAlpha) * semantic;
 }
 
-function oracle(matrix, dims, query, filenameMatches, params = PARAMS) {
+function oracle(matrix, dims, query, filenameMatches, params = PARAMS, options = {}) {
   const count = filenameMatches.length;
   const out = new Float32Array(count);
+  const disableBelowThreshold = options.disableBelowThreshold !== false;
+  const semanticDisableMask = options.semanticDisableMask ?? new Uint32Array(count);
   for (let row = 0; row < count; row++) {
     const combined = combinedScore(dotRow(matrix, row, dims, query), filenameMatches[row], params);
-    out[row] = combined >= params.threshold ? combined : SEMANTIC_SCORE_DISABLED;
+    if (semanticDisableMask[row]) {
+      out[row] = SEMANTIC_SCORE_DISABLED;
+    } else if (disableBelowThreshold) {
+      out[row] = combined >= params.threshold ? combined : SEMANTIC_SCORE_DISABLED;
+    } else {
+      out[row] = combined;
+    }
   }
   return out;
 }
@@ -53,7 +61,7 @@ function assertApproxEqual(got, expected, tol = 1e-5) {
   }
 }
 
-async function makeHarness() {
+async function makeHarness(options = {}) {
   const renderer = await makeRenderer();
   const dims = 4;
   const count = 5;
@@ -66,12 +74,14 @@ async function makeHarness() {
   ]);
   const queryArray = new Float32Array([0.5, 0.5, 0.5, 0.5]);
   const filenameMatchesArray = new Uint32Array([0, 1, 0, 0, 1]);
+  const semanticDisableMaskArray = options.semanticDisableMask ?? new Uint32Array(count);
   const scoresArray = new Float32Array(count);
   scoresArray.fill(SEMANTIC_SCORE_DISABLED);
 
   const uniforms = createSemanticScoreUniforms(PARAMS);
   const query = instancedArray(queryArray, 'float');
   const filenameMatches = instancedArray(filenameMatchesArray, 'uint');
+  const semanticDisableMask = instancedArray(semanticDisableMaskArray, 'uint');
   const scores = instancedArray(scoresArray, 'float');
   const chunk0 = instancedArray(matrix.slice(0, 2 * dims), 'float');
   const chunk1 = instancedArray(matrix.slice(2 * dims), 'float');
@@ -80,21 +90,25 @@ async function makeHarness() {
       matrix: chunk0,
       query,
       filenameMatches,
+      semanticDisableMask,
       scores,
       dims,
       count: 2,
       baseRow: 0,
       uniforms,
+      disableBelowThreshold: options.disableBelowThreshold,
     }),
     buildSemanticScoreChunkKernel({
       matrix: chunk1,
       query,
       filenameMatches,
+      semanticDisableMask,
       scores,
       dims,
       count: 3,
       baseRow: 2,
       uniforms,
+      disableBelowThreshold: options.disableBelowThreshold,
     }),
   ];
 
@@ -106,6 +120,7 @@ async function makeHarness() {
     query,
     queryArray,
     filenameMatchesArray,
+    semanticDisableMaskArray,
     scores,
     uniforms,
     kernels,
@@ -127,6 +142,26 @@ test('semantic score chunks write renderer-ready scores into one full-layout buf
     assertApproxEqual(
       await h.readScores(),
       oracle(h.matrix, h.dims, h.queryArray, h.filenameMatchesArray),
+    );
+  } finally {
+    h.dispose();
+  }
+});
+
+test('semantic score kernels can write all scores for direct map coloring while honoring the disable mask', async () => {
+  const semanticDisableMask = new Uint32Array([0, 1, 0, 0, 0]);
+  const h = await makeHarness({
+    disableBelowThreshold: false,
+    semanticDisableMask,
+  });
+  try {
+    for (const kernel of h.kernels) h.renderer.compute(kernel);
+    assertApproxEqual(
+      await h.readScores(),
+      oracle(h.matrix, h.dims, h.queryArray, h.filenameMatchesArray, PARAMS, {
+        disableBelowThreshold: false,
+        semanticDisableMask,
+      }),
     );
   } finally {
     h.dispose();
