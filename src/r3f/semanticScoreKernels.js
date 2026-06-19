@@ -106,3 +106,26 @@ export function buildSemanticScoreSummaryKernel({
     });
   })().compute(count);
 }
+
+/**
+ * Quantize scores that pass a threshold into a u32 buffer. Zero means no match;
+ * positive values preserve score ordering for delayed list catch-up without
+ * reading back the full float score buffer or recomputing the matrix scan.
+ */
+export function buildSemanticMatchedScoreKernel({
+  scores,
+  matchedScores,
+  threshold,
+  count,
+  scale = SEMANTIC_SCORE_SUMMARY_SCALE,
+}) {
+  return Fn(() => {
+    const score = scores.element(instanceIndex);
+    const fixed = uint(clamp(score, float(0), float(1)).mul(float(scale))).add(uint(1));
+    matchedScores.element(instanceIndex).assign(select(
+      score.greaterThanEqual(threshold),
+      fixed,
+      uint(0),
+    ));
+  })().compute(count);
+}

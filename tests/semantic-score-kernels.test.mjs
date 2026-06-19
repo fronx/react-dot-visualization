@@ -6,12 +6,13 @@
 import './tslShims.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { instancedArray } from 'three/tsl';
+import { instancedArray, uniform, float } from 'three/tsl';
 import { makeRenderer, readbackF32, readbackU32 } from './tslHeadless.mjs';
 import {
   SEMANTIC_SCORE_DISABLED,
   SEMANTIC_SCORE_SUMMARY_BUCKETS,
   SEMANTIC_SCORE_SUMMARY_SCALE,
+  buildSemanticMatchedScoreKernel,
   buildSemanticScoreChunkKernel,
   buildSemanticScoreSummaryKernel,
   createSemanticScoreUniforms,
@@ -227,6 +228,42 @@ test('semantic score summary kernel reduces histogram and max without full score
       Array.from(expectedHistogram),
     );
     assert.equal((await readbackU32(h.renderer, maxScoreFixed, 1))[0], expectedMax);
+  } finally {
+    h.dispose();
+  }
+});
+
+test('semantic matched-score kernel returns fixed scores above threshold', async () => {
+  const h = await makeHarness({
+    disableBelowThreshold: false,
+    semanticDisableMask: new Uint32Array([0, 1, 0, 0, 0]),
+  });
+  try {
+    for (const kernel of h.kernels) h.renderer.compute(kernel);
+
+    const threshold = 0.5;
+    const fixedScores = instancedArray(new Uint32Array(h.count), 'uint');
+    h.renderer.compute(buildSemanticMatchedScoreKernel({
+      scores: h.scores,
+      matchedScores: fixedScores,
+      threshold: uniform(float(threshold)),
+      count: h.count,
+    }));
+
+    const expectedScores = oracle(h.matrix, h.dims, h.queryArray, h.filenameMatchesArray, PARAMS, {
+      disableBelowThreshold: false,
+      semanticDisableMask: h.semanticDisableMaskArray,
+    });
+    const expected = Array.from(expectedScores, (score) => (
+      score >= threshold
+        ? Math.floor(Math.max(0, Math.min(1, score)) * SEMANTIC_SCORE_SUMMARY_SCALE) + 1
+        : 0
+    ));
+
+    assert.deepEqual(
+      Array.from(await readbackU32(h.renderer, fixedScores, h.count)),
+      expected,
+    );
   } finally {
     h.dispose();
   }

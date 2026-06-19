@@ -51,6 +51,7 @@ import {
   SEMANTIC_SCORE_DISABLED,
   SEMANTIC_SCORE_SUMMARY_BUCKETS,
   SEMANTIC_SCORE_SUMMARY_SCALE,
+  buildSemanticMatchedScoreKernel,
   buildSemanticScoreChunkKernel,
   buildSemanticScoreSummaryKernel,
   createSemanticScoreUniforms,
@@ -419,6 +420,8 @@ function buildSemanticScoringResources(scoring, semantic, count) {
   const semanticDisableMask = instancedArray(makeSemanticDisableMaskBuffer(scoring, rowCount), 'uint');
   const summaryHistogram = instancedArray(new Uint32Array(SEMANTIC_SCORE_SUMMARY_BUCKETS), 'uint').toAtomic();
   const summaryMaxScoreFixed = instancedArray(new Uint32Array(1), 'uint').toAtomic();
+  const matchedScores = instancedArray(new Uint32Array(rowCount), 'uint');
+  const matchedScoreThresholdU = uniform(float(0));
   const chunks = [];
   const rowsPerChunk = Math.max(1, Math.floor(SEMANTIC_SCORE_CHUNK_FLOATS / dims));
   for (let baseRow = 0; baseRow < rowCount; baseRow += rowsPerChunk) {
@@ -458,6 +461,18 @@ function buildSemanticScoringResources(scoring, semantic, count) {
       scale: SEMANTIC_SCORE_SUMMARY_SCALE,
     }),
   };
+  const matched = {
+    scale: SEMANTIC_SCORE_SUMMARY_SCALE,
+    scores: matchedScores,
+    thresholdU: matchedScoreThresholdU,
+    measure: buildSemanticMatchedScoreKernel({
+      scores: semantic.scores,
+      matchedScores,
+      threshold: matchedScoreThresholdU,
+      count: rowCount,
+      scale: SEMANTIC_SCORE_SUMMARY_SCALE,
+    }),
+  };
   if (debug) {
     console.log(
       `[rdv-semantic] resources rows=${rowCount} dims=${dims} ` +
@@ -476,6 +491,7 @@ function buildSemanticScoringResources(scoring, semantic, count) {
     uniforms,
     chunks,
     summary,
+    matched,
   };
 }
 
@@ -723,6 +739,10 @@ export function R3FDotsWebGPU({
   const semanticScoreHandledRef = useRef(0);
   const semanticSummaryReadRef = useRef(0);
   const semanticScoreInputRef = useRef(null);
+  const semanticMatchedDispatchRef = useRef(0);
+  const semanticMatchedHandledRef = useRef(0);
+  const semanticMatchedReadRef = useRef(0);
+  const semanticMatchedInputRef = useRef(null);
   useEffect(() => {
     if (!semantic || !buffers) return;
     const gpuScoringActive = !!semanticGpuScoring?.matrix;
@@ -740,6 +760,7 @@ export function R3FDotsWebGPU({
     if (gpuScoringActive) {
       if (!semanticScoring || !semanticGpuScoring?.query || semanticGpuScoring.query.length !== semanticScoring.dims) {
         semanticScoreInputRef.current = null;
+        semanticMatchedInputRef.current = null;
         writeSemanticScores(semantic, null, buffers.N);
         return;
       }
@@ -762,13 +783,38 @@ export function R3FDotsWebGPU({
         || prevInput.curveGamma !== nextInput.curveGamma
         || prevInput.threshold !== nextInput.threshold;
       semanticScoreInputRef.current = nextInput;
-      if (!shouldDispatch) return;
-      semanticScoring.query.value.array.set(semanticGpuScoring.query.subarray(0, semanticScoring.dims));
-      semanticScoring.query.value.needsUpdate = true;
-      semanticScoreDispatchRef.current += 1;
+      if (shouldDispatch) {
+        semanticMatchedInputRef.current = null;
+        semanticScoring.query.value.array.set(semanticGpuScoring.query.subarray(0, semanticScoring.dims));
+        semanticScoring.query.value.needsUpdate = true;
+        semanticScoreDispatchRef.current += 1;
+      }
+      const matchedThreshold = Number.isFinite(semanticGpuScoring?.matchedScoreThreshold)
+        ? semanticGpuScoring.matchedScoreThreshold
+        : null;
+      if (matchedThreshold == null) {
+        semanticMatchedInputRef.current = null;
+        return;
+      }
+      const nextMatchedInput = {
+        resources: semanticScoring,
+        scoreDispatch: semanticScoreDispatchRef.current,
+        threshold: matchedThreshold,
+      };
+      const prevMatchedInput = semanticMatchedInputRef.current;
+      const shouldDispatchMatched = !prevMatchedInput
+        || prevMatchedInput.resources !== nextMatchedInput.resources
+        || prevMatchedInput.scoreDispatch !== nextMatchedInput.scoreDispatch
+        || prevMatchedInput.threshold !== nextMatchedInput.threshold;
+      semanticMatchedInputRef.current = nextMatchedInput;
+      if (shouldDispatchMatched) {
+        semanticScoring.matched.thresholdU.value = matchedThreshold;
+        semanticMatchedDispatchRef.current += 1;
+      }
       return;
     }
     semanticScoreInputRef.current = null;
+    semanticMatchedInputRef.current = null;
     writeSemanticScores(semantic, semanticScores, buffers.N);
   }, [semantic, semanticScores, semanticGpuScoring, semanticScoring, buffers]);
   useEffect(() => () => {
@@ -782,6 +828,7 @@ export function R3FDotsWebGPU({
       semanticScoring.semanticDisableMask,
       semanticScoring.summary.histogram,
       semanticScoring.summary.maxScoreFixed,
+      semanticScoring.matched.scores,
       ...semanticScoring.chunks.map((chunk) => chunk.matrix),
     ]);
     disposeComputeNodes([
@@ -789,6 +836,7 @@ export function R3FDotsWebGPU({
       semanticScoring.summary.clearHistogram,
       semanticScoring.summary.clearMax,
       semanticScoring.summary.measure,
+      semanticScoring.matched.measure,
     ]);
   }, [semanticScoring, gl]);
 
@@ -1238,6 +1286,46 @@ export function R3FDotsWebGPU({
         }).catch((err) => {
           if (debug) console.warn('[rdv-semantic] summary readback failed:', err);
         });
+      }
+    }
+    if (semanticScoring && semanticMatchedDispatchRef.current !== semanticMatchedHandledRef.current) {
+      const dispatchId = semanticMatchedDispatchRef.current;
+      const scoreDispatchId = semanticScoreDispatchRef.current;
+      const debug = semanticGpuScoring?.debug === true;
+      const threshold = semanticScoring.matched.thresholdU.value;
+      const started = debug ? performance.now() : 0;
+      semanticMatchedHandledRef.current = dispatchId;
+      gl.compute(semanticScoring.matched.measure);
+      if (debug) {
+        console.log(
+          `[rdv-semantic] matched-dispatch dispatch=${dispatchId} ` +
+            `scoreDispatch=${scoreDispatchId} rows=${semanticScoring.count} ` +
+            `threshold=${threshold.toFixed(3)} ` +
+            `submit=${(performance.now() - started).toFixed(1)}ms`,
+        );
+      }
+      const onMatchedScores = semanticGpuScoring?.onMatchedScores;
+      if (typeof onMatchedScores === 'function') {
+        const readStarted = performance.now();
+        semanticMatchedReadRef.current = dispatchId;
+        void gl.getArrayBufferAsync(semanticScoring.matched.scores.value)
+          .then((scoresBuffer) => {
+            if (semanticMatchedReadRef.current !== dispatchId) return;
+            const fixedScores = new Uint32Array(scoresBuffer)
+              .slice(0, semanticScoring.count);
+            onMatchedScores({
+              dispatchId,
+              scoreDispatchId,
+              count: semanticScoring.count,
+              threshold,
+              fixedScores,
+              scale: semanticScoring.matched.scale,
+              readbackMs: performance.now() - readStarted,
+            });
+          })
+          .catch((err) => {
+            if (debug) console.warn('[rdv-semantic] matched-score readback failed:', err);
+          });
       }
     }
 
