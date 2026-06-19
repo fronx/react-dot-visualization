@@ -356,10 +356,18 @@ function semanticCombineParams(input) {
   };
 }
 
-function makeFilenameMatchBuffer(input, count) {
+function makeFilenameMatchBuffer(input, count, matrixRowIndices = null) {
   const out = new Uint32Array(count);
   const src = input?.filenameMatches;
   if (!src) return out;
+  if (matrixRowIndices) {
+    const n = Math.min(count, matrixRowIndices.length);
+    for (let i = 0; i < n; i++) {
+      const sourceRow = matrixRowIndices[i] >>> 0;
+      out[i] = sourceRow < src.length && src[sourceRow] ? 1 : 0;
+    }
+    return out;
+  }
   const n = Math.min(count, src.length);
   for (let i = 0; i < n; i++) out[i] = src[i] ? 1 : 0;
   return out;
@@ -374,25 +382,45 @@ function makeSemanticDisableMaskBuffer(input, count) {
   return out;
 }
 
+function makeSemanticMatrixChunk(matrix, dims, baseRow, rowCount, matrixRowIndices = null) {
+  if (!matrixRowIndices) {
+    const start = baseRow * dims;
+    const end = start + rowCount * dims;
+    if (end > matrix.length) return null;
+    return matrix.slice(start, end);
+  }
+  const out = new Float32Array(rowCount * dims);
+  for (let row = 0; row < rowCount; row += 1) {
+    const sourceRow = matrixRowIndices[baseRow + row] >>> 0;
+    const sourceStart = sourceRow * dims;
+    const sourceEnd = sourceStart + dims;
+    if (sourceEnd > matrix.length) return null;
+    out.set(matrix.subarray(sourceStart, sourceEnd), row * dims);
+  }
+  return out;
+}
+
 function buildSemanticScoringResources(scoring, semantic, count) {
   const debug = scoring?.debug === true;
   const started = debug ? performance.now() : 0;
   const matrix = scoring?.matrix;
   const dims = Math.floor(scoring?.dims ?? 0);
   if (!matrix || !semantic || !Number.isFinite(dims) || dims <= 0 || count <= 0) return null;
-  if (matrix.length < count * dims) return null;
   const rowCount = count;
+  const matrixRowIndices = scoring?.matrixRowIndices ?? null;
+  if (matrixRowIndices && matrixRowIndices.length < rowCount) return null;
+  if (!matrixRowIndices && matrix.length < rowCount * dims) return null;
   const uniforms = createSemanticScoreUniforms(semanticCombineParams(scoring));
   const query = instancedArray(new Float32Array(dims), 'float');
-  const filenameMatches = instancedArray(makeFilenameMatchBuffer(scoring, rowCount), 'uint');
+  const filenameMatches = instancedArray(makeFilenameMatchBuffer(scoring, rowCount, matrixRowIndices), 'uint');
   const semanticDisableMask = instancedArray(makeSemanticDisableMaskBuffer(scoring, rowCount), 'uint');
   const chunks = [];
   const rowsPerChunk = Math.max(1, Math.floor(SEMANTIC_SCORE_CHUNK_FLOATS / dims));
   for (let baseRow = 0; baseRow < rowCount; baseRow += rowsPerChunk) {
     const chunkRows = Math.min(rowsPerChunk, rowCount - baseRow);
-    const start = baseRow * dims;
-    const end = start + chunkRows * dims;
-    const chunkMatrix = instancedArray(matrix.slice(start, end), 'float');
+    const matrixChunk = makeSemanticMatrixChunk(matrix, dims, baseRow, chunkRows, matrixRowIndices);
+    if (!matrixChunk) return null;
+    const chunkMatrix = instancedArray(matrixChunk, 'float');
     chunks.push({
       matrix: chunkMatrix,
       kernel: buildSemanticScoreChunkKernel({
@@ -413,6 +441,7 @@ function buildSemanticScoringResources(scoring, semantic, count) {
     console.log(
       `[rdv-semantic] resources rows=${rowCount} dims=${dims} ` +
         `chunks=${chunks.length} rowsPerChunk=${rowsPerChunk} ` +
+        `source=${matrixRowIndices ? 'indexed' : 'contiguous'} ` +
         `matrixMB=${((rowCount * dims * 4) / 1e6).toFixed(0)} ` +
         `build=${(performance.now() - started).toFixed(1)}ms`,
     );
@@ -654,6 +683,7 @@ export function R3FDotsWebGPU({
       semanticGpuScoring?.matrix,
       semanticGpuScoring?.dims,
       semanticGpuScoring?.filenameMatches,
+      semanticGpuScoring?.matrixRowIndices,
       semanticGpuScoring?.semanticDisableMask,
       semanticGpuScoring?.disableBelowThreshold,
       semanticGpuScoring?.debug,
