@@ -13,6 +13,7 @@ import {
   SEMANTIC_SCORE_SUMMARY_BUCKETS,
   SEMANTIC_SCORE_SUMMARY_SCALE,
   buildSemanticMatchedScoreKernel,
+  buildSemanticScoreChunkF16Kernel,
   buildSemanticScoreChunkKernel,
   buildSemanticScoreSummaryKernel,
   createSemanticScoreUniforms,
@@ -63,6 +64,75 @@ function assertApproxEqual(got, expected, tol = 1e-5) {
       `[${i}]: GPU ${got[i]} vs oracle ${expected[i]}`,
     );
   }
+}
+
+const f32 = new Float32Array(1);
+const u32 = new Uint32Array(f32.buffer);
+
+function float32ToFloat16Bits(value) {
+  f32[0] = value;
+  const x = u32[0];
+  const sign = (x >>> 16) & 0x8000;
+  const exponent = (x >>> 23) & 0xff;
+  const mantissa = x & 0x7fffff;
+  if (exponent === 0xff) return sign | (mantissa ? 0x7e00 : 0x7c00);
+
+  let halfExponent = exponent - 127 + 15;
+  if (halfExponent >= 0x1f) return sign | 0x7c00;
+  if (halfExponent <= 0) {
+    if (halfExponent < -10) return sign;
+    const mantissaWithHiddenBit = mantissa | 0x800000;
+    const shift = 14 - halfExponent;
+    let halfMantissa = mantissaWithHiddenBit >> shift;
+    if ((mantissaWithHiddenBit >> (shift - 1)) & 1) halfMantissa += 1;
+    return sign | halfMantissa;
+  }
+
+  let halfMantissa = mantissa >> 13;
+  if (mantissa & 0x1000) {
+    halfMantissa += 1;
+    if (halfMantissa === 0x400) {
+      halfMantissa = 0;
+      halfExponent += 1;
+      if (halfExponent >= 0x1f) return sign | 0x7c00;
+    }
+  }
+  return sign | (halfExponent << 10) | halfMantissa;
+}
+
+function float16BitsToFloat32(bits) {
+  const sign = (bits & 0x8000) ? -1 : 1;
+  const exponent = (bits >>> 10) & 0x1f;
+  const fraction = bits & 0x03ff;
+  if (exponent === 0) {
+    return fraction === 0 ? sign * 0 : sign * 2 ** -14 * (fraction / 1024);
+  }
+  if (exponent === 0x1f) {
+    return fraction === 0 ? sign * Infinity : NaN;
+  }
+  return sign * 2 ** (exponent - 15) * (1 + fraction / 1024);
+}
+
+function encodeF16Array(values) {
+  const out = new Uint16Array(values.length);
+  for (let i = 0; i < values.length; i += 1) out[i] = float32ToFloat16Bits(values[i]);
+  return out;
+}
+
+function decodeF16Array(values) {
+  const out = new Float32Array(values.length);
+  for (let i = 0; i < values.length; i += 1) out[i] = float16BitsToFloat32(values[i]);
+  return out;
+}
+
+function packF16Range(values, start, count) {
+  const out = new Uint32Array(Math.ceil(count / 2));
+  for (let i = 0; i < count; i += 1) {
+    const bits = values[start + i] & 0xffff;
+    const word = i >>> 1;
+    out[word] = (out[word] | (i & 1 ? bits << 16 : bits)) >>> 0;
+  }
+  return out;
 }
 
 async function makeHarness(options = {}) {
@@ -123,7 +193,9 @@ async function makeHarness(options = {}) {
     matrix,
     query,
     queryArray,
+    filenameMatches,
     filenameMatchesArray,
+    semanticDisableMask,
     semanticDisableMaskArray,
     scores,
     uniforms,
@@ -166,6 +238,53 @@ test('semantic score kernels can write all scores for direct map coloring while 
         disableBelowThreshold: false,
         semanticDisableMask,
       }),
+    );
+  } finally {
+    h.dispose();
+  }
+});
+
+test('semantic f16 score chunks unpack packed matrices on the GPU', async () => {
+  const h = await makeHarness({ disableBelowThreshold: false });
+  try {
+    const matrixF16 = encodeF16Array(h.matrix);
+    const decodedMatrix = decodeF16Array(matrixF16);
+    const chunk0 = instancedArray(packF16Range(matrixF16, 0, 2 * h.dims), 'uint');
+    const chunk1 = instancedArray(packF16Range(matrixF16, 2 * h.dims, 3 * h.dims), 'uint');
+    const kernels = [
+      buildSemanticScoreChunkF16Kernel({
+        matrixF16Packed: chunk0,
+        query: h.query,
+        filenameMatches: h.filenameMatches,
+        semanticDisableMask: h.semanticDisableMask,
+        scores: h.scores,
+        dims: h.dims,
+        count: 2,
+        baseRow: 0,
+        uniforms: h.uniforms,
+        disableBelowThreshold: false,
+      }),
+      buildSemanticScoreChunkF16Kernel({
+        matrixF16Packed: chunk1,
+        query: h.query,
+        filenameMatches: h.filenameMatches,
+        semanticDisableMask: h.semanticDisableMask,
+        scores: h.scores,
+        dims: h.dims,
+        count: 3,
+        baseRow: 2,
+        uniforms: h.uniforms,
+        disableBelowThreshold: false,
+      }),
+    ];
+
+    for (const kernel of kernels) h.renderer.compute(kernel);
+    assertApproxEqual(
+      await h.readScores(),
+      oracle(decodedMatrix, h.dims, h.queryArray, h.filenameMatchesArray, PARAMS, {
+        disableBelowThreshold: false,
+      }),
+      1e-4,
     );
   } finally {
     h.dispose();

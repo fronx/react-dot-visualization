@@ -7,7 +7,7 @@
  */
 import {
   Fn, Loop, If, instanceIndex, float, uint, clamp, select, uniform, floor,
-  atomicAdd, atomicMax,
+  atomicAdd, atomicMax, exp2,
 } from 'three/tsl';
 
 export const SEMANTIC_SCORE_DISABLED = -1;
@@ -64,6 +64,71 @@ export function buildSemanticScoreChunkKernel({
 
     Loop(dims, ({ i: k }) => {
       dot.addAssign(matrix.element(rowOffset.add(k)).mul(query.element(k)));
+    });
+
+    const semantic = clamp(dot.div(uniforms.cosineCeilingU), float(0), float(1)).pow(uniforms.curveGammaU);
+    const filename = float(filenameMatches.element(globalRow));
+    const combined = uniforms.filenameAlphaU.mul(filename).add(oneMinusAlpha.mul(semantic));
+    const thresholded = disableBelowThreshold
+      ? select(combined.greaterThanEqual(uniforms.thresholdU), combined, disabled)
+      : combined;
+    scores.element(globalRow).assign(select(
+      semanticDisableMask.element(globalRow).greaterThan(uint(0)),
+      disabled,
+      thresholded,
+    ));
+  })().compute(count);
+}
+
+function unpackF16FromU32(matrixF16Packed, elementIndex) {
+  const word = matrixF16Packed.element(elementIndex.div(uint(2)));
+  const half = select(
+    elementIndex.bitAnd(uint(1)).equal(uint(1)),
+    word.shiftRight(uint(16)),
+    word.bitAnd(uint(0xffff)),
+  );
+  const sign = select(half.bitAnd(uint(0x8000)).equal(uint(0)), float(1), float(-1));
+  const exponent = half.shiftRight(uint(10)).bitAnd(uint(0x1f));
+  const mantissa = half.bitAnd(uint(0x03ff));
+  const mantissaF = float(mantissa).div(float(1024));
+  const subnormal = sign.mul(exp2(float(-14))).mul(mantissaF);
+  const normal = sign
+    .mul(exp2(float(exponent).sub(float(15))))
+    .mul(float(1).add(mantissaF));
+  return select(exponent.equal(uint(0)), subnormal, normal);
+}
+
+/**
+ * Same score pass as buildSemanticScoreChunkKernel, but the matrix is stored as
+ * two IEEE-754 binary16 values packed into each u32. This keeps the resident GPU
+ * matrix at half the f32 footprint while preserving the existing query, summary,
+ * and material score buffers.
+ */
+export function buildSemanticScoreChunkF16Kernel({
+  matrixF16Packed,
+  query,
+  filenameMatches,
+  semanticDisableMask,
+  scores,
+  dims,
+  count,
+  baseRow = 0,
+  uniforms,
+  disableBelowThreshold = true,
+}) {
+  const dimsU = uint(dims);
+  const baseRowU = uint(baseRow);
+  const disabled = float(SEMANTIC_SCORE_DISABLED);
+  const oneMinusAlpha = float(1).sub(uniforms.filenameAlphaU);
+
+  return Fn(() => {
+    const localRow = instanceIndex;
+    const globalRow = baseRowU.add(localRow);
+    const rowOffset = localRow.mul(dimsU);
+    const dot = float(0).toVar();
+
+    Loop(dims, ({ i: k }) => {
+      dot.addAssign(unpackF16FromU32(matrixF16Packed, rowOffset.add(k)).mul(query.element(k)));
     });
 
     const semantic = clamp(dot.div(uniforms.cosineCeilingU), float(0), float(1)).pow(uniforms.curveGammaU);
