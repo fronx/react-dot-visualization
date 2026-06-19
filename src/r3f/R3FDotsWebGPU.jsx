@@ -47,6 +47,11 @@ import {
   resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus, resolveHoverRadius,
 } from './dotAppearance.js';
 import { buildLerpKernels } from './lerpKernels.js';
+import {
+  SEMANTIC_SCORE_DISABLED,
+  buildSemanticScoreChunkKernel,
+  createSemanticScoreUniforms,
+} from './semanticScoreKernels.js';
 import { createKeyframePlayer, jumpToLastKeyframe } from './keyframePlayer.js';
 import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
@@ -87,9 +92,10 @@ const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
-const NO_SEMANTIC_SCORE = -1;
+const NO_SEMANTIC_SCORE = SEMANTIC_SCORE_DISABLED;
 const DEFAULT_SEMANTIC_DIM_RGB = [0x2e / 255, 0x1f / 255, 0x0f / 255];
 const DEFAULT_SEMANTIC_HOT_RGB = [0xff / 255, 0xaa / 255, 0x55 / 255];
+const SEMANTIC_SCORE_CHUNK_FLOATS = 4_000_000;
 
 function fmtMs(ms) {
   return Number.isFinite(ms) ? ms.toFixed(1) : 'n/a';
@@ -340,6 +346,67 @@ function colorVector(value, fallback) {
   );
 }
 
+function semanticCombineParams(input) {
+  const combine = input?.combine || {};
+  return {
+    cosineCeiling: Number.isFinite(combine.cosineCeiling) ? combine.cosineCeiling : 0.32,
+    filenameAlpha: Number.isFinite(combine.filenameAlpha) ? combine.filenameAlpha : 0.35,
+    curveGamma: Number.isFinite(combine.curveGamma) ? combine.curveGamma : 0.72,
+    threshold: Number.isFinite(input?.threshold) ? input.threshold : 0,
+  };
+}
+
+function makeFilenameMatchBuffer(input, count) {
+  const out = new Uint32Array(count);
+  const src = input?.filenameMatches;
+  if (!src) return out;
+  const n = Math.min(count, src.length);
+  for (let i = 0; i < n; i++) out[i] = src[i] ? 1 : 0;
+  return out;
+}
+
+function buildSemanticScoringResources(scoring, semantic, count) {
+  const matrix = scoring?.matrix;
+  const dims = Math.floor(scoring?.dims ?? 0);
+  if (!matrix || !semantic || !Number.isFinite(dims) || dims <= 0 || count <= 0) return null;
+  if (matrix.length < count * dims) return null;
+  const rowCount = count;
+  const uniforms = createSemanticScoreUniforms(semanticCombineParams(scoring));
+  const query = instancedArray(new Float32Array(dims), 'float');
+  const filenameMatches = instancedArray(makeFilenameMatchBuffer(scoring, rowCount), 'uint');
+  const chunks = [];
+  const rowsPerChunk = Math.max(1, Math.floor(SEMANTIC_SCORE_CHUNK_FLOATS / dims));
+  for (let baseRow = 0; baseRow < rowCount; baseRow += rowsPerChunk) {
+    const chunkRows = Math.min(rowsPerChunk, rowCount - baseRow);
+    const start = baseRow * dims;
+    const end = start + chunkRows * dims;
+    const chunkMatrix = instancedArray(matrix.slice(start, end), 'float');
+    chunks.push({
+      matrix: chunkMatrix,
+      kernel: buildSemanticScoreChunkKernel({
+        matrix: chunkMatrix,
+        query,
+        filenameMatches,
+        scores: semantic.scores,
+        dims,
+        count: chunkRows,
+        baseRow,
+        uniforms,
+      }),
+    });
+  }
+  return { count: rowCount, dims, query, filenameMatches, uniforms, chunks };
+}
+
+function updateSemanticScoringUniforms(resources, scoring) {
+  if (!resources) return;
+  const params = semanticCombineParams(scoring);
+  resources.uniforms.cosineCeilingU.value = params.cosineCeiling;
+  resources.uniforms.filenameAlphaU.value = params.filenameAlpha;
+  resources.uniforms.curveGammaU.value = params.curveGamma;
+  resources.uniforms.thresholdU.value = params.threshold;
+}
+
 // Resolve fill/opacity/focus/scale for every dot via the shared appearance
 // rules (dotAppearance.js) and upload them. Identical rule set to R3FDots'
 // applyDotStylesToInstances — the renderers differ only in the write target.
@@ -467,6 +534,7 @@ export function R3FDotsWebGPU({
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
   semanticScores = null,
+  semanticGpuScoring = null,
   positionsAreIntermediate = false,
   decollisionEnabled = true,
   decollisionDebug = false,
@@ -554,18 +622,53 @@ export function R3FDotsWebGPU({
     } : null),
     [buffers, semanticLoU, semanticHiU, semanticDimColorU, semanticHotColorU],
   );
+  const semanticScoring = useMemo(
+    () => (buffers && semantic && semanticGpuScoring?.matrix
+      ? buildSemanticScoringResources(semanticGpuScoring, semantic, buffers.N)
+      : null),
+    [buffers, semantic, semanticGpuScoring?.matrix, semanticGpuScoring?.dims, semanticGpuScoring?.filenameMatches],
+  );
+  const semanticScoreDispatchRef = useRef(0);
+  const semanticScoreHandledRef = useRef(0);
   useEffect(() => {
     if (!semantic || !buffers) return;
-    const range = semanticScores?.range;
+    const gpuScoringActive = !!semanticGpuScoring?.matrix;
+    const range = gpuScoringActive ? semanticGpuScoring?.range : semanticScores?.range;
     semantic.loU.value = Number.isFinite(range?.lo) ? range.lo : 0;
     semantic.hiU.value = Number.isFinite(range?.hi) ? range.hi : 1;
-    semantic.dimColorU.value.copy(colorVector(semanticScores?.dimColor, DEFAULT_SEMANTIC_DIM_RGB));
-    semantic.hotColorU.value.copy(colorVector(semanticScores?.hotColor, DEFAULT_SEMANTIC_HOT_RGB));
+    semantic.dimColorU.value.copy(colorVector(
+      gpuScoringActive ? semanticGpuScoring?.dimColor : semanticScores?.dimColor,
+      DEFAULT_SEMANTIC_DIM_RGB,
+    ));
+    semantic.hotColorU.value.copy(colorVector(
+      gpuScoringActive ? semanticGpuScoring?.hotColor : semanticScores?.hotColor,
+      DEFAULT_SEMANTIC_HOT_RGB,
+    ));
+    if (gpuScoringActive) {
+      if (!semanticScoring || !semanticGpuScoring?.query || semanticGpuScoring.query.length !== semanticScoring.dims) {
+        writeSemanticScores(semantic, null, buffers.N);
+        return;
+      }
+      semanticScoring.query.value.array.set(semanticGpuScoring.query.subarray(0, semanticScoring.dims));
+      semanticScoring.query.value.needsUpdate = true;
+      updateSemanticScoringUniforms(semanticScoring, semanticGpuScoring);
+      semanticScoreDispatchRef.current += 1;
+      return;
+    }
     writeSemanticScores(semantic, semanticScores, buffers.N);
-  }, [semantic, semanticScores, buffers]);
+  }, [semantic, semanticScores, semanticGpuScoring, semanticScoring, buffers]);
   useEffect(() => () => {
     if (semantic) disposeStorageBuffers(gl, [semantic.scores]);
   }, [semantic, gl]);
+  useEffect(() => () => {
+    if (!semanticScoring) return;
+    disposeStorageBuffers(gl, [
+      semanticScoring.query,
+      semanticScoring.filenameMatches,
+      ...semanticScoring.chunks.map((chunk) => chunk.matrix),
+    ]);
+    disposeComputeNodes(semanticScoring.chunks.map((chunk) => chunk.kernel));
+  }, [semanticScoring, gl]);
 
   useEffect(() => {
     if (!streamingPositions || !buffers) return;
@@ -972,6 +1075,11 @@ export function R3FDotsWebGPU({
   // Consume the latest request, then step the current job. One useFrame owns the
   // GPU decollision; the density-RT render below reads the positions it writes.
   useFrame(() => {
+    if (semanticScoring && semanticScoreDispatchRef.current !== semanticScoreHandledRef.current) {
+      semanticScoreHandledRef.current = semanticScoreDispatchRef.current;
+      for (const chunk of semanticScoring.chunks) gl.compute(chunk.kernel);
+    }
+
     // Service the highest-priority pending pick (click over hover-move) when none
     // is in flight. Reads the position buffer as left by the previous frame — a
     // one-frame lag that's invisible for hit-testing, and keeps every gl.compute
