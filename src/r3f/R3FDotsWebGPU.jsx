@@ -722,6 +722,7 @@ export function R3FDotsWebGPU({
   const semanticScoreDispatchRef = useRef(0);
   const semanticScoreHandledRef = useRef(0);
   const semanticSummaryReadRef = useRef(0);
+  const semanticScoreInputRef = useRef(null);
   useEffect(() => {
     if (!semantic || !buffers) return;
     const gpuScoringActive = !!semanticGpuScoring?.matrix;
@@ -738,15 +739,36 @@ export function R3FDotsWebGPU({
     ));
     if (gpuScoringActive) {
       if (!semanticScoring || !semanticGpuScoring?.query || semanticGpuScoring.query.length !== semanticScoring.dims) {
+        semanticScoreInputRef.current = null;
         writeSemanticScores(semantic, null, buffers.N);
         return;
       }
+      const params = semanticCombineParams(semanticGpuScoring);
+      const nextInput = {
+        resources: semanticScoring,
+        query: semanticGpuScoring.query,
+        cosineCeiling: params.cosineCeiling,
+        filenameAlpha: params.filenameAlpha,
+        curveGamma: params.curveGamma,
+        threshold: params.threshold,
+      };
+      updateSemanticScoringUniforms(semanticScoring, semanticGpuScoring);
+      const prevInput = semanticScoreInputRef.current;
+      const shouldDispatch = !prevInput
+        || prevInput.resources !== nextInput.resources
+        || prevInput.query !== nextInput.query
+        || prevInput.cosineCeiling !== nextInput.cosineCeiling
+        || prevInput.filenameAlpha !== nextInput.filenameAlpha
+        || prevInput.curveGamma !== nextInput.curveGamma
+        || prevInput.threshold !== nextInput.threshold;
+      semanticScoreInputRef.current = nextInput;
+      if (!shouldDispatch) return;
       semanticScoring.query.value.array.set(semanticGpuScoring.query.subarray(0, semanticScoring.dims));
       semanticScoring.query.value.needsUpdate = true;
-      updateSemanticScoringUniforms(semanticScoring, semanticGpuScoring);
       semanticScoreDispatchRef.current += 1;
       return;
     }
+    semanticScoreInputRef.current = null;
     writeSemanticScores(semantic, semanticScores, buffers.N);
   }, [semantic, semanticScores, semanticGpuScoring, semanticScoring, buffers]);
   useEffect(() => () => {
