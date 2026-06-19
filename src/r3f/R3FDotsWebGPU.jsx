@@ -419,17 +419,34 @@ function writePackedF16(out, targetIndex, bits) {
   }
 }
 
+function readPackedF16(matrixF16Packed, sourceIndex) {
+  const word = matrixF16Packed[sourceIndex >>> 1] >>> 0;
+  return (sourceIndex & 1) === 0
+    ? word & 0xffff
+    : (word >>> 16) & 0xffff;
+}
+
 function makeSemanticMatrixF16PackedChunk(scoring, dims, baseRow, rowCount, matrixRowIndices = null) {
   const matrixF16 = scoring?.matrixF16;
-  if (!matrixF16) return null;
+  const matrixF16Packed = scoring?.matrixF16Packed;
+  if (!matrixF16 && !matrixF16Packed) return null;
   const elementCount = rowCount * dims;
+  const sourceLength = matrixF16?.length ?? ((matrixF16Packed?.length ?? 0) * 2);
+  const readBits = (sourceIndex) => (
+    matrixF16
+      ? matrixF16[sourceIndex]
+      : readPackedF16(matrixF16Packed, sourceIndex)
+  );
+  const start = baseRow * dims;
+  const end = start + elementCount;
+  if (end > sourceLength) return null;
+  if (!matrixRowIndices && matrixF16Packed && (start & 1) === 0 && (elementCount & 1) === 0) {
+    return matrixF16Packed.subarray(start >>> 1, end >>> 1);
+  }
   const out = new Uint32Array(Math.ceil(elementCount / 2));
   if (!matrixRowIndices) {
-    const start = baseRow * dims;
-    const end = start + elementCount;
-    if (end > matrixF16.length) return null;
     for (let i = 0; i < elementCount; i += 1) {
-      writePackedF16(out, i, matrixF16[start + i]);
+      writePackedF16(out, i, readBits(start + i));
     }
     return out;
   }
@@ -437,10 +454,10 @@ function makeSemanticMatrixF16PackedChunk(scoring, dims, baseRow, rowCount, matr
     const sourceRow = matrixRowIndices[baseRow + row] >>> 0;
     const sourceStart = sourceRow * dims;
     const sourceEnd = sourceStart + dims;
-    if (sourceEnd > matrixF16.length) return null;
+    if (sourceEnd > sourceLength) return null;
     const targetStart = row * dims;
     for (let col = 0; col < dims; col += 1) {
-      writePackedF16(out, targetStart + col, matrixF16[sourceStart + col]);
+      writePackedF16(out, targetStart + col, readBits(sourceStart + col));
     }
   }
   return out;
@@ -451,10 +468,13 @@ function buildSemanticScoringResources(scoring, semantic, count) {
   const started = debug ? performance.now() : 0;
   const matrix = scoring?.matrix;
   const matrixF16 = scoring?.matrixF16;
-  const useF16Matrix = !!matrixF16;
-  const sourceLength = useF16Matrix ? matrixF16.length : matrix?.length ?? 0;
+  const matrixF16Packed = scoring?.matrixF16Packed;
+  const useF16Matrix = !!(matrixF16 || matrixF16Packed);
+  const sourceLength = useF16Matrix
+    ? matrixF16?.length ?? ((matrixF16Packed?.length ?? 0) * 2)
+    : matrix?.length ?? 0;
   const dims = Math.floor(scoring?.dims ?? 0);
-  if ((!matrix && !matrixF16) || !semantic || !Number.isFinite(dims) || dims <= 0 || count <= 0) return null;
+  if ((!matrix && !matrixF16 && !matrixF16Packed) || !semantic || !Number.isFinite(dims) || dims <= 0 || count <= 0) return null;
   const rowCount = count;
   const matrixRowIndices = scoring?.matrixRowIndices ?? null;
   if (matrixRowIndices && matrixRowIndices.length < rowCount) return null;
@@ -797,7 +817,7 @@ export function R3FDotsWebGPU({
     [buffers, semanticLoU, semanticHiU, semanticDimColorU, semanticHotColorU],
   );
   const semanticScoring = useMemo(
-    () => (buffers && semantic && (semanticGpuScoring?.matrix || semanticGpuScoring?.matrixF16)
+    () => (buffers && semantic && (semanticGpuScoring?.matrix || semanticGpuScoring?.matrixF16 || semanticGpuScoring?.matrixF16Packed)
       ? buildSemanticScoringResources(semanticGpuScoring, semantic, buffers.N)
       : null),
     [
@@ -805,6 +825,7 @@ export function R3FDotsWebGPU({
       semantic,
       semanticGpuScoring?.matrix,
       semanticGpuScoring?.matrixF16,
+      semanticGpuScoring?.matrixF16Packed,
       semanticGpuScoring?.dims,
       semanticGpuScoring?.filenameMatches,
       semanticGpuScoring?.matrixRowIndices,
@@ -823,7 +844,7 @@ export function R3FDotsWebGPU({
   const semanticMatchedInputRef = useRef(null);
   useEffect(() => {
     if (!semantic || !buffers) return;
-    const gpuScoringActive = !!(semanticGpuScoring?.matrix || semanticGpuScoring?.matrixF16);
+    const gpuScoringActive = !!(semanticGpuScoring?.matrix || semanticGpuScoring?.matrixF16 || semanticGpuScoring?.matrixF16Packed);
     const range = gpuScoringActive ? semanticGpuScoring?.range : semanticScores?.range;
     semantic.loU.value = Number.isFinite(range?.lo) ? range.lo : 0;
     semantic.hiU.value = Number.isFinite(range?.hi) ? range.hi : 1;
