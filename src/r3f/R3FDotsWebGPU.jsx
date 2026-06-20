@@ -104,7 +104,7 @@ const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
 const NO_SEMANTIC_SCORE = SEMANTIC_SCORE_DISABLED;
-const SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER = 0.5;
+const SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER = 0.35;
 const DEFAULT_SEMANTIC_DIM_RGB = [0x2e / 255, 0x1f / 255, 0x0f / 255];
 const DEFAULT_SEMANTIC_HOT_RGB = [0xff / 255, 0xaa / 255, 0x55 / 255];
 const SEMANTIC_SCORE_CHUNK_FLOATS = 4_000_000;
@@ -1826,10 +1826,10 @@ export function R3FDotsWebGPU({
     if (!buffers || !cosmetic) return null;
     return createSplatScene({
       count: buffers.N, positions: buffers.positions,
-      colors: cosmetic.colors, alphas: cosmetic.alphas,
+      colors: cosmetic.colors, alphas: cosmetic.alphas, semantic,
       pxPerWorldU, bandwidthPxU,
     });
-  }, [buffers, cosmetic, pxPerWorldU, bandwidthPxU]);
+  }, [buffers, cosmetic, semantic, pxPerWorldU, bandwidthPxU]);
   useEffect(() => () => disposeMesh(splat?.mesh), [splat]);
 
   const densityMesh = useMemo(
