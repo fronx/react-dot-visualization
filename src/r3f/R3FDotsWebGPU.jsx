@@ -483,6 +483,28 @@ function semanticMatrixResourceKey(scoring) {
   return scoring?.matrixKey == null ? null : String(scoring.matrixKey);
 }
 
+function contiguousF16PackedChunks(matrixF16PackedChunks, rowCount) {
+  if (!Array.isArray(matrixF16PackedChunks) || !matrixF16PackedChunks.length) return null;
+  const out = [];
+  let expectedBaseRow = 0;
+  for (const chunk of matrixF16PackedChunks) {
+    const baseRow = Math.floor(chunk?.baseRow ?? -1);
+    const chunkRows = Math.floor(chunk?.rowCount ?? 0);
+    const matrixF16Packed = chunk?.matrixF16Packed;
+    if (
+      baseRow !== expectedBaseRow
+      || chunkRows <= 0
+      || baseRow + chunkRows > rowCount
+      || !(matrixF16Packed instanceof Uint32Array)
+    ) {
+      return null;
+    }
+    out.push({ baseRow, rowCount: chunkRows, matrixF16Packed });
+    expectedBaseRow += chunkRows;
+  }
+  return expectedBaseRow === rowCount ? out : null;
+}
+
 function makeSemanticMatrixF16PackedChunk(scoring, dims, baseRow, rowCount, matrixRowIndices = null) {
   const matrixF16 = scoring?.matrixF16;
   const matrixF16Packed = scoring?.matrixF16Packed;
@@ -555,43 +577,68 @@ function buildSemanticScoringResources(scoring, semantic, count) {
   const matchedScores = instancedArray(new Uint32Array(rowCount), 'uint');
   const matchedScoreThresholdU = uniform(float(0));
   const chunks = [];
-  const rowsPerChunk = Math.max(1, Math.floor(SEMANTIC_SCORE_CHUNK_FLOATS / dims));
-  for (let baseRow = 0; baseRow < rowCount; baseRow += rowsPerChunk) {
-    const chunkRows = Math.min(rowsPerChunk, rowCount - baseRow);
-    const matrixChunk = useF16Matrix
-      ? makeSemanticMatrixF16PackedChunk(scoring, dims, baseRow, chunkRows, matrixRowIndices)
-      : makeSemanticMatrixChunk(scoring, dims, baseRow, chunkRows, matrixRowIndices);
-    if (!matrixChunk) return null;
-    const chunkMatrix = instancedArray(matrixChunk, useF16Matrix ? 'uint' : 'float');
-    chunks.push({
-      matrix: chunkMatrix,
-      kernel: useF16Matrix
-        ? buildSemanticScoreChunkF16Kernel({
+  const providedF16Chunks = useF16Matrix && !matrixRowIndices
+    ? contiguousF16PackedChunks(matrixF16PackedChunks, rowCount)
+    : null;
+  if (providedF16Chunks) {
+    for (const provided of providedF16Chunks) {
+      const chunkMatrix = instancedArray(provided.matrixF16Packed, 'uint');
+      chunks.push({
+        matrix: chunkMatrix,
+        kernel: buildSemanticScoreChunkF16Kernel({
           matrixF16Packed: chunkMatrix,
           query,
           filenameMatches,
           semanticDisableMask,
           scores: semantic.scores,
           dims,
-          count: chunkRows,
-          baseRow,
-          uniforms,
-          disableBelowThreshold: scoring?.disableBelowThreshold !== false,
-        })
-        : buildSemanticScoreChunkKernel({
-          matrix: chunkMatrix,
-          query,
-          filenameMatches,
-          semanticDisableMask,
-          scores: semantic.scores,
-          dims,
-          count: chunkRows,
-          baseRow,
+          count: provided.rowCount,
+          baseRow: provided.baseRow,
           uniforms,
           disableBelowThreshold: scoring?.disableBelowThreshold !== false,
         }),
-    });
+      });
+    }
+  } else {
+    const rowsPerChunk = Math.max(1, Math.floor(SEMANTIC_SCORE_CHUNK_FLOATS / dims));
+    for (let baseRow = 0; baseRow < rowCount; baseRow += rowsPerChunk) {
+      const chunkRows = Math.min(rowsPerChunk, rowCount - baseRow);
+      const matrixChunk = useF16Matrix
+        ? makeSemanticMatrixF16PackedChunk(scoring, dims, baseRow, chunkRows, matrixRowIndices)
+        : makeSemanticMatrixChunk(scoring, dims, baseRow, chunkRows, matrixRowIndices);
+      if (!matrixChunk) return null;
+      const chunkMatrix = instancedArray(matrixChunk, useF16Matrix ? 'uint' : 'float');
+      chunks.push({
+        matrix: chunkMatrix,
+        kernel: useF16Matrix
+          ? buildSemanticScoreChunkF16Kernel({
+            matrixF16Packed: chunkMatrix,
+            query,
+            filenameMatches,
+            semanticDisableMask,
+            scores: semantic.scores,
+            dims,
+            count: chunkRows,
+            baseRow,
+            uniforms,
+            disableBelowThreshold: scoring?.disableBelowThreshold !== false,
+          })
+          : buildSemanticScoreChunkKernel({
+            matrix: chunkMatrix,
+            query,
+            filenameMatches,
+            semanticDisableMask,
+            scores: semantic.scores,
+            dims,
+            count: chunkRows,
+            baseRow,
+            uniforms,
+            disableBelowThreshold: scoring?.disableBelowThreshold !== false,
+          }),
+      });
+    }
   }
+  const rowsPerChunk = chunks.length > 0 ? Math.ceil(rowCount / chunks.length) : 0;
   const summary = {
     bucketCount: SEMANTIC_SCORE_SUMMARY_BUCKETS,
     scale: SEMANTIC_SCORE_SUMMARY_SCALE,
