@@ -15,6 +15,7 @@ import {
   buildSemanticMatchedScoreKernel,
   buildSemanticScoreChunkF16Kernel,
   buildSemanticScoreChunkKernel,
+  buildSemanticScorePublishKernel,
   buildSemanticScoreSummaryKernel,
   createSemanticScoreUniforms,
 } from '../src/r3f/semanticScoreKernels.js';
@@ -221,6 +222,29 @@ test('semantic score chunks write renderer-ready scores into one full-layout buf
     );
   } finally {
     h.dispose();
+  }
+});
+
+test('semantic score publish kernel atomically copies staged scores to the visible buffer', async () => {
+  const renderer = await makeRenderer();
+  const count = 5;
+  const stagedScores = instancedArray(new Float32Array([0.1, 0.5, -1, 0.8, 0]), 'float');
+  const visibleScores = instancedArray(new Float32Array([SEMANTIC_SCORE_DISABLED, 0.2, 0.3, 0.4, 0.5]), 'float');
+  try {
+    renderer.compute(buildSemanticScorePublishKernel({
+      stagedScores,
+      visibleScores,
+      count,
+    }));
+
+    assertApproxEqual(
+      new Float32Array(await readbackF32(renderer, visibleScores, count)),
+      stagedScores.value.array,
+    );
+  } finally {
+    const device = renderer.backend?.device;
+    renderer.dispose();
+    device?.destroy();
   }
 });
 

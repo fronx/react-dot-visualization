@@ -173,6 +173,24 @@ export function buildSemanticScoreSummaryKernel({
 }
 
 /**
+ * Publish a completed staged score pass into the material-visible score buffer.
+ *
+ * Large maps can submit chunked score kernels across multiple render frames.
+ * Writing those chunks directly to the visible buffer makes semantic paint
+ * update in bands. Keeping the score pass staged and publishing once preserves
+ * atomic query updates while still allowing chunked submission.
+ */
+export function buildSemanticScorePublishKernel({
+  stagedScores,
+  visibleScores,
+  count,
+}) {
+  return Fn(() => {
+    visibleScores.element(instanceIndex).assign(stagedScores.element(instanceIndex));
+  })().compute(count);
+}
+
+/**
  * Quantize scores that pass a threshold into a u32 buffer. Zero means no match;
  * positive values preserve score ordering for delayed list catch-up without
  * reading back the full float score buffer or recomputing the matrix scan.
