@@ -26,7 +26,7 @@ import {
   instanceIndex, positionLocal, vec3, vec4, float, exp, pow, max as tslMax,
   length, texture, screenUV, uv, varying, sRGBTransferOETF, mix, clamp, select,
 } from 'three/tsl';
-import { SEMANTIC_SCORE_DISABLED } from './semanticScoreKernels.js';
+import { semanticColorNode, semanticAlphaNode } from './semanticScoreKernels.js';
 
 // Tunables (eyeball these first).
 // CRISPNESS: the kernel's effective sigma ≈ BANDWIDTH_PX / √(2·SPLAT_K) device px.
@@ -38,7 +38,6 @@ export const DENSITY_GAIN = 0.6;  // how fast density saturates toward the mean 
 // Crossfade band, in projected dot radius (device px): full density below LO, full dots above HI.
 export const FADE_PX_LO = 3.0;
 export const FADE_PX_HI = 6.0;
-const SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER = 0.35;
 
 // ── OKLab (Björn Ottosson) ────────────────────────────────────────────────
 const CBRT = float(1 / 3);
@@ -85,25 +84,6 @@ export function createDensityRenderTarget(width, height) {
 // Splat material: additive accumulation of (OKLab·w, w) per point, where the
 // weight w = perDotAlpha · gaussian. Weighting by alpha means filtered/dimmed
 // dots contribute proportionally less density (α≈0 → nothing).
-function semanticDensityColorNode(baseColor, score, semantic) {
-  const span = tslMax(semantic.hiU.sub(semantic.loU), float(0.000001));
-  const t = clamp(score.sub(semantic.loU).div(span), float(0), float(1));
-  const color = mix(semantic.dimColorU, semantic.hotColorU, t);
-  return select(score.greaterThan(float(SEMANTIC_SCORE_DISABLED)), color, baseColor);
-}
-
-function semanticDensityAlphaNode(baseAlpha, score, semantic) {
-  return select(
-    score.greaterThan(float(SEMANTIC_SCORE_DISABLED)),
-    select(
-      score.lessThan(semantic.loU),
-      baseAlpha.mul(float(SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER)),
-      baseAlpha,
-    ),
-    baseAlpha,
-  );
-}
-
 function createSplatMaterial({ positions, colors, alphas, semantic = null, pxPerWorldU, bandwidthPxU }) {
   const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, depthTest: false });
   // True additive accumulation (src·1 + dst·1) for color AND weight — NOT
@@ -129,8 +109,8 @@ function createSplatMaterial({ positions, colors, alphas, semantic = null, pxPer
   const baseColor = colors.element(instanceIndex);
   const baseAlpha = alphas.element(instanceIndex);
   const score = semantic ? semantic.scores.element(instanceIndex) : null;
-  const color = semantic ? semanticDensityColorNode(baseColor, score, semantic) : baseColor;
-  const alphaBase = semantic ? semanticDensityAlphaNode(baseAlpha, score, semantic) : baseAlpha;
+  const color = semantic ? semanticColorNode(baseColor, score, semantic) : baseColor;
+  const alphaBase = semantic ? semanticAlphaNode(baseAlpha, score, semantic) : baseAlpha;
   const lab = varying(linearToOKLab(color));
   const alpha = varying(alphaBase);
   const w = g.mul(alpha);

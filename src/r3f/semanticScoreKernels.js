@@ -7,12 +7,40 @@
  */
 import {
   Fn, Loop, If, instanceIndex, float, uint, clamp, select, uniform, floor,
-  atomicAdd, atomicMax, exp2,
+  atomicAdd, atomicMax, exp2, max, mix,
 } from 'three/tsl';
 
 export const SEMANTIC_SCORE_DISABLED = -1;
 export const SEMANTIC_SCORE_SUMMARY_BUCKETS = 256;
 export const SEMANTIC_SCORE_SUMMARY_SCALE = 1000000;
+/** Alpha multiplier applied to below-threshold dots (dimmed, not hidden). */
+export const SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER = 0.35;
+
+/** Map a per-instance semantic score to the dim→hot colour ramp; scores at or
+ *  below SEMANTIC_SCORE_DISABLED keep the base colour. Shared by the dot layer
+ *  and the density splat so the two paint identically (drift here desyncs the
+ *  crisp dots from the zoomed-out splat). `semantic` carries the uniforms
+ *  { loU, hiU, dimColorU, hotColorU }. */
+export function semanticColorNode(baseColor, score, semantic) {
+  const span = max(semantic.hiU.sub(semantic.loU), float(0.000001));
+  const t = clamp(score.sub(semantic.loU).div(span), float(0), float(1));
+  const color = mix(semantic.dimColorU, semantic.hotColorU, t);
+  return select(score.greaterThan(float(SEMANTIC_SCORE_DISABLED)), color, baseColor);
+}
+
+/** Below-threshold dots dim to SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER of base
+ *  alpha; disabled (unscored) dots keep base alpha. Paired with semanticColorNode. */
+export function semanticAlphaNode(baseAlpha, score, semantic) {
+  return select(
+    score.greaterThan(float(SEMANTIC_SCORE_DISABLED)),
+    select(
+      score.lessThan(semantic.loU),
+      baseAlpha.mul(float(SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER)),
+      baseAlpha,
+    ),
+    baseAlpha,
+  );
+}
 
 export function createSemanticScoreUniforms({
   cosineCeiling = 0.32,

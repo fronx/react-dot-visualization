@@ -57,6 +57,8 @@ import {
   buildSemanticScorePublishKernel,
   buildSemanticScoreSummaryKernel,
   createSemanticScoreUniforms,
+  semanticColorNode,
+  semanticAlphaNode,
 } from './semanticScoreKernels.js';
 import {
   createSemanticScoreDispatchJob,
@@ -104,7 +106,6 @@ const EMPTY_RADIUS_OVERRIDES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
 const NO_SEMANTIC_SCORE = SEMANTIC_SCORE_DISABLED;
-const SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER = 0.35;
 const DEFAULT_SEMANTIC_DIM_RGB = [0x2e / 255, 0x1f / 255, 0x0f / 255];
 const DEFAULT_SEMANTIC_HOT_RGB = [0xff / 255, 0xaa / 255, 0x55 / 255];
 const SEMANTIC_SCORE_CHUNK_FLOATS = 4_000_000;
@@ -838,24 +839,6 @@ function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke
   return m;
 }
 
-function semanticColorNode(baseColor, score, semantic) {
-  const span = max(semantic.hiU.sub(semantic.loU), float(0.000001));
-  const t = clamp(score.sub(semantic.loU).div(span), float(0), float(1));
-  const color = mix(semantic.dimColorU, semantic.hotColorU, t);
-  return select(score.greaterThan(float(NO_SEMANTIC_SCORE)), color, baseColor);
-}
-
-function semanticAlphaNode(baseAlpha, score, semantic) {
-  return select(
-    score.greaterThan(float(NO_SEMANTIC_SCORE)),
-    select(
-      score.lessThan(semantic.loU),
-      baseAlpha.mul(float(SEMANTIC_BELOW_THRESHOLD_ALPHA_MULTIPLIER)),
-      baseAlpha,
-    ),
-    baseAlpha,
-  );
-}
 
 export function R3FDotsWebGPU({
   data,
