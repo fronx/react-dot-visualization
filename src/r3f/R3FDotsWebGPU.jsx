@@ -470,6 +470,19 @@ function readChunkedPackedF16(matrixF16PackedChunks, dims, sourceIndex) {
   return 0;
 }
 
+function hasSemanticMatrixPayload(scoring) {
+  return !!(
+    scoring?.matrix
+    || scoring?.matrixF16
+    || scoring?.matrixF16Packed
+    || scoring?.matrixF16PackedChunks?.length
+  );
+}
+
+function semanticMatrixResourceKey(scoring) {
+  return scoring?.matrixKey == null ? null : String(scoring.matrixKey);
+}
+
 function makeSemanticMatrixF16PackedChunk(scoring, dims, baseRow, rowCount, matrixRowIndices = null) {
   const matrixF16 = scoring?.matrixF16;
   const matrixF16Packed = scoring?.matrixF16Packed;
@@ -617,6 +630,8 @@ function buildSemanticScoringResources(scoring, semantic, count) {
     );
   }
   return {
+    matrixKey: semanticMatrixResourceKey(scoring),
+    semantic,
     count: rowCount,
     dims,
     query,
@@ -882,18 +897,30 @@ export function R3FDotsWebGPU({
     } : null),
     [buffers, semanticLoU, semanticHiU, semanticDimColorU, semanticHotColorU],
   );
+  const semanticScoringResidentRef = useRef(null);
   const semanticScoring = useMemo(
-    () => (buffers && semantic && (
-      semanticGpuScoring?.matrix
-      || semanticGpuScoring?.matrixF16
-      || semanticGpuScoring?.matrixF16Packed
-      || semanticGpuScoring?.matrixF16PackedChunks?.length
-    )
-      ? buildSemanticScoringResources(semanticGpuScoring, semantic, buffers.N)
-      : null),
+    () => {
+      const matrixKey = semanticMatrixResourceKey(semanticGpuScoring);
+      if (buffers && semantic && hasSemanticMatrixPayload(semanticGpuScoring)) {
+        return buildSemanticScoringResources(semanticGpuScoring, semantic, buffers.N);
+      }
+      const resident = semanticScoringResidentRef.current;
+      if (
+        resident
+        && matrixKey
+        && resident.matrixKey === matrixKey
+        && resident.semantic === semantic
+        && resident.count === buffers?.N
+        && resident.dims === Math.floor(semanticGpuScoring?.dims ?? 0)
+      ) {
+        return resident;
+      }
+      return null;
+    },
     [
       buffers,
       semantic,
+      semanticGpuScoring?.matrixKey,
       semanticGpuScoring?.matrix,
       semanticGpuScoring?.matrixF16,
       semanticGpuScoring?.matrixF16Packed,
@@ -904,6 +931,20 @@ export function R3FDotsWebGPU({
       semanticGpuScoring?.debug,
     ],
   );
+  useEffect(() => {
+    semanticScoringResidentRef.current = semanticScoring;
+  }, [semanticScoring]);
+  useEffect(() => {
+    if (!semanticScoring) return;
+    const onResourcesReady = semanticGpuScoring?.onResourcesReady;
+    if (typeof onResourcesReady === 'function') {
+      onResourcesReady({
+        matrixKey: semanticScoring.matrixKey,
+        count: semanticScoring.count,
+        dims: semanticScoring.dims,
+      });
+    }
+  }, [semanticScoring, semanticGpuScoring?.onResourcesReady]);
   const semanticScoreDispatchRef = useRef(0);
   const semanticScoreHandledRef = useRef(0);
   const semanticSummaryReadRef = useRef(0);
@@ -914,12 +955,7 @@ export function R3FDotsWebGPU({
   const semanticMatchedInputRef = useRef(null);
   useEffect(() => {
     if (!semantic || !buffers) return;
-    const gpuScoringActive = !!(
-      semanticGpuScoring?.matrix
-      || semanticGpuScoring?.matrixF16
-      || semanticGpuScoring?.matrixF16Packed
-      || semanticGpuScoring?.matrixF16PackedChunks?.length
-    );
+    const gpuScoringActive = !!semanticScoring || hasSemanticMatrixPayload(semanticGpuScoring);
     const range = gpuScoringActive ? semanticGpuScoring?.range : semanticScores?.range;
     semantic.loU.value = Number.isFinite(range?.lo) ? range.lo : 0;
     semantic.hiU.value = Number.isFinite(range?.hi) ? range.hi : 1;
@@ -1017,7 +1053,15 @@ export function R3FDotsWebGPU({
       semanticScoring.summary.measure,
       semanticScoring.matched.measure,
     ]);
-  }, [semanticScoring, gl]);
+    const onResourcesDisposed = semanticGpuScoring?.onResourcesDisposed;
+    if (typeof onResourcesDisposed === 'function') {
+      onResourcesDisposed({
+        matrixKey: semanticScoring.matrixKey,
+        count: semanticScoring.count,
+        dims: semanticScoring.dims,
+      });
+    }
+  }, [semanticScoring, gl, semanticGpuScoring?.onResourcesDisposed]);
 
   useEffect(() => {
     if (!streamingPositions || !buffers) return;
