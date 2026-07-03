@@ -1034,17 +1034,15 @@ export function R3FDotsWebGPU({
     if (cosmetic) disposeStorageBuffers(gl, [cosmetic.colors, cosmetic.alphas, cosmetic.focus, cosmetic.scales]);
   }, [cosmetic, gl]);
 
-  // Entry ramp for the data-swap transition: per-dot ramp0 (1 = survivor,
-  // 0 = newcomer) plus the shared progress clock. Allocated only when the
-  // opt-in is active, so the default shader graph is unchanged.
+  // Entry ramp for an active data-swap transition: per-dot ramp0 (1 = survivor,
+  // 0 = newcomer) plus the shared progress clock.
   const entryProgressU = useMemo(() => uniform(float(1)), []);
   const entryRamp = useMemo(() => {
     if (!swapEnabled || !buffers) return null;
-    const swapSeed = swapSeedRef.current?.seedKey === seedKey ? swapSeedRef.current : null;
-    const ramp0 = swapSeed ? new Float32Array(swapSeed.ramp0) : new Float32Array(buffers.N).fill(1);
-    return { ramp0: instancedArray(ramp0, 'float'), progressU: entryProgressU };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buffers, swapEnabled, entryProgressU]);
+    const swapSeed = swapSeedRef.current;
+    if (!swapSeed || swapSeed.seedKey !== seedKey) return null;
+    return { ramp0: instancedArray(new Float32Array(swapSeed.ramp0), 'float'), progressU: entryProgressU };
+  }, [buffers, seedKey, swapEnabled, entryProgressU]);
   useEffect(() => () => {
     if (entryRamp) disposeStorageBuffers(gl, [entryRamp.ramp0]);
   }, [entryRamp, gl]);
