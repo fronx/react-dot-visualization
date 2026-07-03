@@ -346,6 +346,15 @@ export interface DotVisualizationR3FProps extends DotVisualizationCommonProps {
   semanticGpuScoring?: SemanticGpuScoringOptions | null;
   /** Fires when the settled positions have been applied visually (WebGPU). */
   onDecollisionVisualComplete?: (info: { count: number; reason: string; jobId: number }) => void;
+  /**
+   * WebGPU backend only, default off. When `data`/`dataKey` swap to a new
+   * layout, dots whose `id` exists in both layouts animate from their previous
+   * on-screen position to the new target instead of teleporting; newcomers
+   * ramp in (alpha + scale) over the same window; removed ids drop. Base
+   * decollision then runs on the new layout exactly as without the transition.
+   * `true` uses `transitionDuration`; `{ durationMs }` overrides the window.
+   */
+  dataSwapTransition?: boolean | { durationMs?: number };
   /** R3F render-loop mode for the WebGPU Canvas. */
   frameloop?: 'always' | 'demand' | 'never';
   /** WebGPU-only: solver iterations submitted per rendered frame. */

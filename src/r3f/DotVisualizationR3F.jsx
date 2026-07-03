@@ -104,6 +104,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     enableDecollisioning = true,
     decollisionEngine = 'auto',
     isIncrementalUpdate = false,
+    // WebGPU backend, default off: id-matched morph when data/dataKey swap to a
+    // new layout. `true` uses transitionDuration; `{ durationMs }` overrides.
+    dataSwapTransition = null,
     transitionDuration = 500,
     transitionEasing = d3.easeCubicOut,
     positionsAreIntermediate = false,
@@ -232,6 +235,13 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // HoverDetector publishes its pick logic here; R3FCamera's pan handler invokes
   // it on a genuine click (the single click-vs-drag authority).
   const clickControlRef = useRef(null);
+  // WebGPU decollision requests are consumed by the child useFrame loop, which
+  // can run before this component's passive data effect. Keep the scheduler's
+  // source ref current during render so a layout swap cannot launch from the
+  // previous point set.
+  if (backend === 'webgpu') {
+    dataRef.current = webgpuSeedData;
+  }
   const createWebgpuRenderer = useMemo(
     () => createSingleFlightWebGpuRendererFactory({
       // depth:false: this flat 2D scene writes no depth (materials are
@@ -252,6 +262,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     }),
     [webgpuBaseFixedIterations, webgpuSolverFrameBudgetMs, webgpuSolverIterationsPerFrame],
   );
+
+  const webgpuDataSwapTransition = useMemo(() => {
+    if (!dataSwapTransition) return null;
+    const durationMs = typeof dataSwapTransition === 'object' && Number.isFinite(dataSwapTransition.durationMs)
+      ? dataSwapTransition.durationMs
+      : transitionDuration;
+    return { durationMs: Math.max(1, durationMs) };
+  }, [dataSwapTransition, transitionDuration]);
 
   const { updateStablePositions, shouldUseStablePositions } = useStablePositions();
   const hasPositionsChanged = usePositionChangeDetection(defaultSize);
@@ -644,6 +662,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             semanticGpuScoring={semanticGpuScoring}
             positionsAreIntermediate={positionsAreIntermediate}
             decollisionEnabled={enableDecollisioning}
+            dataSwapTransition={webgpuDataSwapTransition}
             decollisionDebug={webgpuDecollisionDebug}
             onDecollisionVisualComplete={onDecollisionVisualComplete}
             gpuControlRef={gpuControlRef}

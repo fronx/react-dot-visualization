@@ -84,7 +84,7 @@ export function createDensityRenderTarget(width, height) {
 // Splat material: additive accumulation of (OKLab·w, w) per point, where the
 // weight w = perDotAlpha · gaussian. Weighting by alpha means filtered/dimmed
 // dots contribute proportionally less density (α≈0 → nothing).
-function createSplatMaterial({ positions, colors, alphas, semantic = null, pxPerWorldU, bandwidthPxU }) {
+function createSplatMaterial({ positions, colors, alphas, semantic = null, entryRamp = null, pxPerWorldU, bandwidthPxU }) {
   const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, depthTest: false });
   // True additive accumulation (src·1 + dst·1) for color AND weight — NOT
   // AdditiveBlending, which premultiplies rgb by srcAlpha.
@@ -110,7 +110,12 @@ function createSplatMaterial({ positions, colors, alphas, semantic = null, pxPer
   const baseAlpha = alphas.element(instanceIndex);
   const score = semantic ? semantic.scores.element(instanceIndex) : null;
   const color = semantic ? semanticColorNode(baseColor, score, semantic) : baseColor;
-  const alphaBase = semantic ? semanticAlphaNode(baseAlpha, score, semantic) : baseAlpha;
+  const semanticAlpha = semantic ? semanticAlphaNode(baseAlpha, score, semantic) : baseAlpha;
+  // Data-swap entry ramp (opt-in; see R3FDotsWebGPU): newcomers contribute
+  // density proportionally to the same ramp the crisp dot layer applies.
+  const alphaBase = entryRamp
+    ? semanticAlpha.mul(mix(entryRamp.progressU, float(1), entryRamp.ramp0.element(instanceIndex)))
+    : semanticAlpha;
   const lab = varying(linearToOKLab(color));
   const alpha = varying(alphaBase);
   const w = g.mul(alpha);
@@ -125,8 +130,8 @@ function createSplatMaterial({ positions, colors, alphas, semantic = null, pxPer
 }
 
 // One InstancedMesh in a private scene; rendered to the density RT each frame.
-export function createSplatScene({ count, positions, colors, alphas, semantic = null, pxPerWorldU, bandwidthPxU }) {
-  const material = createSplatMaterial({ positions, colors, alphas, semantic, pxPerWorldU, bandwidthPxU });
+export function createSplatScene({ count, positions, colors, alphas, semantic = null, entryRamp = null, pxPerWorldU, bandwidthPxU }) {
+  const material = createSplatMaterial({ positions, colors, alphas, semantic, entryRamp, pxPerWorldU, bandwidthPxU });
   const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), material, count);
   mesh.frustumCulled = false;
   const scene = new THREE.Scene();

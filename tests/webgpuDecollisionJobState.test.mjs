@@ -1,6 +1,51 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseBufferMismatchAction } from '../src/r3f/webgpuDecollisionJobState.js';
+import {
+  chooseBufferMismatchAction,
+  shouldDeferRequestForBuffers,
+} from '../src/r3f/webgpuDecollisionJobState.js';
+
+describe('WebGPU decollision request buffer gating', () => {
+  test('defers a growing sim request until live buffers catch up', () => {
+    assert.equal(
+      shouldDeferRequestForBuffers(
+        { type: 'sim', sourceData: [{}, {}, {}, {}] },
+        { N: 3 }
+      ),
+      true
+    );
+  });
+
+  test('allows sim requests once buffers cover the request snapshot', () => {
+    assert.equal(
+      shouldDeferRequestForBuffers(
+        { type: 'sim', sourceData: [{}, {}, {}] },
+        { N: 3 }
+      ),
+      false
+    );
+  });
+
+  test('does not defer shrinking/stale sim requests forever', () => {
+    assert.equal(
+      shouldDeferRequestForBuffers(
+        { type: 'sim', sourceData: [{}, {}] },
+        { N: 3 }
+      ),
+      false
+    );
+  });
+
+  test('ignores non-sim requests', () => {
+    assert.equal(
+      shouldDeferRequestForBuffers(
+        { type: 'lerp', target: [{}, {}, {}, {}] },
+        { N: 3 }
+      ),
+      false
+    );
+  });
+});
 
 describe('WebGPU decollision job buffer mismatch handling', () => {
   test('continues when the job is already bound to the live buffers', () => {

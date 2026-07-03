@@ -26,7 +26,7 @@
  * dotAppearance.js — the same source of truth R3FDots uses — so hover, dim, and
  * focus behave identically across backends; only the upload mechanism differs.
  */
-import React, { useMemo, useEffect, useRef } from 'react';
+import React, { useMemo, useEffect, useRef, useReducer } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
 import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max, mix, clamp } from 'three/tsl';
@@ -47,6 +47,7 @@ import {
   resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus, resolveHoverRadius,
 } from './dotAppearance.js';
 import { buildLerpKernels } from './lerpKernels.js';
+import { seedKeyFor, buildSwapSeed } from './dataSwapTransition.js';
 import {
   SEMANTIC_SCORE_DISABLED,
   SEMANTIC_SCORE_SUMMARY_BUCKETS,
@@ -69,7 +70,7 @@ import { createKeyframePlayer, jumpToLastKeyframe } from './keyframePlayer.js';
 import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
-import { chooseBufferMismatchAction } from './webgpuDecollisionJobState.js';
+import { chooseBufferMismatchAction, shouldDeferRequestForBuffers } from './webgpuDecollisionJobState.js';
 
 // Safety caps in solver iterations — the velocity fixpoint (see the convergence
 // metric below) normally settles a run earlier. Several iterations per frame
@@ -181,17 +182,21 @@ function writePackedPositions(array, packed, indices = null, transform = null) {
 // set (data identity) and kept across constraint changes — so focus restyle
 // never re-seeds positions. Seeded from the raw input so the first paint shows
 // real positions before the base decollision runs.
-function buildSeedBuffers(data) {
+// With a data-swap transition seed (see dataSwapTransition.js), positions and
+// fromPos start at the OUTGOING layout's on-screen positions and targetPos
+// holds the new raw layout, so the swap job's fromPos→targetPos mix lands
+// bit-equal on the layout a plain seed would have painted.
+function buildSeedBuffers(data, swapSeed = null) {
   const N = data.length;
   const pos = new Float32Array(N * 2);
   writePositions(pos, data);
   return {
     N,
-    positions: instancedArray(pos, 'vec2'),
+    positions: instancedArray(swapSeed ? new Float32Array(swapSeed.from) : pos, 'vec2'),
     basePos: instancedArray(new Float32Array(pos), 'vec2'),
     velocities: instancedArray(new Float32Array(N * 2), 'vec2'),
-    fromPos: instancedArray(new Float32Array(N * 2), 'vec2'),
-    targetPos: instancedArray(new Float32Array(N * 2), 'vec2'),
+    fromPos: instancedArray(swapSeed ? new Float32Array(swapSeed.from) : new Float32Array(N * 2), 'vec2'),
+    targetPos: instancedArray(swapSeed ? pos : new Float32Array(N * 2), 'vec2'),
   };
 }
 
@@ -805,7 +810,7 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
-function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU }) {
+function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null }) {
   const baseColor = cosmetic.colors.element(indexNode);
   const semanticScore = semantic ? semantic.scores.element(indexNode) : null;
   const instanceColor = semantic
@@ -815,9 +820,14 @@ function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke
   const instanceAlpha = semantic
     ? semanticAlphaNode(baseAlpha, semanticScore, semantic)
     : baseAlpha;
+  // Data-swap entry ramp (opt-in): survivors carry ramp0=1 (factor 1 always);
+  // newcomers carry ramp0=0 and grow in with the transition clock.
+  const entryFactor = entryRamp
+    ? mix(entryRamp.progressU, float(1), entryRamp.ramp0.element(indexNode))
+    : null;
   const material = createBevelStrokeNodeMaterial({
     instanceColor,
-    instanceAlpha,
+    instanceAlpha: entryFactor ? instanceAlpha.mul(entryFactor) : instanceAlpha,
     instanceFocus: cosmetic.focus.element(indexNode),
     strokeColor: dotStroke,
     strokeWidthFraction: dotStrokeWidthFraction,
@@ -831,7 +841,9 @@ function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke
     max(rawScale, float(MIN_SCREEN_PX).div(pxPerWorldU)),
     float(0),
   );
-  const scale = scaleMul ? baseScale.mul(scaleMul) : baseScale;
+  const modScale = scaleMul ? baseScale.mul(scaleMul) : baseScale;
+  // Entry ramp scales AFTER the min-px clamp so newcomers genuinely grow from 0.
+  const scale = entryFactor ? modScale.mul(entryFactor) : modScale;
   const pos = buffers.positions.element(indexNode);
   material.positionNode = vec3(positionLocal.xy.mul(scale.mul(2.0)).add(pos), 0);
   const m = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), material, count);
@@ -841,8 +853,8 @@ function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke
 
 
 export function R3FDotsWebGPU({
-  data,
-  dataKey = null,
+  data: incomingData,
+  dataKey: incomingDataKey = null,
   streamingPositions = null,
   dotStyles,
   radiusOverrides = EMPTY_RADIUS_OVERRIDES,
@@ -859,11 +871,70 @@ export function R3FDotsWebGPU({
   positionsAreIntermediate = false,
   decollisionEnabled = true,
   decollisionDebug = false,
+  // Opt-in id-matched data-swap morph: null (off) or { durationMs } — see
+  // dataSwapTransition.js and DotVisualizationR3F, which normalizes the prop.
+  dataSwapTransition = null,
   onDecollisionVisualComplete,
   gpuControlRef = null,
   pickControlRef = null,
 }) {
   const gl = useThree((s) => s.gl);
+
+  // ── Opt-in data-swap transition (default off: pass-through) ──────────────
+  // On a qualifying seed-identity change, keep rendering the OUTGOING layout
+  // while its live GPU positions are read back (a frame or two), then flip to
+  // the new layout with buffers seeded at the old positions and one GPU lerp
+  // to the new targets (newcomers ramp in, removed ids drop). Everything below
+  // this block sees `data`/`dataKey` as the layout currently driving the
+  // buffers, so the data.length === buffers.N invariant holds during the hold.
+  const swapEnabled = !!dataSwapTransition;
+  const swapRef = useRef(null); // { phase: 'read'|'reading'|'ready', oldData, oldDataKey, oldPositions }
+  const swapSeedRef = useRef(null); // { seedKey, from, ramp0, durationMs } consumed by the buffers memo
+  const displayedRef = useRef(null); // identity currently driving the buffers
+  const [, bumpSwap] = useReducer((c) => c + 1, 0);
+
+  let data = incomingData;
+  let dataKey = incomingDataKey;
+  if (!swapEnabled) {
+    swapRef.current = null;
+  } else {
+    const displayed = displayedRef.current;
+    const incomingKey = seedKeyFor(incomingData, incomingDataKey);
+    const displayedKey = displayed ? seedKeyFor(displayed.data, displayed.dataKey) : null;
+    const swappable = !positionsAreIntermediate && !streamingPositions
+      && displayedKey !== null && displayedKey !== 'empty' && incomingKey !== 'empty';
+    const pending = swapRef.current;
+    if (pending && pending.phase === 'ready') {
+      // Flip: seed the new buffers from the captured old positions (unless the
+      // swap degenerated — readback failed, identity reverted, no overlap).
+      if (swappable && incomingKey !== displayedKey && pending.oldPositions && incomingData?.length) {
+        const seed = buildSwapSeed({
+          newData: incomingData,
+          oldData: pending.oldData,
+          oldPositions: pending.oldPositions,
+        });
+        if (seed.survivors > 0) {
+          swapSeedRef.current = {
+            seedKey: incomingKey,
+            from: seed.from,
+            ramp0: seed.ramp0,
+            durationMs: Number.isFinite(dataSwapTransition.durationMs)
+              ? Math.max(1, dataSwapTransition.durationMs)
+              : 500,
+          };
+        }
+      }
+      swapRef.current = null;
+    } else if (pending) {
+      data = pending.oldData; // hold the outgoing layout during readback
+      dataKey = pending.oldDataKey;
+    } else if (swappable && incomingKey !== displayedKey) {
+      swapRef.current = { phase: 'read', oldData: displayed.data, oldDataKey: displayed.dataKey };
+      data = displayed.data;
+      dataKey = displayed.dataKey;
+    }
+  }
+  displayedRef.current = { data, dataKey };
 
   const cosmeticOpts = {
     defaultColor, defaultSize, defaultOpacity, dotStyles, radiusOverrides,
@@ -878,24 +949,58 @@ export function R3FDotsWebGPU({
   // needing a fresh position buffer. Keying on raw coords would rebuild at the
   // streaming→settled edge and orphan the base sim mid-flight, so consumers pass
   // a stable layout/scope identity instead.
-  const seedKey = useMemo(
-    () => (!data || data.length === 0
-      ? 'empty'
-      : `${dataKey ?? 'default'}|count:${data.length}`),
-    [data, dataKey],
-  );
+  const seedKey = useMemo(() => seedKeyFor(data, dataKey), [data, dataKey]);
 
   // Persistent per-seed buffers — rebuilt only when the seed identity changes
   // (new point set / streaming flush / re-projection), never on cosmetic restyle
   // or focus. buildSeedBuffers reads only x/y/length, all captured by seedKey.
   const buffers = useMemo(
-    () => (data && data.length ? buildSeedBuffers(data) : null),
+    () => (data && data.length
+      ? buildSeedBuffers(data, swapSeedRef.current?.seedKey === seedKey ? swapSeedRef.current : null)
+      : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [seedKey],
   );
   useEffect(() => () => {
     if (buffers) disposeStorageBuffers(gl, [buffers.positions, buffers.basePos, buffers.velocities, buffers.fromPos, buffers.targetPos]);
   }, [buffers, gl]);
+
+  // Capture the outgoing layout's live GPU positions for a pending swap. Runs
+  // on the render that created the pending entry (an incoming-identity change);
+  // `buffers` here is still the outgoing seed because the render above held the
+  // displayed identity. The flip happens via bumpSwap once the copy resolves.
+  useEffect(() => {
+    if (!swapEnabled) return;
+    const pending = swapRef.current;
+    if (!pending || pending.phase !== 'read') return;
+    pending.phase = 'reading';
+    const finish = (oldPositions) => {
+      if (swapRef.current !== pending) return;
+      pending.oldPositions = oldPositions;
+      pending.phase = 'ready';
+      bumpSwap();
+    };
+    if (!buffers) {
+      finish(null);
+      return;
+    }
+    let readback;
+    try {
+      readback = gl.getArrayBufferAsync(buffers.positions.value);
+    } catch {
+      // Outgoing buffers never reached the GPU (no paint/compute yet — throws
+      // synchronously): nothing was on screen to morph from; plain seed.
+      finish(null);
+      return;
+    }
+    readback.then((ab) => finish(new Float32Array(ab)), () => finish(null));
+  }, [swapEnabled, incomingData, incomingDataKey, buffers, gl]);
+
+  // Drop the swap seed once the buffers built from it have committed, so a
+  // later rebuild of the same seedKey can never resurrect stale positions.
+  useEffect(() => {
+    if (swapSeedRef.current?.seedKey === seedKey) swapSeedRef.current = null;
+  }, [buffers, seedKey]);
 
   // While UMAP streams, write the moving coords into the persistent buffer in
   // place rather than reallocating. Safe because the scheduler holds the sim off
@@ -928,6 +1033,21 @@ export function R3FDotsWebGPU({
   useEffect(() => () => {
     if (cosmetic) disposeStorageBuffers(gl, [cosmetic.colors, cosmetic.alphas, cosmetic.focus, cosmetic.scales]);
   }, [cosmetic, gl]);
+
+  // Entry ramp for the data-swap transition: per-dot ramp0 (1 = survivor,
+  // 0 = newcomer) plus the shared progress clock. Allocated only when the
+  // opt-in is active, so the default shader graph is unchanged.
+  const entryProgressU = useMemo(() => uniform(float(1)), []);
+  const entryRamp = useMemo(() => {
+    if (!swapEnabled || !buffers) return null;
+    const swapSeed = swapSeedRef.current?.seedKey === seedKey ? swapSeedRef.current : null;
+    const ramp0 = swapSeed ? new Float32Array(swapSeed.ramp0) : new Float32Array(buffers.N).fill(1);
+    return { ramp0: instancedArray(ramp0, 'float'), progressU: entryProgressU };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buffers, swapEnabled, entryProgressU]);
+  useEffect(() => () => {
+    if (entryRamp) disposeStorageBuffers(gl, [entryRamp.ramp0]);
+  }, [entryRamp, gl]);
 
   const semanticLoU = useMemo(() => uniform(float(0)), []);
   const semanticHiU = useMemo(() => uniform(float(1)), []);
@@ -1235,6 +1355,7 @@ export function R3FDotsWebGPU({
   // plus its resources/clock). handledReqId tracks which request we've consumed.
   const jobRef = useRef({ mode: 'idle' });
   const handledReqId = useRef(0);
+  const deferredReqId = useRef(0);
   const hasSettledGpuLayoutRef = useRef(false);
   const snapshotKeysRef = useRef(new Set());
   useEffect(() => {
@@ -1251,6 +1372,15 @@ export function R3FDotsWebGPU({
     prevBuffersRef.current = buffers;
     hasSettledGpuLayoutRef.current = false;
     snapshotKeysRef.current.clear();
+    const swapSeed = swapSeedRef.current;
+    if (buffers && swapSeed && swapSeed.seedKey === seedKey) {
+      // Buffers were seeded at the outgoing layout's positions; play the morph
+      // before any scheduler request is consumed (see the useFrame hold). Not
+      // finishJobIdle on completion: the morphed layout is the raw projection,
+      // not a settled decollision, so hasSettledGpuLayoutRef stays false.
+      entryProgressU.value = 0;
+      jobRef.current = { mode: 'swap', buffers, t0: null, duration: swapSeed.durationMs };
+    }
   }
 
   // Per-seed cache of sim resources keyed by grid signature. Reused across
@@ -1647,10 +1777,31 @@ export function R3FDotsWebGPU({
     }
 
     const channel = gpuControlRef && gpuControlRef.current;
-    if (channel && channel.request && channel.request.id !== handledReqId.current) {
+    // Data-swap transition hold: while the outgoing positions are being read
+    // back or the morph is playing, leave scheduler requests unconsumed (the
+    // channel keeps only the latest — same supersession semantics as a slow
+    // first frame) and freeze the current job so it cannot settle against a
+    // layout that is about to be replaced. The pending request is consumed on
+    // the frame after the morph lands bit-equal on the new raw layout, so the
+    // deferred base decollision seeds from exactly what is on screen.
+    const swapHold = swapEnabled && (swapRef.current !== null || jobRef.current.mode === 'swap');
+    if (!swapHold && channel && channel.request && channel.request.id !== handledReqId.current) {
+      if (shouldDeferRequestForBuffers(channel.request, buffers)) {
+        if (decollisionDebug && deferredReqId.current !== channel.request.id) {
+          deferredReqId.current = channel.request.id;
+          console.log(
+            `[rdv-decollision] defer id=${channel.request.id}`
+            + ` sourceN=${channel.request.sourceData?.length ?? 'n/a'}`
+            + ` bufferN=${buffers?.N ?? 'none'}`,
+          );
+        }
+        return;
+      }
+      deferredReqId.current = 0;
       handledReqId.current = channel.request.id;
       startJob(channel.request);
     }
+    if (swapEnabled && swapRef.current !== null) return;
 
     const job = jobRef.current;
     // The point set can change under an in-flight job: the final streamed frame
@@ -1672,6 +1823,23 @@ export function R3FDotsWebGPU({
       } else if (mismatchAction === 'complete-live') {
         finishJobIdle(null, job.onComplete);
       } else {
+        jobRef.current = { mode: 'idle' };
+      }
+      return;
+    }
+    if (job.mode === 'swap') {
+      // Id-matched data-swap morph: one eased fromPos→targetPos mix per frame,
+      // sharing the transition clock with the newcomer entry ramp. t=1 lands
+      // positions bit-equal on targetPos (the raw new layout).
+      const now = performance.now();
+      if (job.t0 == null) job.t0 = now;
+      const t = Math.min(1, (now - job.t0) / job.duration);
+      const e = easeCubicOut(t);
+      tU.value = e;
+      entryProgressU.value = e;
+      if (lerpKernels) gl.compute(lerpKernels.mixStep);
+      if (t >= 1) {
+        entryProgressU.value = 1;
         jobRef.current = { mode: 'idle' };
       }
       return;
@@ -1774,7 +1942,10 @@ export function R3FDotsWebGPU({
           current.metricReadbackSumMs = (current.metricReadbackSumMs || 0) + metricReadbackMs;
           current.metricReadbackMaxMs = Math.max(current.metricReadbackMaxMs || 0, metricReadbackMs);
           current.lastMetric = metric;
-          if (metric <= CONVERGED_MAX_VELOCITY_SQUARED_U32) {
+          // Skip settling while a data-swap hold is active: the layout is about
+          // to be replaced and its completion callback belongs to a superseded
+          // launch. The flip's buffer-mismatch handling retires the job instead.
+          if (metric <= CONVERGED_MAX_VELOCITY_SQUARED_U32 && !(swapEnabled && swapRef.current)) {
             current.exitReason = 'converged';
             settleSimJob(current);
           }
@@ -1809,10 +1980,10 @@ export function R3FDotsWebGPU({
     if (!buffers || !cosmetic) return null;
     return createSplatScene({
       count: buffers.N, positions: buffers.positions,
-      colors: cosmetic.colors, alphas: cosmetic.alphas, semantic,
+      colors: cosmetic.colors, alphas: cosmetic.alphas, semantic, entryRamp,
       pxPerWorldU, bandwidthPxU,
     });
-  }, [buffers, cosmetic, semantic, pxPerWorldU, bandwidthPxU]);
+  }, [buffers, cosmetic, semantic, entryRamp, pxPerWorldU, bandwidthPxU]);
   useEffect(() => () => disposeMesh(splat?.mesh), [splat]);
 
   const densityMesh = useMemo(
@@ -1844,19 +2015,19 @@ export function R3FDotsWebGPU({
     // Collapse the hovered instance to zero size so it draws once: the overlay
     // redraws it on top (the canvas renderer draws the hovered dot last).
     const scaleMul = select(instanceIndex.equal(hoveredIndexU), float(0), float(1));
-    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU });
-  }, [buffers, cosmetic, semantic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
+    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp });
+  }, [buffers, cosmetic, semantic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(mesh), [mesh]);
 
   // Redraw the hovered dot after the main mesh (renderOrder 1) so it sits on top
   // of overlapping dots, matching the canvas renderer.
   const hoverMesh = useMemo(() => {
     if (!buffers || !cosmetic || !semantic) return null;
-    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU });
+    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, entryRamp });
     m.renderOrder = 1;
     m.visible = false;
     return m;
-  }, [buffers, cosmetic, semantic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU]);
+  }, [buffers, cosmetic, semantic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(hoverMesh), [hoverMesh]);
 
   // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────
