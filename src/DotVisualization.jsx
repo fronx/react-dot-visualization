@@ -131,6 +131,7 @@ const DotVisualization = forwardRef((props, ref) => {
     scopeKey = 'default',
     constraintKey = '',
     zoomExtent = [0.5, 20],
+    scrollZoomModifier = 'meta-or-alt',
     margin = 0.1,
     dotStroke = "#111",
     dotStrokeWidth = 0.2,
@@ -546,6 +547,7 @@ const DotVisualization = forwardRef((props, ref) => {
         contentRef,
         canvasRenderer,
         zoomExtent,
+        scrollZoomModifier,
         defaultSize,
         fitMargin,
         occludeLeft,
@@ -612,6 +614,7 @@ const DotVisualization = forwardRef((props, ref) => {
 
     zoomManager.current.updateConfig({
       zoomExtent,
+      scrollZoomModifier,
       defaultSize,
       fitMargin,
       occludeLeft,
@@ -624,7 +627,7 @@ const DotVisualization = forwardRef((props, ref) => {
     if (viewBox) {
       zoomManager.current.setViewBox(viewBox);
     }
-  }, [zoomExtent, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
+  }, [zoomExtent, scrollZoomModifier, viewBox, useCanvas, defaultSize, fitMargin, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
   // Handle container resize. ResizeObserver fires on any size change of the
   // SVG's layout box — window resize, parent flex/grid reflow, sibling

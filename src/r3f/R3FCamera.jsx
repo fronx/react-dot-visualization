@@ -25,7 +25,7 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-export function R3FCamera({ onTransformChange, data = [], interactionRef = null, clickControlRef = null }) {
+export function R3FCamera({ onTransformChange, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt' }) {
   const controlsRef = useRef(null);
   const { camera, gl, size } = useThree();
 
@@ -90,7 +90,7 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
       event.preventDefault();
       event.stopPropagation();
 
-      const gesture = classifyWheelGesture(event);
+      const gesture = classifyWheelGesture(event, scrollZoomModifier);
       const rect = canvas.getBoundingClientRect();
 
       if (gesture === 'scroll-pan') {
@@ -137,7 +137,7 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
 
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
-  }, [camera, gl, size, maxZ]);
+  }, [camera, gl, size, maxZ, scrollZoomModifier]);
 
   return (
     <OrbitControls

@@ -22,12 +22,17 @@ import {
 /**
  * Classify wheel events into gesture types for intuitive trackpad behavior.
  * - ctrlKey: pinch-to-zoom on trackpad (browser sends ctrlKey + small deltaY)
- * - metaKey/altKey: modifier + scroll = zoom
+ * - configured modifier + scroll = zoom
  * - plain scroll: pan
  */
-function classifyWheelGesture(event) {
+function classifyWheelGesture(event, scrollZoomModifier) {
   if (event.ctrlKey) return 'pinch';
-  if (event.metaKey || event.altKey) return 'scroll-zoom';
+  const modifierHeld = scrollZoomModifier === 'meta'
+    ? event.metaKey
+    : scrollZoomModifier === 'alt'
+      ? event.altKey
+      : event.metaKey || event.altKey;
+  if (modifierHeld) return 'scroll-zoom';
   return 'scroll-pan';
 }
 
@@ -55,6 +60,7 @@ export class ZoomManager {
     this.occludeTop = options.occludeTop || 0;
     this.occludeBottom = options.occludeBottom || 0;
     this.useCanvas = options.useCanvas || false;
+    this.scrollZoomModifier = options.scrollZoomModifier || 'meta-or-alt';
 
     // State
     this.transform = options.initialTransform
@@ -118,7 +124,7 @@ export class ZoomManager {
     event.preventDefault();
     event.stopPropagation();
 
-    const gesture = classifyWheelGesture(event);
+    const gesture = classifyWheelGesture(event, this.scrollZoomModifier);
     const t = this.transform;
 
     // Convert screen pixels to viewBox units

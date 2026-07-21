@@ -133,6 +133,7 @@ Test the interactions:
 | `onZoomEnd` | `Function` | - | Callback when zoom ends: `(event) => {}` |
 | `enableCollisionDetection` | `Boolean` | `true` | Enable D3 force simulation to prevent dot overlap |
 | `zoomExtent` | `Array` | `[0.7, 10]` | Min/max zoom levels `[min, max]` |
+| `scrollZoomModifier` | `'meta' \| 'alt' \| 'meta-or-alt'` | `'meta-or-alt'` | Modifier accepted for scroll zoom; trackpad pinch is unaffected |
 | `margin` | `Number` | `0.1` | Margin around data bounds as fraction (0.1 = 10% margin) |
 | `dotStroke` | `String` | `"#111"` | Default stroke color for dots |
 | `dotStrokeWidth` | `Number` | `0.2` | Default stroke width for dots |

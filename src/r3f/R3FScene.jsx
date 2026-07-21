@@ -435,6 +435,7 @@ export function R3FScene({
   setCameraRef,
   liveTransitionDataRef,
   blockHoverDuringInteraction = false,
+  scrollZoomModifier = 'meta-or-alt',
 }) {
   const dataMap = useMemo(() => {
     const map = new Map();
@@ -465,7 +466,7 @@ export function R3FScene({
       />
       <CameraReporter reportRef={reportCameraRef} onCameraStateChange={onCameraStateChange} />
       {setCameraRef && <CameraSetter setCameraRef={setCameraRef} />}
-      <R3FCamera onTransformChange={handleTransformChange} data={data} interactionRef={interactionRef} clickControlRef={clickControlRef} />
+      <R3FCamera onTransformChange={handleTransformChange} data={data} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} />
 
       {showEdges && edges.length > 0 && (
         <R3FEdges

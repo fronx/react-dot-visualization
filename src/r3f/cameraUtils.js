@@ -9,9 +9,14 @@ const ZOOM_FACTOR_BASE = 1.003;
 const PINCH_ZOOM_MULTIPLIER = 3;
 const DRAG_THRESHOLD = 4;
 
-export function classifyWheelGesture(event) {
+export function classifyWheelGesture(event, scrollZoomModifier = 'meta-or-alt') {
   if (event.ctrlKey) return 'pinch';
-  if (event.metaKey || event.altKey) return 'scroll-zoom';
+  const modifierHeld = scrollZoomModifier === 'meta'
+    ? event.metaKey
+    : scrollZoomModifier === 'alt'
+      ? event.altKey
+      : event.metaKey || event.altKey;
+  if (modifierHeld) return 'scroll-zoom';
   return 'scroll-pan';
 }
 
