@@ -24,6 +24,10 @@ import { useLatest } from '../useLatest.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const EMPTY_RADIUS_OVERRIDES = new Map();
+// Keep the WebGPU map supersampled even on low-DPI displays. Using native DPR
+// made the density render target drop from 2x to 1x after a cross-display move,
+// visibly replacing the sharper in-flight frame with a blobbier settled one.
+const WEBGPU_MAP_DPR = 2;
 
 // Filter to finite-coordinate items and assign fallback ids. Shared by the
 // initial processedData seed and the WebGPU seed memo so both produce the same
@@ -625,7 +629,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           flat
           linear
           frameloop={frameloop}
-          dpr={[1, 2]}
+          dpr={WEBGPU_MAP_DPR}
           camera={{
             fov: CAMERA_FOV_DEGREES,
             near: 0.01,
