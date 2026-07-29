@@ -21,9 +21,11 @@ import { useStablePositions } from '../useStablePositions.js';
 import { usePositionChangeDetection } from '../usePositionChangeDetection.js';
 import { resolveDataEffectPositions } from '../DotVisualization.jsx';
 import { useLatest } from '../useLatest.js';
+import { mergeDotStyleMaps } from './dynamicDotStyles.js';
 
 const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const EMPTY_RADIUS_OVERRIDES = new Map();
+const EMPTY_DYNAMIC_DOT_STYLES = new Map();
 // Keep the WebGPU map supersampled even on low-DPI displays. Using native DPR
 // made the density render target drop from 2x to 1x after a cross-display move,
 // visibly replacing the sharper in-flight frame with a blobbier settled one.
@@ -82,6 +84,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     streamingPositions = null,
     edges = [],
     dotStyles = new Map(),
+    dynamicDotStyles = EMPTY_DYNAMIC_DOT_STYLES,
     defaultColor = null,
     defaultSize = 2,
     defaultOpacity = 0.7,
@@ -161,6 +164,12 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     backend === 'webgpu' ? [] : validateData(data),
   );
   const [hoveredId, setHoveredId] = useState(null);
+  const renderedDotStyles = useMemo(
+    () => (backend === 'webgpu'
+      ? dotStyles
+      : mergeDotStyleMaps(dotStyles, dynamicDotStyles)),
+    [backend, dotStyles, dynamicDotStyles],
+  );
 
   // The WebGPU dots layer is seeded from the validated input and then owns
   // position animation on the GPU. The React data surface in the WebGPU branch
@@ -654,6 +663,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             dataKey={dataKey}
             streamingPositions={streamingPositions}
             dotStyles={dotStyles}
+            dynamicDotStyles={dynamicDotStyles}
             radiusOverrides={radiusOverrides}
             defaultSize={defaultSize}
             defaultColor={defaultColor}
@@ -707,7 +717,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           <R3FScene
             data={processedData}
             edges={edges}
-            dotStyles={dotStyles}
+            dotStyles={renderedDotStyles}
             defaultColor={defaultColor}
             defaultSize={defaultSize}
             defaultOpacity={defaultOpacity}

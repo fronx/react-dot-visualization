@@ -71,6 +71,12 @@ import { usePulseAnimation } from '../usePulseAnimation.js';
 import { calculateAdaptiveRingRadius } from '../pulseRingUtils.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { chooseBufferMismatchAction, shouldDeferRequestForBuffers } from './webgpuDecollisionJobState.js';
+import {
+  collectChangedDynamicStyleIds,
+  markAttributeIndicesForUpdate,
+  mergeDotStyleMaps,
+  resolveLayeredDotStyle,
+} from './dynamicDotStyles.js';
 
 // Safety caps in solver iterations — the velocity fixpoint (see the convergence
 // metric below) normally settles a run earlier. Several iterations per frame
@@ -104,6 +110,7 @@ const MIN_SCREEN_PX = 1.5;
 
 const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
+const EMPTY_DYNAMIC_DOT_STYLES = new Map();
 const _color = new THREE.Color();
 const NO_HOVER_INDEX = 0xffffffff; // out of range: matches no instance
 const NO_SEMANTIC_SCORE = SEMANTIC_SCORE_DISABLED;
@@ -738,38 +745,56 @@ function updateSemanticScoringInputBuffers(resources, scoring) {
 // rules (dotAppearance.js) and upload them. Identical rule set to R3FDots'
 // applyDotStylesToInstances — the renderers differ only in the write target.
 function writeCosmetics(cosmetic, data, opts) {
-  const {
-    defaultColor, defaultSize, defaultOpacity, dotStyles, radiusOverrides,
-    hoveredId, hoverSizeMultiplier, hoverOpacity, hideUnseen = false,
-  } = opts;
   const colAttr = cosmetic.colors.value;
   const alphaAttr = cosmetic.alphas.value;
   const focusAttr = cosmetic.focus.value;
   const scaleAttr = cosmetic.scales.value;
-  const col = colAttr.array;
-  const alpha = alphaAttr.array;
-  const focus = focusAttr.array;
-  const scale = scaleAttr.array;
   for (let i = 0; i < data.length; i++) {
-    const item = data[i];
-    const style = (dotStyles && dotStyles.get(item.id)) || EMPTY_STYLE;
-    const isHovered = item.id === hoveredId;
-    const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
-    _color.set(resolveFill(item, style, defaultColor));
-    col[i * 3] = _color.r; col[i * 3 + 1] = _color.g; col[i * 3 + 2] = _color.b;
-    alpha[i] = hideUnseen ? 0 : resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
-    focus[i] = resolveFocus(style);
-    scale[i] = hideUnseen ? 0 : resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+    writeCosmetic(cosmetic, data, i, opts);
   }
+  // Declare the full ranges explicitly. A pulse/hover effect can append sparse
+  // ranges before the renderer consumes this update; leaving the range list
+  // empty would let that later append accidentally turn the pending full write
+  // into a partial upload.
+  colAttr.addUpdateRange(0, data.length * 3);
+  alphaAttr.addUpdateRange(0, data.length);
+  focusAttr.addUpdateRange(0, data.length);
+  scaleAttr.addUpdateRange(0, data.length);
   colAttr.needsUpdate = true;
   alphaAttr.needsUpdate = true;
   focusAttr.needsUpdate = true;
   scaleAttr.needsUpdate = true;
 }
 
+function writeCosmetic(cosmetic, data, index, opts) {
+  if (index === undefined || index < 0 || index >= data.length) return false;
+  const {
+    defaultColor, defaultSize, defaultOpacity, dotStyles, dynamicDotStyles,
+    radiusOverrides, hoveredId, hoverSizeMultiplier, hoverOpacity,
+    hideUnseen = false,
+  } = opts;
+  const item = data[index];
+  const style = resolveLayeredDotStyle(item.id, dotStyles, dynamicDotStyles);
+  const isHovered = item.id === hoveredId;
+  const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
+  _color.set(resolveFill(item, style, defaultColor));
+  const c = index * 3;
+  cosmetic.colors.value.array[c] = _color.r;
+  cosmetic.colors.value.array[c + 1] = _color.g;
+  cosmetic.colors.value.array[c + 2] = _color.b;
+  cosmetic.alphas.value.array[index] = hideUnseen
+    ? 0
+    : resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
+  cosmetic.focus.value.array[index] = resolveFocus(style);
+  cosmetic.scales.value.array[index] = hideUnseen
+    ? 0
+    : resolveScale(baseSize, isHovered, hoverSizeMultiplier);
+  return true;
+}
+
 function revealStreamingCosmetics(cosmetic, data, indices, opts) {
   const {
-    defaultSize, defaultOpacity, dotStyles, radiusOverrides, hoveredId,
+    defaultSize, defaultOpacity, dotStyles, dynamicDotStyles, radiusOverrides, hoveredId,
     hoverSizeMultiplier, hoverOpacity,
   } = opts;
   const alpha = cosmetic.alphas.value.array;
@@ -777,7 +802,7 @@ function revealStreamingCosmetics(cosmetic, data, indices, opts) {
   const revealOne = (i) => {
     if (i < 0 || i >= data.length) return;
     const item = data[i];
-    const style = (dotStyles && dotStyles.get(item.id)) || EMPTY_STYLE;
+    const style = resolveLayeredDotStyle(item.id, dotStyles, dynamicDotStyles);
     const isHovered = item.id === hoveredId;
     const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
     alpha[i] = resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
@@ -795,11 +820,11 @@ function revealStreamingCosmetics(cosmetic, data, indices, opts) {
 function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
   if (index === undefined || index < 0 || index >= data.length) return false;
   const {
-    defaultSize, defaultOpacity, dotStyles, radiusOverrides,
+    defaultSize, defaultOpacity, dotStyles, dynamicDotStyles, radiusOverrides,
     hoverSizeMultiplier, hoverOpacity,
   } = opts;
   const item = data[index];
-  const style = (dotStyles && dotStyles.get(item.id)) || EMPTY_STYLE;
+  const style = resolveLayeredDotStyle(item.id, dotStyles, dynamicDotStyles);
   const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
   cosmetic.alphas.value.array[index] = resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
   cosmetic.scales.value.array[index] = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
@@ -857,6 +882,7 @@ export function R3FDotsWebGPU({
   dataKey: incomingDataKey = null,
   streamingPositions = null,
   dotStyles,
+  dynamicDotStyles = EMPTY_DYNAMIC_DOT_STYLES,
   radiusOverrides = EMPTY_RADIUS_OVERRIDES,
   defaultSize = 6,
   defaultColor = null,
@@ -937,7 +963,7 @@ export function R3FDotsWebGPU({
   displayedRef.current = { data, dataKey };
 
   const cosmeticOpts = {
-    defaultColor, defaultSize, defaultOpacity, dotStyles, radiusOverrides,
+    defaultColor, defaultSize, defaultOpacity, dotStyles, dynamicDotStyles, radiusOverrides,
     hoveredId, hoverSizeMultiplier, hoverOpacity,
     hideUnseen: !!streamingPositions?.hideUnseen,
   };
@@ -2032,12 +2058,26 @@ export function R3FDotsWebGPU({
   // Same machinery as R3FDots: usePulseAnimation drives a phase clock, this
   // useFrame reads it and writes pulsing dots' size/opacity into the cosmetic
   // buffers + drives a separate ring layer.
-  const getPulseState = usePulseAnimation(dotStyles, undefined, false, true);
+  // Preserve the public `dotStyles.pulse` API while keeping its scan off the
+  // transient path. Static styles are filtered only when that map changes;
+  // the sparse overlay then merges in O(dynamic styles).
+  const staticPulseDotStyles = useMemo(() => {
+    const pulses = new Map();
+    if (dotStyles) {
+      for (const [id, style] of dotStyles) if (style?.pulse) pulses.set(id, style);
+    }
+    return pulses;
+  }, [dotStyles]);
+  const pulseDotStyles = useMemo(
+    () => mergeDotStyleMaps(staticPulseDotStyles, dynamicDotStyles),
+    [staticPulseDotStyles, dynamicDotStyles],
+  );
+  const getPulseState = usePulseAnimation(pulseDotStyles, undefined, false, true);
   const pulseIds = useMemo(() => {
     const ids = [];
-    if (dotStyles) for (const [id, style] of dotStyles) if (style?.pulse) ids.push(id);
+    for (const [id, style] of pulseDotStyles) if (style?.pulse) ids.push(id);
     return ids;
-  }, [dotStyles]);
+  }, [pulseDotStyles]);
   const pulseKey = pulseIds.join('|');
   const idToIndex = useMemo(() => {
     const m = new Map();
@@ -2045,6 +2085,35 @@ export function R3FDotsWebGPU({
     return m;
   }, [data]);
   const prevHoveredIdRef = useRef(hoveredId);
+  const prevDynamicDotStylesRef = useRef(dynamicDotStyles);
+
+  // Transient style changes are bounded by the symmetric difference of the
+  // sparse overlay. This is the playback/selection fast lane: do not scan the
+  // dataset or upload full cosmetic buffers when one audible owner changes.
+  useEffect(() => {
+    const previous = prevDynamicDotStylesRef.current;
+    prevDynamicDotStylesRef.current = dynamicDotStyles;
+    if (!cosmetic || !data?.length || previous === dynamicDotStyles) return;
+
+    const changedIds = collectChangedDynamicStyleIds(previous, dynamicDotStyles);
+    const changedIndices = [];
+    for (const id of changedIds) {
+      const index = idToIndex.get(id);
+      if (writeCosmetic(cosmetic, data, index, cosmeticOpts)) changedIndices.push(index);
+    }
+    if (decollisionDebug) {
+      console.log(
+        `[rdv-cosmetic] dynamic changed=${changedIds.size} uploaded=${changedIndices.length} n=${data.length}`,
+      );
+    }
+    markAttributeIndicesForUpdate(cosmetic.colors.value, changedIndices, 3);
+    markAttributeIndicesForUpdate(cosmetic.alphas.value, changedIndices);
+    markAttributeIndicesForUpdate(cosmetic.focus.value, changedIndices);
+    markAttributeIndicesForUpdate(cosmetic.scales.value, changedIndices);
+    // Base style/default changes use the full-restyle effect; this lane owns
+    // only immutable replacement of the transient map.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cosmetic, data, dynamicDotStyles, idToIndex, decollisionDebug]);
 
   // Hover changes affect only the old and new hovered dots. Do not run the
   // full cosmetic rewrite for the whole graph; at 200k+ dots that turns every
@@ -2058,16 +2127,17 @@ export function R3FDotsWebGPU({
     const prevHoveredId = prevHoveredIdRef.current;
     if (prevHoveredId === hoveredId) return;
 
-    let dirty = false;
+    const changedIndices = [];
     for (const [id, isHovered] of [[prevHoveredId, false], [hoveredId, true]]) {
       if (id != null) {
-        dirty = writeHoverCosmetic(cosmetic, data, idToIndex.get(id), cosmeticOpts, isHovered) || dirty;
+        const index = idToIndex.get(id);
+        if (writeHoverCosmetic(cosmetic, data, index, cosmeticOpts, isHovered)) {
+          changedIndices.push(index);
+        }
       }
     }
-    if (dirty) {
-      cosmetic.alphas.value.needsUpdate = true;
-      cosmetic.scales.value.needsUpdate = true;
-    }
+    markAttributeIndicesForUpdate(cosmetic.alphas.value, changedIndices);
+    markAttributeIndicesForUpdate(cosmetic.scales.value, changedIndices);
     prevHoveredIdRef.current = hoveredId;
     // Style/size changes restyle the hovered dot through the full-restyle effect
     // above; this effect only re-runs when the hovered id itself changes.
@@ -2146,7 +2216,7 @@ export function R3FDotsWebGPU({
         continue;
       }
       const item = data[idx];
-      const style = dotStyles.get(id) || EMPTY_STYLE;
+      const style = resolveLayeredDotStyle(id, dotStyles, dynamicDotStyles);
       const isHovered = id === hoveredId;
       const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
       const baseScale = resolveScale(baseSize, isHovered, hoverSizeMultiplier);
@@ -2183,8 +2253,9 @@ export function R3FDotsWebGPU({
     }
 
     if (dotDirty) {
-      cosmetic.scales.value.needsUpdate = true;
-      cosmetic.alphas.value.needsUpdate = true;
+      const pulseIndices = pulseIds.map((id) => idToIndex.get(id));
+      markAttributeIndicesForUpdate(cosmetic.scales.value, pulseIndices);
+      markAttributeIndicesForUpdate(cosmetic.alphas.value, pulseIndices);
     }
     if (rb.count) {
       if (ringIndexDirty) rb.indices.value.needsUpdate = true;

@@ -341,6 +341,11 @@ export interface DotVisualizationR3FProps extends DotVisualizationCommonProps {
   backend?: 'webgl' | 'webgpu';
   dataKey?: string | null;
   streamingPositions?: StreamingPositions | null;
+  /**
+   * Sparse transient style overlay for rapidly changing state such as audible
+   * playback. WebGPU updates only changed ids instead of restyling every dot.
+   */
+  dynamicDotStyles?: DotStylesMap;
   showEdges?: boolean;
   semanticScores?: SemanticScoresInput | null;
   semanticGpuScoring?: SemanticGpuScoringOptions | null;
