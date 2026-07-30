@@ -352,6 +352,14 @@ export interface DotVisualizationR3FProps extends DotVisualizationCommonProps {
   /** Fires when the settled positions have been applied visually (WebGPU). */
   onDecollisionVisualComplete?: (info: { count: number; reason: string; jobId: number }) => void;
   /**
+   * Fires with the viewBox-space `{x, y, k}` transform (the value
+   * `getZoomTransform` returns) on every camera commit: interactive pan/zoom,
+   * camera init, programmatic zooms (each animation frame), and
+   * `setZoomTransform`. Lets DOM overlays outside the canvas track the camera
+   * without polling. R3F component (both backends).
+   */
+  onTransformChange?: (transform: ZoomTransformLike) => void;
+  /**
    * WebGPU backend only, default off. When `data`/`dataKey` swap to a new
    * layout, dots whose `id` exists in both layouts animate from their previous
    * on-screen position to the new target instead of teleporting; newcomers
