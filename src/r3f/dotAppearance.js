@@ -7,6 +7,16 @@
  * only in how they apply these values, never in how they compute them.
  */
 
+// Floats per colour in the WebGPU path's colour storage buffers: RGB in a vec4
+// slot, fourth component unused. A `vec3` storage attribute is not safe to
+// update partially — three pads it to vec4 on the GPU but keeps re-deriving
+// that padded array from `attribute.array` read at stride 3 on every upload
+// (WebGPUAttributeUtils `_force3to4BytesAlignment`). Only a full stride-3
+// rewrite leaves the array in the layout that re-derivation expects, so a
+// single-dot write scrambles every other dot's colour. Matching the GPU's own
+// stride removes the re-derivation entirely.
+export const COLOR_STRIDE = 4;
+
 export function resolveBaseSize(item, customStyle, radiusOverrides, defaultSize) {
   return customStyle.r ?? radiusOverrides.get(item.id) ?? item.size ?? defaultSize;
 }

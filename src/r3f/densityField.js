@@ -106,7 +106,7 @@ function createSplatMaterial({ positions, colors, alphas, semantic = null, entry
   // When semantic scoring is active, use the same score buffer/range as the
   // crisp dot material; otherwise the zoomed-out density layer would hide the
   // by-vibe result even though the dot layer was correctly scored.
-  const baseColor = colors.element(instanceIndex);
+  const baseColor = colors.element(instanceIndex).xyz;
   const baseAlpha = alphas.element(instanceIndex);
   const score = semantic ? semantic.scores.element(instanceIndex) : null;
   const color = semantic ? semanticColorNode(baseColor, score, semantic) : baseColor;

@@ -45,6 +45,7 @@ import {
 } from '../decollision-tsl.js';
 import {
   resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus, resolveHoverRadius,
+  COLOR_STRIDE,
 } from './dotAppearance.js';
 import { buildLerpKernels } from './lerpKernels.js';
 import { seedKeyFor, buildSwapSeed } from './dataSwapTransition.js';
@@ -335,7 +336,7 @@ async function readbackPick(renderer, pickResult, indexBits) {
 // after commit).
 function buildCosmeticBuffers(N, data, opts) {
   const cosmetic = {
-    colors: instancedArray(new Float32Array(N * 3), 'vec3'),
+    colors: instancedArray(new Float32Array(N * COLOR_STRIDE), 'vec4'),
     alphas: instancedArray(new Float32Array(N), 'float'),
     focus: instancedArray(new Float32Array(N), 'float'),
     scales: instancedArray(new Float32Array(N), 'float'),
@@ -756,7 +757,7 @@ function writeCosmetics(cosmetic, data, opts) {
   // ranges before the renderer consumes this update; leaving the range list
   // empty would let that later append accidentally turn the pending full write
   // into a partial upload.
-  colAttr.addUpdateRange(0, data.length * 3);
+  colAttr.addUpdateRange(0, data.length * COLOR_STRIDE);
   alphaAttr.addUpdateRange(0, data.length);
   focusAttr.addUpdateRange(0, data.length);
   scaleAttr.addUpdateRange(0, data.length);
@@ -778,7 +779,7 @@ function writeCosmetic(cosmetic, data, index, opts) {
   const isHovered = item.id === hoveredId;
   const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
   _color.set(resolveFill(item, style, defaultColor));
-  const c = index * 3;
+  const c = index * COLOR_STRIDE;
   cosmetic.colors.value.array[c] = _color.r;
   cosmetic.colors.value.array[c + 1] = _color.g;
   cosmetic.colors.value.array[c + 2] = _color.b;
@@ -836,7 +837,7 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
 function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null }) {
-  const baseColor = cosmetic.colors.element(indexNode);
+  const baseColor = cosmetic.colors.element(indexNode).xyz;
   const semanticScore = semantic ? semantic.scores.element(indexNode) : null;
   const instanceColor = semantic
     ? semanticColorNode(baseColor, semanticScore, semantic)
@@ -2106,7 +2107,7 @@ export function R3FDotsWebGPU({
         `[rdv-cosmetic] dynamic changed=${changedIds.size} uploaded=${changedIndices.length} n=${data.length}`,
       );
     }
-    markAttributeIndicesForUpdate(cosmetic.colors.value, changedIndices, 3);
+    markAttributeIndicesForUpdate(cosmetic.colors.value, changedIndices, COLOR_STRIDE);
     markAttributeIndicesForUpdate(cosmetic.alphas.value, changedIndices);
     markAttributeIndicesForUpdate(cosmetic.focus.value, changedIndices);
     markAttributeIndicesForUpdate(cosmetic.scales.value, changedIndices);
@@ -2165,7 +2166,7 @@ export function R3FDotsWebGPU({
       count,
       indices: instancedArray(new Uint32Array(count), 'uint'),
       scales: instancedArray(new Float32Array(count), 'float'),
-      colors: instancedArray(new Float32Array(count * 3), 'vec3'),
+      colors: instancedArray(new Float32Array(count * COLOR_STRIDE), 'vec4'),
       alphas: instancedArray(new Float32Array(count), 'float'),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2178,7 +2179,7 @@ export function R3FDotsWebGPU({
     if (!ringBuffers.count || !buffers) return null;
     const geometry = new THREE.PlaneGeometry(1, 1);
     const material = createPulseDiscNodeMaterial({
-      instanceColor: ringBuffers.colors.element(instanceIndex),
+      instanceColor: ringBuffers.colors.element(instanceIndex).xyz,
       instanceAlpha: ringBuffers.alphas.element(instanceIndex),
     });
     // Pulse rings must follow the same GPU-owned positions as the dots. The
@@ -2245,7 +2246,8 @@ export function R3FDotsWebGPU({
         });
         ringScale[j] = ringRadius;
         _color.set(ps.ringData.color || fill);
-        ringCol[j * 3] = _color.r; ringCol[j * 3 + 1] = _color.g; ringCol[j * 3 + 2] = _color.b;
+        const rc = j * COLOR_STRIDE;
+        ringCol[rc] = _color.r; ringCol[rc + 1] = _color.g; ringCol[rc + 2] = _color.b;
         ringAlpha[j] = ps.ringData.opacity;
       } else {
         ringAlpha[j] = 0;
