@@ -29,7 +29,7 @@
 import React, { useMemo, useEffect, useRef, useReducer } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max, mix, clamp } from 'three/tsl';
+import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, uint, max, mix, clamp } from 'three/tsl';
 import { easeCubicOut } from 'd3';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import {
@@ -78,6 +78,12 @@ import {
   mergeDotStyleMaps,
   resolveLayeredDotStyle,
 } from './dynamicDotStyles.js';
+import {
+  categoricalAlphaNode,
+  categoricalColorNode,
+  normalizeCategoricalFilter,
+  updateCategoricalValueBuffer,
+} from './categoricalFilter.js';
 
 // Safety caps in solver iterations — the velocity fixpoint (see the convergence
 // metric below) normally settles a run earlier. Several iterations per frame
@@ -87,6 +93,7 @@ export const BASE_MAX_SOLVER_ITERATIONS = 2400;
 export const CONSTRAINT_MAX_SOLVER_ITERATIONS = 1200;
 const SOLVER_ITERATIONS_PER_FRAME = 4;
 const SOLVER_FRAME_BUDGET_MS = 6;
+const DEFAULT_CATEGORICAL_DIM_RGB = [0.147, 0.168, 0.216];
 const CONVERGENCE_CHECK_FRAME_INTERVAL = 8;
 const CONVERGENCE_CHECK_ITERATION_INTERVAL = CONVERGENCE_CHECK_FRAME_INTERVAL * SOLVER_ITERATIONS_PER_FRAME;
 const MIN_CONVERGENCE_CHECK_ITERATIONS = CONVERGENCE_CHECK_ITERATION_INTERVAL + SOLVER_ITERATIONS_PER_FRAME * 3;
@@ -351,6 +358,29 @@ function buildSemanticBuffers(N) {
   return {
     scores: instancedArray(scores, 'float'),
   };
+}
+
+function buildCategoricalFilterResources(count) {
+  return {
+    values: instancedArray(new Uint32Array(count), 'uint'),
+    enabledU: uniform(uint(0)),
+    includedValuesU: uniform(uint(0)),
+    valueMaskU: uniform(uint(0xff)),
+    valueShiftU: uniform(uint(0)),
+    dimColorU: uniform(colorVector(null, DEFAULT_CATEGORICAL_DIM_RGB)),
+    dimOpacityU: uniform(float(0.35)),
+  };
+}
+
+function updateCategoricalFilterUniforms(resources, input) {
+  if (!resources) return;
+  const normalized = normalizeCategoricalFilter(input);
+  resources.enabledU.value = normalized.enabled ? 1 : 0;
+  resources.includedValuesU.value = normalized.includedValues;
+  resources.valueMaskU.value = normalized.valueMask;
+  resources.valueShiftU.value = normalized.valueShift;
+  resources.dimOpacityU.value = normalized.dimOpacity;
+  resources.dimColorU.value.copy(colorVector(input?.dimColor, DEFAULT_CATEGORICAL_DIM_RGB));
 }
 
 function writeSemanticScores(semantic, semanticScores, count) {
@@ -836,16 +866,24 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
-function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null }) {
+function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null }) {
   const baseColor = cosmetic.colors.element(indexNode).xyz;
   const semanticScore = semantic ? semantic.scores.element(indexNode) : null;
-  const instanceColor = semantic
+  const semanticColor = semantic
     ? semanticColorNode(baseColor, semanticScore, semantic)
     : baseColor;
   const baseAlpha = cosmetic.alphas.element(indexNode);
-  const instanceAlpha = semantic
+  const semanticAlpha = semantic
     ? semanticAlphaNode(baseAlpha, semanticScore, semantic)
     : baseAlpha;
+  const focus = cosmetic.focus.element(indexNode);
+  const categoryValue = categorical ? categorical.values.element(indexNode) : null;
+  const instanceColor = categorical
+    ? categoricalColorNode(semanticColor, categoryValue, focus, categorical)
+    : semanticColor;
+  const instanceAlpha = categorical
+    ? categoricalAlphaNode(semanticAlpha, categoryValue, focus, categorical)
+    : semanticAlpha;
   // Data-swap entry ramp (opt-in): survivors carry ramp0=1 (factor 1 always);
   // newcomers carry ramp0=0 and grow in with the transition clock.
   const entryFactor = entryRamp
@@ -854,7 +892,7 @@ function buildDotMesh(indexNode, count, { cosmetic, semantic, buffers, dotStroke
   const material = createBevelStrokeNodeMaterial({
     instanceColor,
     instanceAlpha: entryFactor ? instanceAlpha.mul(entryFactor) : instanceAlpha,
-    instanceFocus: cosmetic.focus.element(indexNode),
+    instanceFocus: focus,
     strokeColor: dotStroke,
     strokeWidthFraction: dotStrokeWidthFraction,
   });
@@ -893,6 +931,7 @@ export function R3FDotsWebGPU({
   hoveredId = null,
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
+  categoricalFilter = null,
   semanticScores = null,
   semanticGpuScoring = null,
   positionsAreIntermediate = false,
@@ -1088,6 +1127,57 @@ export function R3FDotsWebGPU({
     } : null),
     [buffers, semanticLoU, semanticHiU, semanticDimColorU, semanticHotColorU],
   );
+  const categoricalAvailable = !!(
+    buffers
+    && categoricalFilter?.values
+    && categoricalFilter.values.length >= buffers.N
+  );
+  const categorical = useMemo(
+    () => (buffers && categoricalAvailable ? buildCategoricalFilterResources(buffers.N) : null),
+    [buffers, categoricalAvailable],
+  );
+  const previousCategoricalResourceRef = useRef(null);
+  useEffect(() => {
+    if (!categorical || !buffers || !categoricalFilter?.values) return;
+    const forceFull = previousCategoricalResourceRef.current !== categorical;
+    previousCategoricalResourceRef.current = categorical;
+    const uploaded = updateCategoricalValueBuffer(
+      categorical.values.value,
+      categoricalFilter,
+      buffers.N,
+      forceFull,
+    );
+    if (categoricalFilter.debug) {
+      console.log(
+        `[rdv-categorical-filter] values-upload=${uploaded} n=${buffers.N}`
+        + ` mode=${forceFull || !categoricalFilter.changedIndices ? 'full' : 'sparse'}`,
+      );
+    }
+  }, [categorical, buffers, categoricalFilter?.values, categoricalFilter?.version, categoricalFilter?.changedIndices, categoricalFilter?.debug]);
+  useEffect(() => {
+    if (!categorical) return;
+    updateCategoricalFilterUniforms(categorical, categoricalFilter);
+    if (categoricalFilter?.debug) {
+      const normalized = normalizeCategoricalFilter(categoricalFilter);
+      console.log(
+        `[rdv-categorical-filter] uniforms enabled=${normalized.enabled ? 1 : 0}`
+        + ` included=${normalized.includedValues}`
+        + ` mask=${normalized.valueMask} shift=${normalized.valueShift}`,
+      );
+    }
+  }, [
+    categorical,
+    categoricalFilter?.enabled,
+    categoricalFilter?.includedValues,
+    categoricalFilter?.valueMask,
+    categoricalFilter?.valueShift,
+    categoricalFilter?.dimColor,
+    categoricalFilter?.dimOpacity,
+    categoricalFilter?.debug,
+  ]);
+  useEffect(() => () => {
+    if (categorical) disposeStorageBuffers(gl, [categorical.values]);
+  }, [categorical, gl]);
   const semanticScoringResidentRef = useRef(null);
   const semanticScoring = useMemo(
     () => {
@@ -2005,10 +2095,10 @@ export function R3FDotsWebGPU({
     if (!buffers || !cosmetic) return null;
     return createSplatScene({
       count: buffers.N, positions: buffers.positions,
-      colors: cosmetic.colors, alphas: cosmetic.alphas, semantic, entryRamp,
+      colors: cosmetic.colors, alphas: cosmetic.alphas, semantic, categorical, entryRamp,
       pxPerWorldU, bandwidthPxU,
     });
-  }, [buffers, cosmetic, semantic, entryRamp, pxPerWorldU, bandwidthPxU]);
+  }, [buffers, cosmetic, semantic, categorical, entryRamp, pxPerWorldU, bandwidthPxU]);
   useEffect(() => () => disposeMesh(splat?.mesh), [splat]);
 
   const densityMesh = useMemo(
@@ -2040,19 +2130,19 @@ export function R3FDotsWebGPU({
     // Collapse the hovered instance to zero size so it draws once: the overlay
     // redraws it on top (the canvas renderer draws the hovered dot last).
     const scaleMul = select(instanceIndex.equal(hoveredIndexU), float(0), float(1));
-    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp });
-  }, [buffers, cosmetic, semantic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU, entryRamp]);
+    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp });
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(mesh), [mesh]);
 
   // Redraw the hovered dot after the main mesh (renderOrder 1) so it sits on top
   // of overlapping dots, matching the canvas renderer.
   const hoverMesh = useMemo(() => {
     if (!buffers || !cosmetic || !semantic) return null;
-    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, entryRamp });
+    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, entryRamp });
     m.renderOrder = 1;
     m.visible = false;
     return m;
-  }, [buffers, cosmetic, semantic, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU, entryRamp]);
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(hoverMesh), [hoverMesh]);
 
   // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────

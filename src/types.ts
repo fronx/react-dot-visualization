@@ -288,6 +288,27 @@ export interface SemanticScoresInput {
   hotColor?: [number, number, number];
 }
 
+/** WebGPU-only projection-aligned categorical filter. `values` is resident
+ *  per-instance data; changing `includedValues`/`valueMask`/`valueShift`
+ *  updates uniforms only, so a filter toggle never rewrites N cosmetics.
+ *  Bit `1 << extractedValue` in `includedValues` means the instance passes. */
+export interface CategoricalFilterInput {
+  values: Uint8Array | Uint32Array;
+  enabled?: boolean;
+  includedValues: number;
+  /** Extract `(value >> valueShift) & valueMask` before testing membership. */
+  valueMask?: number;
+  valueShift?: number;
+  dimColor?: [number, number, number];
+  /** Absolute opacity for excluded instances. */
+  dimOpacity?: number;
+  /** Optional monotonic identity for in-place `values` changes. */
+  version?: number;
+  /** Sparse indices changed since the previous version. Omit for a full copy. */
+  changedIndices?: Uint32Array | readonly number[];
+  debug?: boolean;
+}
+
 /** WebGPU-only renderer-resident semantic scorer input. While active, the dot
  *  layer scores the resident matrix in-shader and ignores `semanticScores`. */
 export interface SemanticGpuScoringOptions {
@@ -347,6 +368,7 @@ export interface DotVisualizationR3FProps extends DotVisualizationCommonProps {
    */
   dynamicDotStyles?: DotStylesMap;
   showEdges?: boolean;
+  categoricalFilter?: CategoricalFilterInput | null;
   semanticScores?: SemanticScoresInput | null;
   semanticGpuScoring?: SemanticGpuScoringOptions | null;
   /** Fires when the settled positions have been applied visually (WebGPU). */

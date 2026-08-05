@@ -27,6 +27,7 @@ import {
   length, texture, screenUV, uv, varying, sRGBTransferOETF, mix, clamp, select,
 } from 'three/tsl';
 import { semanticColorNode, semanticAlphaNode } from './semanticScoreKernels.js';
+import { categoricalColorNode, categoricalAlphaNode } from './categoricalFilter.js';
 
 // Tunables (eyeball these first).
 // CRISPNESS: the kernel's effective sigma ≈ BANDWIDTH_PX / √(2·SPLAT_K) device px.
@@ -84,7 +85,7 @@ export function createDensityRenderTarget(width, height) {
 // Splat material: additive accumulation of (OKLab·w, w) per point, where the
 // weight w = perDotAlpha · gaussian. Weighting by alpha means filtered/dimmed
 // dots contribute proportionally less density (α≈0 → nothing).
-function createSplatMaterial({ positions, colors, alphas, semantic = null, entryRamp = null, pxPerWorldU, bandwidthPxU }) {
+function createSplatMaterial({ positions, colors, alphas, semantic = null, categorical = null, entryRamp = null, pxPerWorldU, bandwidthPxU }) {
   const m = new THREE.MeshBasicNodeMaterial({ transparent: true, depthWrite: false, depthTest: false });
   // True additive accumulation (src·1 + dst·1) for color AND weight — NOT
   // AdditiveBlending, which premultiplies rgb by srcAlpha.
@@ -109,13 +110,23 @@ function createSplatMaterial({ positions, colors, alphas, semantic = null, entry
   const baseColor = colors.element(instanceIndex).xyz;
   const baseAlpha = alphas.element(instanceIndex);
   const score = semantic ? semantic.scores.element(instanceIndex) : null;
-  const color = semantic ? semanticColorNode(baseColor, score, semantic) : baseColor;
+  const semanticColor = semantic ? semanticColorNode(baseColor, score, semantic) : baseColor;
   const semanticAlpha = semantic ? semanticAlphaNode(baseAlpha, score, semantic) : baseAlpha;
+  const categoryValue = categorical ? categorical.values.element(instanceIndex) : null;
+  // Density has no focused overlay: a focused dot is large enough to stay on
+  // the crisp layer, while the aggregate field should continue reflecting the
+  // filtered population. Pass a constant non-focus marker here.
+  const color = categorical
+    ? categoricalColorNode(semanticColor, categoryValue, float(0), categorical)
+    : semanticColor;
+  const filteredAlpha = categorical
+    ? categoricalAlphaNode(semanticAlpha, categoryValue, float(0), categorical)
+    : semanticAlpha;
   // Data-swap entry ramp (opt-in; see R3FDotsWebGPU): newcomers contribute
   // density proportionally to the same ramp the crisp dot layer applies.
   const alphaBase = entryRamp
-    ? semanticAlpha.mul(mix(entryRamp.progressU, float(1), entryRamp.ramp0.element(instanceIndex)))
-    : semanticAlpha;
+    ? filteredAlpha.mul(mix(entryRamp.progressU, float(1), entryRamp.ramp0.element(instanceIndex)))
+    : filteredAlpha;
   const lab = varying(linearToOKLab(color));
   const alpha = varying(alphaBase);
   const w = g.mul(alpha);
@@ -130,8 +141,8 @@ function createSplatMaterial({ positions, colors, alphas, semantic = null, entry
 }
 
 // One InstancedMesh in a private scene; rendered to the density RT each frame.
-export function createSplatScene({ count, positions, colors, alphas, semantic = null, entryRamp = null, pxPerWorldU, bandwidthPxU }) {
-  const material = createSplatMaterial({ positions, colors, alphas, semantic, entryRamp, pxPerWorldU, bandwidthPxU });
+export function createSplatScene({ count, positions, colors, alphas, semantic = null, categorical = null, entryRamp = null, pxPerWorldU, bandwidthPxU }) {
+  const material = createSplatMaterial({ positions, colors, alphas, semantic, categorical, entryRamp, pxPerWorldU, bandwidthPxU });
   const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), material, count);
   mesh.frustumCulled = false;
   const scene = new THREE.Scene();
