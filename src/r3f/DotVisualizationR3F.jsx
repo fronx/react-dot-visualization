@@ -109,6 +109,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onDragStart,
     onDecollisionComplete,
     onDecollisionVisualComplete,
+    onBaseDecollisionSettled,
     // Fires with the viewBox-space {x, y, k} transform (the same value
     // getZoomTransform returns) on every camera commit: interactive pan/zoom,
     // camera init, programmatic zooms (including each animation frame), and
@@ -418,6 +419,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onUpdateNodes,
     onBaseReady: onDecollisionComplete,
     onConstraintReady: (finalData) => onDecollisionComplete?.(finalData),
+    dataKey,
+    onBaseSettled: onBaseDecollisionSettled,
     syncDecollisionState,
     onSimulationRunningChange: () => {},
     sendMetrics: false,

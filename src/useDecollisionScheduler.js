@@ -76,6 +76,15 @@ export function useDecollisionScheduler({
   onUpdateNodes,
   onBaseReady,
   onConstraintReady,
+  /** Identity of the data a launched base simulation runs on. Captured at
+   *  launch time and echoed in onBaseSettled, so a completion can never be
+   *  attributed to data that replaced the launched set mid-flight. */
+  dataKey = null,
+  /** Fires after a base decollision completes, with the launch-captured
+   *  identity: { dataKey }. Unlike onBaseReady's positional args, this is an
+   *  additive identity channel — consumers derive "the base layout for data X
+   *  is visually settled" from it as level state. */
+  onBaseSettled,
   syncDecollisionState,
   onSimulationRunningChange,
   sendMetrics = false,
@@ -97,12 +106,14 @@ export function useDecollisionScheduler({
   // Stable callback wrappers so simulation closures always call latest version
   const stableOnUpdateNodes = useStableCallback(onUpdateNodes);
   const stableOnBaseReady = useStableCallback(onBaseReady);
+  const stableOnBaseSettled = useStableCallback((info) => { onBaseSettled?.(info); });
   const stableOnConstraintReady = useStableCallback(onConstraintReady);
   const stableSyncDecollisionState = useStableCallback(syncDecollisionState);
   const stableOnSimulationRunningChange = useStableCallback(onSimulationRunningChange);
 
   // Keep latest values accessible without triggering re-runs
   const decollisionEngineRef = useLatest(decollisionEngine);
+  const dataKeyRef = useLatest(dataKey);
   const defaultSizeRef = useLatest(defaultSize);
   const sendMetricsRef = useLatest(sendMetrics);
   const radiusOverridesRef = useLatest(radiusOverrides);
@@ -182,6 +193,7 @@ export function useDecollisionScheduler({
     } : null;
 
     const canSnapshotBaseOnGpu = !!executor?.canSnapshotPositions;
+    const launchedDataKey = dataKeyRef.current;
     // Base uses empty overrides (no constraint = uniform sizes)
     launchSimulation([...data], '', new Map(), (finalData, _launchKey, completionInfo) => {
       if (cache && Array.isArray(finalData)) {
@@ -194,12 +206,13 @@ export function useDecollisionScheduler({
       phaseRef.current = result.phase;
 
       stableOnBaseReady(completionInfo?.gpuSnapshotKey === '' ? null : finalData);
+      stableOnBaseSettled({ dataKey: launchedDataKey });
 
       if (result.action?.type === 'launch-constraint') {
         launchConstraintRef.current?.(result.action.constraintKey);
       }
     }, transitionConfig, canSnapshotBaseOnGpu ? '' : null);
-  }, [dataRef, processedDataRef, launchSimulation, cache, stableOnBaseReady, executor]);
+  }, [dataRef, processedDataRef, launchSimulation, cache, stableOnBaseReady, stableOnBaseSettled, dataKeyRef, executor]);
 
   const launchConstraint = useCallback((key) => {
     const data = dataRef.current;
