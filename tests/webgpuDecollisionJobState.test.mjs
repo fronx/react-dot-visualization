@@ -26,13 +26,16 @@ describe('WebGPU decollision request buffer gating', () => {
     );
   });
 
-  test('does not defer shrinking/stale sim requests forever', () => {
+  test('defers a shrinking sim request until the smaller buffers commit', () => {
+    // Starting it would walk startJob past sourceData's end (undefined.x,
+    // 2026-08-08). Supersession — latest request wins in the channel — is what
+    // prevents a stale request from deferring forever.
     assert.equal(
       shouldDeferRequestForBuffers(
         { type: 'sim', sourceData: [{}, {}] },
         { N: 3 }
       ),
-      false
+      true
     );
   });
 
