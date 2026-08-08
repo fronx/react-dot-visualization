@@ -48,6 +48,40 @@ describe('WebGPU decollision request buffer gating', () => {
       false
     );
   });
+
+  // The never-settling Refresh (2026-08-08/09): an equal-count membership swap
+  // passes the count check, so without the identity gate the sim starts
+  // against the OUTGOING buffers and the data-swap flip replaces the running
+  // job — its completion is lost and the scheduler stays running forever.
+  test('defers a sim request until the displayed data identity matches', () => {
+    assert.equal(
+      shouldDeferRequestForBuffers(
+        { type: 'sim', dataKey: 'layout-B', sourceData: [{}, {}, {}] },
+        { N: 3 },
+        'layout-A'
+      ),
+      true
+    );
+    assert.equal(
+      shouldDeferRequestForBuffers(
+        { type: 'sim', dataKey: 'layout-B', sourceData: [{}, {}, {}] },
+        { N: 3 },
+        'layout-B'
+      ),
+      false
+    );
+  });
+
+  test('identity-less requests keep the count-only gating', () => {
+    assert.equal(
+      shouldDeferRequestForBuffers(
+        { type: 'sim', sourceData: [{}, {}, {}] },
+        { N: 3 },
+        'layout-A'
+      ),
+      false
+    );
+  });
 });
 
 describe('WebGPU decollision job buffer mismatch handling', () => {

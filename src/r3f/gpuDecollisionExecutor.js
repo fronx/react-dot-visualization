@@ -67,6 +67,7 @@ export function makeGpuExecutor(gpuControlRef, {
     },
     runSimulation({
       sourceData,
+      dataKey = null,
       fnDotSize,
       constraintKey,
       snapshotOnCompleteKey = null,
@@ -78,6 +79,7 @@ export function makeGpuExecutor(gpuControlRef, {
       return issue({
         type: 'sim',
         sourceData,
+        dataKey,
         fnDotSize,
         constraintKey,
         maxIterations,

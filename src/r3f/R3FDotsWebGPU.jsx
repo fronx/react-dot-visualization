@@ -1901,13 +1901,15 @@ export function R3FDotsWebGPU({
     // deferred base decollision seeds from exactly what is on screen.
     const swapHold = swapEnabled && (swapRef.current !== null || jobRef.current.mode === 'swap');
     if (!swapHold && channel && channel.request && channel.request.id !== handledReqId.current) {
-      if (shouldDeferRequestForBuffers(channel.request, buffers)) {
+      if (shouldDeferRequestForBuffers(channel.request, buffers, dataKey)) {
         if (decollisionDebug && deferredReqId.current !== channel.request.id) {
           deferredReqId.current = channel.request.id;
           console.log(
             `[rdv-decollision] defer id=${channel.request.id}`
             + ` sourceN=${channel.request.sourceData?.length ?? 'n/a'}`
-            + ` bufferN=${buffers?.N ?? 'none'}`,
+            + ` bufferN=${buffers?.N ?? 'none'}`
+            + ` requestKey=${channel.request.dataKey ?? 'n/a'}`
+            + ` displayedKey=${dataKey ?? 'n/a'}`,
           );
         }
         return;

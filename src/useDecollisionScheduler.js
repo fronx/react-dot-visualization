@@ -113,7 +113,14 @@ export function useDecollisionScheduler({
 
   // Keep latest values accessible without triggering re-runs
   const decollisionEngineRef = useLatest(decollisionEngine);
-  const dataKeyRef = useLatest(dataKey);
+  // Assigned during render, not via useLatest: a base launched from the
+  // parent's data effect (scope/length change) runs before this hook's own
+  // effects flush, so an effect-updated ref would still hold the OUTGOING
+  // layout's identity at capture time. The completion would then echo a
+  // dataKey the committed data no longer has, and level-state settle
+  // derivations downstream reject it — the layout never reads as settled.
+  const dataKeyRef = useRef(dataKey);
+  dataKeyRef.current = dataKey;
   const defaultSizeRef = useLatest(defaultSize);
   const sendMetricsRef = useLatest(sendMetrics);
   const radiusOverridesRef = useLatest(radiusOverrides);
@@ -158,6 +165,10 @@ export function useDecollisionScheduler({
 
     const handle = executor.runSimulation({
       sourceData,
+      // The identity this simulation was issued for. Executors that run
+      // detached from React's commit (the GPU request channel) gate on it so
+      // the sim can never start against a differently-identified buffer set.
+      dataKey: dataKeyRef.current,
       fnDotSize,
       transitionConfig,
       constraintKey: constraintKeyForLaunch,
@@ -172,7 +183,7 @@ export function useDecollisionScheduler({
     });
 
     simulationRef.current = handle;
-  }, [cancelSimulation, defaultSizeRef, executor, stableOnUpdateNodes, stableSyncDecollisionState, stableOnSimulationRunningChange]);
+  }, [cancelSimulation, dataKeyRef, defaultSizeRef, executor, stableOnUpdateNodes, stableSyncDecollisionState, stableOnSimulationRunningChange]);
 
   // Ref to break circular dependency: launchBase → launchConstraint → processAction → launchBase
   const launchConstraintRef = useRef(null);
