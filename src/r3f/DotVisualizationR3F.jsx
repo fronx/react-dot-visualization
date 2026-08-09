@@ -19,7 +19,7 @@ import { boundsForData, computeFitTransformToVisible } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
 import { useStablePositions } from '../useStablePositions.js';
 import { usePositionChangeDetection } from '../usePositionChangeDetection.js';
-import { resolveDataEffectPositions } from '../DotVisualization.jsx';
+import { resolveDataEffectPositions } from '../resolveDataEffectPositions.js';
 import { useLatest } from '../useLatest.js';
 import { mergeDotStyleMaps } from './dynamicDotStyles.js';
 
@@ -232,6 +232,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const liveTransitionDataRef = useRef(null);
   const previousDataRef = useRef([]);
   const previousScopeKeyRef = useRef(null);
+  const previousDataKeyRef = useRef(null);
   const schedulerRef = useRef(null);
   const constraintKeyRef = useLatest(constraintKey);
 
@@ -365,6 +366,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       schedulerRef.current.decollideForConstraint('');
     }
 
+    const dataIdentityChanged = previousDataKeyRef.current !== null &&
+      dataKey != null && previousDataKeyRef.current !== dataKey;
+    previousDataKeyRef.current = dataKey ?? null;
+
     const { processedData: processedValidData } = resolveDataEffectPositions({
       validData,
       previousData: previousDataRef.current,
@@ -374,6 +379,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         : sharedPositionCache?.cache.get(constraintKeyRef.current) ?? null,
       previousProcessedData: processedDataRef.current,
       hasPositionsChangedFn: hasPositionsChanged,
+      dataIdentityChanged,
     });
 
     previousDataRef.current = positionsAreIntermediate
@@ -397,6 +403,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   }, [
     backend,
     data,
+    dataKey,
     scopeKey,
     isIncrementalUpdate,
     positionsAreIntermediate,
