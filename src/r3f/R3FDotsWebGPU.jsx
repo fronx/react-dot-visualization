@@ -945,6 +945,7 @@ export function R3FDotsWebGPU({
   pickControlRef = null,
 }) {
   const gl = useThree((s) => s.gl);
+  const invalidate = useThree((s) => s.invalidate);
 
   // ── Opt-in data-swap transition (default off: pass-through) ──────────────
   // On a qualifying seed-identity change, keep rendering the OUTGOING layout
@@ -1077,7 +1078,8 @@ export function R3FDotsWebGPU({
     if (data.length !== buffers.N) return; // skip the frame where seedKey is mid-swap
     writePositions(buffers.positions.value.array, data);
     buffers.positions.value.needsUpdate = true;
-  }, [data, buffers, positionsAreIntermediate, streamingPositions]);
+    invalidate();
+  }, [data, buffers, positionsAreIntermediate, streamingPositions, invalidate]);
 
   // Cosmetic buffers sized to the seed, seeded with the current style, rewritten
   // in place on restyle — so hover/selection/pulse/focus never touch positions.
@@ -1092,10 +1094,11 @@ export function R3FDotsWebGPU({
     if (cosmetic && data && data.length) {
       if (streamingPositions?.hideUnseen) return;
       writeCosmetics(cosmetic, data, cosmeticOpts);
+      invalidate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cosmetic, data, defaultColor, defaultSize, defaultOpacity, dotStyles,
-    radiusOverrides, hoverSizeMultiplier, hoverOpacity, streamingPositions?.hideUnseen]);
+    radiusOverrides, hoverSizeMultiplier, hoverOpacity, streamingPositions?.hideUnseen, invalidate]);
   useEffect(() => () => {
     if (cosmetic) disposeStorageBuffers(gl, [cosmetic.colors, cosmetic.alphas, cosmetic.focus, cosmetic.scales]);
   }, [cosmetic, gl]);
@@ -1153,7 +1156,8 @@ export function R3FDotsWebGPU({
         + ` mode=${forceFull || !categoricalFilter.changedIndices ? 'full' : 'sparse'}`,
       );
     }
-  }, [categorical, buffers, categoricalFilter?.values, categoricalFilter?.version, categoricalFilter?.changedIndices, categoricalFilter?.debug]);
+    invalidate();
+  }, [categorical, buffers, categoricalFilter?.values, categoricalFilter?.version, categoricalFilter?.changedIndices, categoricalFilter?.debug, invalidate]);
   useEffect(() => {
     if (!categorical) return;
     updateCategoricalFilterUniforms(categorical, categoricalFilter);
@@ -1165,6 +1169,7 @@ export function R3FDotsWebGPU({
         + ` mask=${normalized.valueMask} shift=${normalized.valueShift}`,
       );
     }
+    invalidate();
   }, [
     categorical,
     categoricalFilter?.enabled,
@@ -1174,6 +1179,7 @@ export function R3FDotsWebGPU({
     categoricalFilter?.dimColor,
     categoricalFilter?.dimOpacity,
     categoricalFilter?.debug,
+    invalidate,
   ]);
   useEffect(() => () => {
     if (categorical) disposeStorageBuffers(gl, [categorical.values]);
@@ -1249,6 +1255,9 @@ export function R3FDotsWebGPU({
       gpuScoringActive ? semanticGpuScoring?.hotColor : semanticScores?.hotColor,
       DEFAULT_SEMANTIC_HOT_RGB,
     ));
+    // Every path below writes uniforms/buffers or bumps a dispatch the frame
+    // loop consumes; one invalidate at the top covers all exits.
+    invalidate();
     if (gpuScoringActive) {
       if (!semanticScoring || !semanticGpuScoring?.query || semanticGpuScoring.query.length !== semanticScoring.dims) {
         semanticScoreInputRef.current = null;
@@ -1318,7 +1327,7 @@ export function R3FDotsWebGPU({
     semanticScoreJobRef.current = null;
     semanticMatchedInputRef.current = null;
     writeSemanticScores(semantic, semanticScores, buffers.N);
-  }, [semantic, semanticScores, semanticGpuScoring, semanticScoring, buffers]);
+  }, [semantic, semanticScores, semanticGpuScoring, semanticScoring, buffers, invalidate]);
   useEffect(() => () => {
     if (semantic) disposeStorageBuffers(gl, [semantic.scores]);
   }, [semantic, gl]);
@@ -1361,8 +1370,9 @@ export function R3FDotsWebGPU({
     if (hideUnseen && cosmetic && data?.length) {
       revealStreamingCosmetics(cosmetic, data, coordIndices, cosmeticOpts);
     }
+    invalidate();
     onApplied?.();
-  }, [streamingPositions, buffers, cosmetic, data]);
+  }, [streamingPositions, buffers, cosmetic, data, invalidate]);
 
   // The streaming path intentionally keeps buffers allocated by count so the
   // live writer does not recreate the WebGPU graph every frame. When the final
@@ -1382,7 +1392,8 @@ export function R3FDotsWebGPU({
     if (data.length !== buffers.N) return;
     writePositions(buffers.positions.value.array, data);
     buffers.positions.value.needsUpdate = true;
-  }, [positionsAreIntermediate, decollisionEnabled, streamingPositions, buffers, data]);
+    invalidate();
+  }, [positionsAreIntermediate, decollisionEnabled, streamingPositions, buffers, data, invalidate]);
 
   // Hovered instance index, read in-shader by the main mesh (to drop it) and the overlay (to redraw it on top).
   const hoveredIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
@@ -1476,12 +1487,18 @@ export function R3FDotsWebGPU({
   useEffect(() => {
     if (!gpuControlRef?.current) return undefined;
     gpuControlRef.current.positionSnapshots = snapshotKeysRef.current;
+    // Demand frameloop: the executor (outside the Canvas) kicks a frame after
+    // posting a request so the loop below consumes it.
+    gpuControlRef.current.invalidate = invalidate;
     return () => {
       if (gpuControlRef.current?.positionSnapshots === snapshotKeysRef.current) {
         delete gpuControlRef.current.positionSnapshots;
       }
+      if (gpuControlRef.current?.invalidate === invalidate) {
+        delete gpuControlRef.current.invalidate;
+      }
     };
-  }, [gpuControlRef]);
+  }, [gpuControlRef, invalidate]);
   const prevBuffersRef = useRef(buffers);
   if (prevBuffersRef.current !== buffers) {
     prevBuffersRef.current = buffers;
@@ -2116,7 +2133,13 @@ export function R3FDotsWebGPU({
     // Crossfade by the projected size of a typical dot: dots when large, density when small.
     densityFadeU.value = densityFadeForProjectedPx(defaultSize * pxPerWorld);
 
-    if (!splat) return;
+    // The resolve layer is fully transparent at fade 0 (zoomed in). Skip both
+    // the splat pass — a second full draw of every dot into the RT — and the
+    // resolve quad; both become visible again on the zoom-out frame that
+    // raises the fade above 0.
+    const densityVisible = densityFadeU.value > 0;
+    densityMesh.visible = densityVisible;
+    if (!splat || !densityVisible) return;
     const w = Math.max(1, Math.round(state.size.width * dpr));
     const h = Math.max(1, Math.round(state.size.height * dpr));
     if (densityRT.width !== w || densityRT.height !== h) densityRT.setSize(w, h);
@@ -2165,7 +2188,10 @@ export function R3FDotsWebGPU({
     () => mergeDotStyleMaps(staticPulseDotStyles, dynamicDotStyles),
     [staticPulseDotStyles, dynamicDotStyles],
   );
-  const getPulseState = usePulseAnimation(pulseDotStyles, undefined, false, true);
+  // The pulse clock invalidates at its own budgeted rate (30fps, same as the
+  // Canvas backend renders pulses), so a pulse never forces display-rate
+  // frames in demand mode. No-op under frameloop='always'.
+  const getPulseState = usePulseAnimation(pulseDotStyles, invalidate, false, true);
   const pulseIds = useMemo(() => {
     const ids = [];
     for (const [id, style] of pulseDotStyles) if (style?.pulse) ids.push(id);
@@ -2203,10 +2229,11 @@ export function R3FDotsWebGPU({
     markAttributeIndicesForUpdate(cosmetic.alphas.value, changedIndices);
     markAttributeIndicesForUpdate(cosmetic.focus.value, changedIndices);
     markAttributeIndicesForUpdate(cosmetic.scales.value, changedIndices);
+    invalidate();
     // Base style/default changes use the full-restyle effect; this lane owns
     // only immutable replacement of the transient map.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cosmetic, data, dynamicDotStyles, idToIndex, decollisionDebug]);
+  }, [cosmetic, data, dynamicDotStyles, idToIndex, decollisionDebug, invalidate]);
 
   // Hover changes affect only the old and new hovered dots. Do not run the
   // full cosmetic rewrite for the whole graph; at 200k+ dots that turns every
@@ -2232,10 +2259,11 @@ export function R3FDotsWebGPU({
     markAttributeIndicesForUpdate(cosmetic.alphas.value, changedIndices);
     markAttributeIndicesForUpdate(cosmetic.scales.value, changedIndices);
     prevHoveredIdRef.current = hoveredId;
+    invalidate();
     // Style/size changes restyle the hovered dot through the full-restyle effect
     // above; this effect only re-runs when the hovered id itself changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cosmetic, data, idToIndex, hoveredId]);
+  }, [cosmetic, data, idToIndex, hoveredId, invalidate]);
 
   // Hide the overlay when nothing is hovered; resetting the index also
   // un-collapses the previously-hovered instance in the main mesh.
@@ -2245,11 +2273,13 @@ export function R3FDotsWebGPU({
     if (idx === undefined) {
       hoveredIndexU.value = NO_HOVER_INDEX;
       hoverMesh.visible = false;
+      invalidate();
       return;
     }
     hoveredIndexU.value = idx;
     hoverMesh.visible = true;
-  }, [hoverMesh, hoveredId, idToIndex, hoveredIndexU]);
+    invalidate();
+  }, [hoverMesh, hoveredId, idToIndex, hoveredIndexU, invalidate]);
 
   const ringBuffers = useMemo(() => {
     const count = pulseIds.length;
@@ -2356,6 +2386,31 @@ export function R3FDotsWebGPU({
       rb.scales.value.needsUpdate = true;
       rb.colors.value.needsUpdate = true;
       rb.alphas.value.needsUpdate = true;
+    }
+  });
+
+  // Demand-frameloop sustainer. Runs after every other subscriber so it sees
+  // post-step state; while any multi-frame GPU work is live it requests the
+  // next frame, making each loop self-sustaining after its initial event-site
+  // kick. Pulse is absent on purpose: its clock invalidates at its own 30fps
+  // budget above. With frameloop='always' invalidate() is a no-op.
+  useFrame(() => {
+    const channel = gpuControlRef && gpuControlRef.current;
+    const requestPending = !!(channel && channel.request && channel.request.id !== handledReqId.current);
+    const pickPending = !!(pickControlRef && pickControlRef.current
+      && (pickControlRef.current.click || pickControlRef.current.move));
+    const semanticDispatchPending = !!semanticScoring && (
+      semanticScoreDispatchRef.current !== semanticScoreHandledRef.current
+      || semanticMatchedDispatchRef.current !== semanticMatchedHandledRef.current
+    );
+    if (
+      jobRef.current.mode !== 'idle'
+      || requestPending
+      || pickPending
+      || semanticDispatchPending
+      || swapRef.current !== null
+    ) {
+      invalidate();
     }
   });
 

@@ -39,7 +39,13 @@ export function makeGpuExecutor(gpuControlRef, {
 
   const issue = (req) => {
     const id = ++reqSeq;
-    if (gpuControlRef.current) gpuControlRef.current.request = { id, ...req };
+    if (gpuControlRef.current) {
+      gpuControlRef.current.request = { id, ...req };
+      // Demand frameloop: requests are consumed inside the dots' frame loop,
+      // so a frame must run for this request to start. R3FDotsWebGPU
+      // publishes the invalidate hook alongside the channel.
+      gpuControlRef.current.invalidate?.();
+    }
     return {
       stop() {
         const channel = gpuControlRef.current;
@@ -47,6 +53,7 @@ export function makeGpuExecutor(gpuControlRef, {
         // already superseded us otherwise.
         if (channel && channel.request && channel.request.id === id) {
           channel.request = { id: ++reqSeq, type: 'stop' };
+          channel.invalidate?.();
         }
       },
     };

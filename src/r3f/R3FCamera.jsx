@@ -27,7 +27,7 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  */
 export function R3FCamera({ onTransformChange, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt' }) {
   const controlsRef = useRef(null);
-  const { camera, gl, size } = useThree();
+  const { camera, gl, size, invalidate } = useThree();
 
   // Graph-aware zoom-out cap: derive the max camera distance from the data
   // bounds so the whole graph never shrinks below MIN_GRAPH_VIEWPORT_FRACTION
@@ -76,10 +76,11 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
           controlsRef.current.target.set(camera.position.x, camera.position.y, 0);
           controlsRef.current.update();
         }
+        invalidate();
         onTransformChange?.();
       },
     });
-  }, [camera, gl, interactionRef, clickControlRef]);
+  }, [camera, gl, interactionRef, clickControlRef, invalidate]);
 
   // Wheel: scroll-to-pan or zoom-to-cursor
   useEffect(() => {
@@ -132,12 +133,13 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
         controlsRef.current.update();
       }
 
+      invalidate();
       onTransformChange?.();
     };
 
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
-  }, [camera, gl, size, maxZ, scrollZoomModifier]);
+  }, [camera, gl, size, maxZ, scrollZoomModifier, invalidate]);
 
   return (
     <OrbitControls

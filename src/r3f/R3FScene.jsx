@@ -84,7 +84,7 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
 // moving dots during decollision rather than the settled `data`. Touches no GPU
 // meshes either way, so the WebGPU backend mounts it directly.
 export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onContextMenu, onBackgroundClick, pickControlRef = null, interactionRef = null, clickControlRef = null }) {
-  const { camera, gl } = useThree();
+  const { camera, gl, invalidate } = useThree();
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
   const useGpuPick = !!pickControlRef;
   const spatialIndex = useMemo(
@@ -104,8 +104,13 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
   // hover-move ('move') and click ('click') slots.
   const publishPick = useCallback((slot, threshold, onResult) => {
     const channel = pickControlRef?.current;
-    if (channel) channel[slot] = { x: _worldPos.x, y: _worldPos.y, threshold, onResult };
-  }, [pickControlRef]);
+    if (channel) {
+      channel[slot] = { x: _worldPos.x, y: _worldPos.y, threshold, onResult };
+      // Demand frameloop: the pick is serviced inside the dots' frame loop, so
+      // a frame must run for the request to resolve.
+      invalidate();
+    }
+  }, [pickControlRef, invalidate]);
 
   // Cache canvas bounds; avoid layout reads on every mouse event.
   useEffect(() => {
@@ -285,7 +290,7 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
 }
 
 export function CameraInitializer({ data, initialized, initialTransform, onInit, computeFitTarget }) {
-  const { camera, size } = useThree();
+  const { camera, size, invalidate } = useThree();
   const hasRun = useRef(false);
 
   useEffect(() => {
@@ -331,6 +336,7 @@ export function CameraInitializer({ data, initialized, initialTransform, onInit,
       camera.position.set(centerX, centerY, z);
     }
 
+    invalidate();
     onInit?.({ x: camera.position.x, y: camera.position.y, z: camera.position.z });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, camera, size, initialized]);
@@ -340,14 +346,15 @@ export function CameraInitializer({ data, initialized, initialTransform, onInit,
 
 // Allows programmatic camera positioning from outside the Canvas context.
 export function CameraSetter({ setCameraRef }) {
-  const { camera } = useThree();
+  const { camera, invalidate } = useThree();
 
   useEffect(() => {
     setCameraRef.current = (x, y, z) => {
       camera.position.set(x, y, z);
+      invalidate();
     };
     return () => { setCameraRef.current = null; };
-  }, [camera, setCameraRef]);
+  }, [camera, setCameraRef, invalidate]);
 
   return null;
 }
@@ -376,11 +383,14 @@ export function CameraReporter({ reportRef, onCameraStateChange }) {
  * during the pre-layout 300x150 phase.
  */
 export function WebGpuCanvasReady({ onReady }) {
-  const { gl } = useThree();
+  const { gl, invalidate } = useThree();
   const firedRef = useRef(false);
   const lastRef = useRef({ w: 0, h: 0, stable: 0 });
   useFrame(() => {
     if (firedRef.current) return;
+    // Demand frameloop: the stability check needs consecutive frames, so keep
+    // requesting them until the detector fires (bounded — it fires once).
+    invalidate();
     const c = gl?.domElement;
     if (!c) return;
     const w = c.width;

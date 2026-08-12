@@ -78,9 +78,12 @@ test('WebGPU keeps transient changes out of the full-restyle dependency lane', (
     join(__dirname, '..', 'src', 'r3f', 'R3FDotsWebGPU.jsx'),
     'utf8',
   );
+  // `invalidate` (R3F frame scheduling) is the only allowed callback: it
+  // requests a paint without re-rendering React, so the transient lane stays
+  // out of the full-restyle dependency path.
   assert.match(
     source,
-    /usePulseAnimation\(pulseDotStyles, undefined, false, true\)/,
+    /usePulseAnimation\(pulseDotStyles, invalidate, false, true\)/,
   );
   assert.match(
     source,
