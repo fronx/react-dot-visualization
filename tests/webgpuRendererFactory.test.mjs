@@ -87,4 +87,32 @@ describe('createSingleFlightWebGpuRendererFactory', () => {
     assert.equal(renderer.initialized, true);
     assert.deepEqual(renderer.options, { canvas: 'second' });
   });
+
+  test('disposes a renderer whose canvas detached during async init', async () => {
+    const gate = deferred();
+    const canvas = { isConnected: true };
+    let disposed = false;
+
+    class FakeRenderer {
+      async init() {
+        await gate.promise;
+      }
+
+      dispose() {
+        disposed = true;
+      }
+    }
+
+    const createRenderer = createSingleFlightWebGpuRendererFactory({ Renderer: FakeRenderer });
+    const abandoned = createRenderer({ canvas });
+    let settled = false;
+    abandoned.finally(() => { settled = true; });
+
+    canvas.isConnected = false;
+    gate.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(disposed, true);
+    assert.equal(settled, false);
+  });
 });
