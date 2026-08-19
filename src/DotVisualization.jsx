@@ -10,7 +10,7 @@ import { useDebug } from './useDebug.js';
 import { useLatest } from './useLatest.js';
 import { useDotHoverHandlers } from './useDotHoverHandlers.js';
 import { useStablePositions } from './useStablePositions.js';
-import { usePositionChangeDetection } from './usePositionChangeDetection.js';
+import { usePositionChangeDetection, detectDotSizeChange } from './usePositionChangeDetection.js';
 import { useDecollisionScheduler } from './useDecollisionScheduler.js';
 
 const EMPTY_RADIUS_OVERRIDES = new Map();
@@ -364,6 +364,23 @@ const DotVisualization = forwardRef((props, ref) => {
       schedulerRef.current.decollideForConstraint('');
     }
 
+    // ── Base size change → re-decollide ────────────────────────────────────
+    // The sim reads per-dot radius from item.size at launch, so a changed
+    // size on the same ids/positions means the current layout was decollided
+    // for a different radius — dots overlap (grew) or over-spread (shrank).
+    // The position-change detector deliberately ignores .size; detect the
+    // size delta here and act after position resolution below, so the base
+    // relaunch seeds from current on-screen positions (no snap; launch-base
+    // animates from them). Shrunk sizes reseed from raw input instead:
+    // collision is repulsive-only and cannot contract a spread layout.
+    const sizeChange =
+      !scopeChangedThisRender &&
+      schedulerRef.current &&
+      prevLength > 0 &&
+      prevLength === validData.length
+        ? detectDotSizeChange(validData, previousDataRef.current, defaultSize)
+        : null;
+
     // ── Position resolution: detect changes, restore cache if unchanged ────
     const { processedData: processedValidData } = resolveDataEffectPositions({
       validData,
@@ -402,6 +419,17 @@ const DotVisualization = forwardRef((props, ref) => {
       dataRef.current = processedValidData;
     }
 
+    if (sizeChange) {
+      if (sizeChange === 'shrank') {
+        dataRef.current = validData;
+      }
+      // Every cached layout was computed for the old radius; clear before
+      // requesting so the scheduler relaunches the sim instead of animating
+      // to a stale cache hit (validateCachedPositions only checks coverage).
+      sharedPositionCache?.cache.clear();
+      schedulerRef.current.decollideForConstraint('');
+    }
+
     // Conditional rendering based on update type:
     // - Incremental updates OR intermediate full re-renders: keep stable positions on screen
     // - Settled full renders: apply immediately
@@ -425,7 +453,7 @@ const DotVisualization = forwardRef((props, ref) => {
     // Update visible dot count when data changes
     updateVisibleDotCount();
 
-  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate, scopeKey]);
+  }, [data, margin, ensureIds, hasPositionsChanged, positionsAreIntermediate, autoZoomToNewContent, autoZoomDuration, isIncrementalUpdate, scopeKey, defaultSize]);
 
   // Initialize and set up zoom behavior with ZoomManager once.
   useEffect(() => {

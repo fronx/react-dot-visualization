@@ -18,7 +18,7 @@ import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import { boundsForData, computeFitTransformToVisible } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
 import { useStablePositions } from '../useStablePositions.js';
-import { usePositionChangeDetection } from '../usePositionChangeDetection.js';
+import { usePositionChangeDetection, detectDotSizeChange } from '../usePositionChangeDetection.js';
 import { resolveDataEffectPositions } from '../resolveDataEffectPositions.js';
 import { useLatest } from '../useLatest.js';
 import { mergeDotStyleMaps } from './dynamicDotStyles.js';
@@ -366,6 +366,20 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       schedulerRef.current.decollideForConstraint('');
     }
 
+    // ── Base size change → re-decollide ────────────────────────────────────
+    // Mirrors Canvas: same ids/positions with a changed item.size means the
+    // current layout was decollided for a different radius. Detect here (the
+    // position detector ignores .size) and act after position resolution so
+    // the relaunch seeds from on-screen positions; shrunk sizes reseed from
+    // raw input (repulsive-only collision cannot contract a spread layout).
+    const sizeChange =
+      !scopeChangedThisRender &&
+      schedulerRef.current &&
+      prevLength > 0 &&
+      prevLength === validData.length
+        ? detectDotSizeChange(validData, previousDataRef.current, defaultSize)
+        : null;
+
     const dataIdentityChanged = previousDataKeyRef.current !== null &&
       dataKey != null && previousDataKeyRef.current !== dataKey;
     previousDataKeyRef.current = dataKey ?? null;
@@ -387,6 +401,18 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       : validData.map(item => ({ ...item }));
     if (!scopeChangedThisRender) {
       dataRef.current = processedValidData;
+    }
+
+    if (sizeChange) {
+      if (sizeChange === 'shrank') {
+        dataRef.current = validData;
+      }
+      // Cached layouts were computed for the old radius; clear before
+      // requesting so the scheduler relaunches instead of animating to a
+      // stale cache hit. No-op for the webgpu backend (scheduler cache is
+      // null there; decollideForConstraint drops its GPU snapshot).
+      sharedPositionCache?.cache.clear();
+      schedulerRef.current.decollideForConstraint('');
     }
 
     const keepStable = shouldUseStablePositions(
@@ -411,6 +437,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     hasPositionsChanged,
     shouldUseStablePositions,
     constraintKeyRef,
+    defaultSize,
   ]);
 
   const scheduler = useDecollisionScheduler({
