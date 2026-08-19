@@ -366,23 +366,26 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       schedulerRef.current.decollideForConstraint('');
     }
 
+    const dataIdentityChanged = previousDataKeyRef.current !== null &&
+      dataKey != null && previousDataKeyRef.current !== dataKey;
+    previousDataKeyRef.current = dataKey ?? null;
+
     // ── Base size change → re-decollide ────────────────────────────────────
     // Mirrors Canvas: same ids/positions with a changed item.size means the
     // current layout was decollided for a different radius. Detect here (the
     // position detector ignores .size) and act after position resolution so
     // the relaunch seeds from on-screen positions; shrunk sizes reseed from
     // raw input (repulsive-only collision cannot contract a spread layout).
+    // A changed data identity is a different layout, not a size edit of the
+    // current one — the identity/scope paths own that transition.
     const sizeChange =
       !scopeChangedThisRender &&
+      !dataIdentityChanged &&
       schedulerRef.current &&
       prevLength > 0 &&
       prevLength === validData.length
         ? detectDotSizeChange(validData, previousDataRef.current, defaultSize)
         : null;
-
-    const dataIdentityChanged = previousDataKeyRef.current !== null &&
-      dataKey != null && previousDataKeyRef.current !== dataKey;
-    previousDataKeyRef.current = dataKey ?? null;
 
     const { processedData: processedValidData } = resolveDataEffectPositions({
       validData,
