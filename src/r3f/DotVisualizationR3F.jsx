@@ -336,7 +336,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       return;
     }
 
-    const validData = validateData(data);
+    // WebGPU already validated this exact data identity during render for the
+    // GPU seed. Reuse it here instead of scanning every point a second time in
+    // the passive handoff effect. WebGL keeps its existing effect-owned pass.
+    const validData = backend === 'webgpu' ? webgpuSeedData : validateData(data);
     if (validData.length === 0) return;
 
     let scopeChangedThisRender = false;
@@ -432,6 +435,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   }, [
     backend,
     data,
+    webgpuSeedData,
     dataKey,
     scopeKey,
     isIncrementalUpdate,

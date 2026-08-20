@@ -347,6 +347,10 @@ function buildCosmeticBuffers(N, data, opts) {
     alphas: instancedArray(new Float32Array(N), 'float'),
     focus: instancedArray(new Float32Array(N), 'float'),
     scales: instancedArray(new Float32Array(N), 'float'),
+    // The build pass already wrote this exact data identity. The first passive
+    // effect can skip its otherwise identical O(N) rewrite; clear after that
+    // commit so later style/data changes still update the persistent buffers.
+    seededData: data,
   };
   writeCosmetics(cosmetic, data, opts);
   return cosmetic;
@@ -1092,7 +1096,13 @@ export function R3FDotsWebGPU({
   );
   useEffect(() => {
     if (cosmetic && data && data.length) {
+      const seededThisCommit = cosmetic.seededData === data;
+      cosmetic.seededData = null;
       if (streamingPositions?.hideUnseen) return;
+      if (seededThisCommit) {
+        invalidate();
+        return;
+      }
       writeCosmetics(cosmetic, data, cosmeticOpts);
       invalidate();
     }
