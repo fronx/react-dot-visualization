@@ -613,7 +613,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
 
       if (duration <= 0) {
         setCameraPositionRef.current(target.x, target.y, target.z);
-        cameraStateRef.current = { ...target };
+        handleCameraStateChange({ ...target });
         return true;
       }
 
