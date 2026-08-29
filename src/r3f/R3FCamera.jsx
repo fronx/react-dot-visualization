@@ -11,6 +11,7 @@ import {
   CAMERA_FOV_DEGREES,
 } from './cameraUtils.js';
 import { finiteBoundsForData } from '../utils.js';
+import { isFiniteCameraPosition } from './cameraState.js';
 
 const CAMERA_Z_MIN = 0.5;
 const CAMERA_Z_MAX = 5000; // absolute zoom-out ceiling (safety)
@@ -25,7 +26,7 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-export function R3FCamera({ onTransformChange, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt' }) {
+export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt' }) {
   const controlsRef = useRef(null);
   const { camera, gl, size, invalidate } = useThree();
 
@@ -35,12 +36,13 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
   const dataBounds = useMemo(() => finiteBoundsForData(data), [data]);
   const maxZ = useMemo(() => {
     if (!dataBounds) return CAMERA_Z_MAX;
+    if (!(size.width > 0) || !(size.height > 0)) return CAMERA_Z_MAX;
     const aspect = size.width / size.height;
     const z = computeFitZ(
       dataBounds.minX, dataBounds.maxX, dataBounds.minY, dataBounds.maxY,
       aspect, MIN_GRAPH_VIEWPORT_FRACTION,
     );
-    return Math.min(CAMERA_Z_MAX, z);
+    return Number.isFinite(z) ? Math.min(CAMERA_Z_MAX, z) : CAMERA_Z_MAX;
   }, [dataBounds, size.width, size.height]);
 
   // OrbitControls targets the origin by default, but CameraInitializer and
@@ -48,6 +50,10 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
   // look-at directly under the camera, the view stays aimed at the origin and
   // the data renders off-center until the first pan/zoom (which sets target).
   useFrame(() => {
+    if (!isFiniteCameraPosition(camera.position)) {
+      onInvalidCamera?.();
+      return;
+    }
     const controls = controlsRef.current;
     if (!controls) return;
     const { x, y } = camera.position;
@@ -70,8 +76,17 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
       // logic into clickControlRef.
       onClick: (e) => { if (clickControlRef) clickControlRef.current?.(e); },
       onPan: (worldDeltaX, worldDeltaY) => {
-        camera.position.x += worldDeltaX;
-        camera.position.y += worldDeltaY;
+        const next = {
+          x: camera.position.x + worldDeltaX,
+          y: camera.position.y + worldDeltaY,
+          z: camera.position.z,
+        };
+        if (!isFiniteCameraPosition(next)) {
+          onInvalidCamera?.();
+          return;
+        }
+        camera.position.x = next.x;
+        camera.position.y = next.y;
         if (controlsRef.current) {
           controlsRef.current.target.set(camera.position.x, camera.position.y, 0);
           controlsRef.current.update();
@@ -80,7 +95,7 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
         onTransformChange?.();
       },
     });
-  }, [camera, gl, interactionRef, clickControlRef, invalidate]);
+  }, [camera, gl, interactionRef, clickControlRef, invalidate, onInvalidCamera]);
 
   // Wheel: scroll-to-pan or zoom-to-cursor
   useEffect(() => {
@@ -93,6 +108,10 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
 
       const gesture = classifyWheelGesture(event, scrollZoomModifier);
       const rect = canvas.getBoundingClientRect();
+      if (!isFiniteCameraPosition(camera.position) || !(rect.width > 0) || !(rect.height > 0)) {
+        if (!isFiniteCameraPosition(camera.position)) onInvalidCamera?.();
+        return;
+      }
 
       if (gesture === 'scroll-pan') {
         const { worldDeltaX, worldDeltaY } = calculatePan({
@@ -102,8 +121,17 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
           containerWidth: rect.width,
           containerHeight: rect.height,
         });
-        camera.position.x += worldDeltaX;
-        camera.position.y += worldDeltaY;
+        const next = {
+          x: camera.position.x + worldDeltaX,
+          y: camera.position.y + worldDeltaY,
+          z: camera.position.z,
+        };
+        if (!isFiniteCameraPosition(next)) {
+          onInvalidCamera?.();
+          return;
+        }
+        camera.position.x = next.x;
+        camera.position.y = next.y;
         controlsRef.current.target.set(camera.position.x, camera.position.y, 0);
         controlsRef.current.update();
       } else {
@@ -125,10 +153,15 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
           cursorNDC: { x: ndcX, y: ndcY },
           aspect: size.width / size.height,
         });
+        const next = { x: result.cameraX, y: result.cameraY, z: newZ };
+        if (!isFiniteCameraPosition(next)) {
+          onInvalidCamera?.();
+          return;
+        }
 
-        camera.position.x = result.cameraX;
-        camera.position.y = result.cameraY;
-        camera.position.z = newZ;
+        camera.position.x = next.x;
+        camera.position.y = next.y;
+        camera.position.z = next.z;
         controlsRef.current.target.set(camera.position.x, camera.position.y, 0);
         controlsRef.current.update();
       }
@@ -139,7 +172,7 @@ export function R3FCamera({ onTransformChange, data = [], interactionRef = null,
 
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
-  }, [camera, gl, size, maxZ, scrollZoomModifier, invalidate]);
+  }, [camera, gl, size, maxZ, scrollZoomModifier, invalidate, onInvalidCamera]);
 
   return (
     <OrbitControls
@@ -167,6 +200,8 @@ export function useCameraFit() {
     const centerY = (minY + maxY) / 2;
     const aspect = size.width / size.height;
     const z = computeFitZ(minX, maxX, minY, maxY, aspect);
+    if (!isFiniteCameraPosition({ x: centerX, y: centerY, z })) return false;
     camera.position.set(centerX, centerY, z);
+    return true;
   };
 }

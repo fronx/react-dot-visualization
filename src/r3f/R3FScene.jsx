@@ -4,12 +4,10 @@ import { useThree, useFrame } from '@react-three/fiber';
 import { R3FDots } from './R3FDots.jsx';
 import { R3FEdges } from './R3FEdges.jsx';
 import { R3FCamera } from './R3FCamera.jsx';
-import { computeFitZ, CAMERA_FOV_DEGREES } from './cameraUtils.js';
+import { isFiniteCameraPosition, resolveInitialCameraPosition } from './cameraState.js';
 import { buildSpatialGrid, queryRadius } from '../spatialIndex.js';
 import { useHoverDispatcher } from '../useHoverDispatcher.js';
 import { resolveHoverRadius } from './dotAppearance.js';
-
-const CAMERA_FOV_RAD = CAMERA_FOV_DEGREES * (Math.PI / 180);
 
 const _raycaster = new THREE.Raycaster();
 const _mouse = new THREE.Vector2();
@@ -295,51 +293,17 @@ export function CameraInitializer({ data, initialized, initialTransform, onInit,
 
   useEffect(() => {
     if (hasRun.current || initialized.current || data.length === 0) return;
+    const position = resolveInitialCameraPosition({ data, size, initialTransform, computeFitTarget });
+    if (!position) return;
+
+    camera.position.set(position.x, position.y, position.z);
+    // Initialization is a successful finite commit, not an attempted effect.
+    // Leaving both latches open above lets a zero-sized first pass retry.
     hasRun.current = true;
     initialized.current = true;
-
-    const occlusionAwareFit = !initialTransform ? computeFitTarget?.() : null;
-
-    if (initialTransform) {
-      // Restore from a saved D3 zoom transform produced by Canvas's
-      // ZoomManager or computed externally against the same convention
-      // (viewBox = [0, 0, 100*aspect, 100], where 100 matches
-      // DotVisualization's baseHeight). The Y inversion that turns SVG
-      // down-positive into Three.js up-positive is baked into the
-      // (y - vbH/2) sign — no extra negation here.
-      const { x, y, k } = initialTransform;
-      const { width: W, height: H } = size;
-      const vbH = 100;
-      const vbW = (W / H) * vbH;
-      const cx = (vbW / 2 - x) / k;
-      const cy_world = (y - vbH / 2) / k;
-      const cz = vbH / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
-      camera.position.set(cx, cy_world, Math.max(0.5, Math.min(5000, cz)));
-    } else if (occlusionAwareFit) {
-      // Match Canvas: center the data in the occlusion-aware visible region
-      // (padded bounds, fitMargin) via the same computeFitTransformToVisible
-      // pipeline DotVisualizationR3F.zoomToVisible uses, rather than centering
-      // the raw centroid on the full canvas.
-      camera.position.set(occlusionAwareFit.x, occlusionAwareFit.y, occlusionAwareFit.z);
-    } else {
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const item of data) {
-        if (item.x < minX) minX = item.x;
-        if (item.x > maxX) maxX = item.x;
-        if (item.y < minY) minY = item.y;
-        if (item.y > maxY) maxY = item.y;
-      }
-      const centerX = (minX + maxX) / 2;
-      const centerY = -((minY + maxY) / 2); // negate Y: data Y is SVG (down+), world Y is up+
-      const aspect = size.width / size.height;
-      const z = computeFitZ(minX, maxX, minY, maxY, aspect, 0.85);
-      camera.position.set(centerX, centerY, z);
-    }
-
     invalidate();
-    onInit?.({ x: camera.position.x, y: camera.position.y, z: camera.position.z });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, camera, size, initialized]);
+    onInit?.(position);
+  }, [data, camera, size, initialized, initialTransform, computeFitTarget, invalidate, onInit]);
 
   return null;
 }
@@ -350,8 +314,10 @@ export function CameraSetter({ setCameraRef }) {
 
   useEffect(() => {
     setCameraRef.current = (x, y, z) => {
+      if (!isFiniteCameraPosition({ x, y, z })) return false;
       camera.position.set(x, y, z);
       invalidate();
+      return true;
     };
     return () => { setCameraRef.current = null; };
   }, [camera, setCameraRef, invalidate]);
@@ -442,6 +408,7 @@ export function R3FScene({
   initialTransform = null,
   computeFitTarget,
   onCameraStateChange,
+  onInvalidCamera,
   setCameraRef,
   liveTransitionDataRef,
   blockHoverDuringInteraction = false,
@@ -476,7 +443,7 @@ export function R3FScene({
       />
       <CameraReporter reportRef={reportCameraRef} onCameraStateChange={onCameraStateChange} />
       {setCameraRef && <CameraSetter setCameraRef={setCameraRef} />}
-      <R3FCamera onTransformChange={handleTransformChange} data={data} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} />
+      <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={onInvalidCamera} data={data} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} />
 
       {showEdges && edges.length > 0 && (
         <R3FEdges

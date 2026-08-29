@@ -15,6 +15,12 @@ import { R3FDotsWebGPU, BASE_MAX_SOLVER_ITERATIONS, CONSTRAINT_MAX_SOLVER_ITERAT
 import { makeGpuExecutor } from './gpuDecollisionExecutor.js';
 import { createSingleFlightWebGpuRendererFactory } from './webgpuRendererFactory.js';
 import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
+import {
+  cameraMoveMode,
+  cameraPositionFromTransform,
+  isFiniteCameraPosition,
+  isFiniteCameraTransform,
+} from './cameraState.js';
 import { boundsForData, computeFitTransformToVisible } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
 import { useStablePositions } from '../useStablePositions.js';
@@ -487,7 +493,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // would produce for this camera position. Shared by getZoomTransform and the
   // onTransformChange forward.
   const zoomTransformFromCamera = useCallback((cam) => {
-    if (!cam || !containerRef.current) return null;
+    if (!isFiniteCameraPosition(cam) || !containerRef.current) return null;
     const { width: W, height: H } = containerRef.current.getBoundingClientRect();
     if (!W || !H) return null;
     const vbH = R3F_VIEWBOX_HEIGHT;
@@ -508,11 +514,13 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const onTransformChangeRef = useRef(onTransformChange);
   useEffect(() => { onTransformChangeRef.current = onTransformChange; }, [onTransformChange]);
   const handleCameraStateChange = useCallback((state) => {
+    if (!isFiniteCameraPosition(state)) return false;
     cameraStateRef.current = state;
     if (onTransformChangeRef.current) {
       const transform = zoomTransformFromCamera(state);
       if (transform) onTransformChangeRef.current(transform);
     }
+    return true;
   }, [zoomTransformFromCamera]);
 
   // Camera-report plumbing for the webgpu branch (R3FScene supplies its own for
@@ -531,13 +539,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // (`_dummy.position.set(item.x, -item.y, 0)` in R3FDots), so this conversion
   // is the algebraic inverse of getZoomTransform below.
   const d3ToCamera = useCallback((transform, W, H) => {
-    const { x, y, k } = transform;
-    const vbH = R3F_VIEWBOX_HEIGHT;
-    const vbW = (W / H) * vbH;
-    const cx = (vbW / 2 - x) / k;
-    const cy = (y - vbH / 2) / k;
-    const cz = vbH / (k * 2 * Math.tan(CAMERA_FOV_RAD / 2));
-    return { x: cx, y: cy, z: Math.max(0.5, Math.min(5000, cz)) };
+    return cameraPositionFromTransform(transform, { width: W, height: H });
   }, []);
 
   // Compute the viewBox-space fit transform honoring occlusion. Shares the
@@ -549,7 +551,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     const bounds = boundsForData(dataToUse, defaultSize);
     const viewBox = viewBoxForContainer(rect);
     const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
-    return computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
+    const fit = computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
+    return isFiniteCameraTransform(fit) ? fit : null;
   }, [defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
   const getCpuPositionData = useCallback(() => {
@@ -569,6 +572,20 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     const rect = containerRef.current.getBoundingClientRect();
     return d3ToCamera(fit, rect.width, rect.height);
   }, [computeFit, d3ToCamera, controlData]);
+
+  const recoverInvalidCamera = useCallback(() => {
+    if (!setCameraPositionRef.current) return false;
+    const target = computeInitialFitTarget();
+    if (!target || !setCameraPositionRef.current(target.x, target.y, target.z)) return false;
+    handleCameraStateChange(target);
+    return true;
+  }, [computeInitialFitTarget, handleCameraStateChange]);
+
+  useEffect(() => {
+    if (cameraStateRef.current && !isFiniteCameraPosition(cameraStateRef.current)) {
+      recoverInvalidCamera();
+    }
+  }, [recoverInvalidCamera, dataKey]);
 
   // Imperative handle — implements the DotVisualization API surface
   useImperativeHandle(ref, () => ({
@@ -610,9 +627,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       }
 
       const target = d3ToCamera({ x, y, k }, W, H);
-
-      if (duration <= 0) {
-        setCameraPositionRef.current(target.x, target.y, target.z);
+      const moveMode = cameraMoveMode({ start: cameraStateRef.current, target, duration });
+      if (moveMode === 'reject') return false;
+      if (moveMode === 'instant') {
+        if (!setCameraPositionRef.current(target.x, target.y, target.z)) return false;
         handleCameraStateChange({ ...target });
         return true;
       }
@@ -639,7 +657,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           const cx = startCam.x + (target.x - startCam.x) * e;
           const cy = startCam.y + (target.y - startCam.y) * e;
           const cz = startCam.z + (target.z - startCam.z) * e;
-          setCameraPositionRef.current(cx, cy, cz);
+          if (!setCameraPositionRef.current(cx, cy, cz)) {
+            resolve(false);
+            return;
+          }
           handleCameraStateChange({ x: cx, y: cy, z: cz });
           if (t < 1) requestAnimationFrame(tick);
           else resolve(true);
@@ -657,9 +678,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     setZoomTransform: (transform, _options = {}) => {
       if (!containerRef.current || !setCameraPositionRef.current) return false;
       const { width: W, height: H } = containerRef.current.getBoundingClientRect();
-      if (!W || !H || !transform.k) return false;
+      if (!W || !H) return false;
       const target = d3ToCamera(transform, W, H);
-      setCameraPositionRef.current(target.x, target.y, target.z);
+      if (!target || !setCameraPositionRef.current(target.x, target.y, target.z)) return false;
       handleCameraStateChange({ ...target });
       return true;
     },
@@ -717,7 +738,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} />
+          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dataKey={dataKey}
@@ -801,6 +822,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             initialTransform={initialTransform}
             computeFitTarget={computeInitialFitTarget}
             onCameraStateChange={handleCameraStateChange}
+            onInvalidCamera={recoverInvalidCamera}
             setCameraRef={setCameraPositionRef}
             liveTransitionDataRef={liveTransitionDataRef}
             blockHoverDuringInteraction={blockHoverDuringInteraction}
