@@ -19,6 +19,7 @@ function recorder() {
       onHover: (item) => calls.push(['hover', item?.id ?? null]),
       onLeave: (item) => calls.push(['leave', item?.id ?? null]),
       onHoveredIdChange: (id) => calls.push(['id', id]),
+      onHoverRest: (item) => calls.push(['rest', item?.id ?? null]),
     },
   };
 }
@@ -106,5 +107,31 @@ describe('createHoverDispatcher', () => {
     cb.onHover = () => calls.push('second');
     d.move(B);
     assert.deepStrictEqual(calls, ['first', 'second']);
+  });
+
+  test('rest fires once for the hovered dot and never with nothing hovered', () => {
+    const r = recorder();
+    const d = createHoverDispatcher(r.callbacks);
+    d.rest();
+    d.move(A);
+    r.calls.length = 0;
+    d.rest();
+    d.rest();
+    assert.deepStrictEqual(r.calls, [['rest', 'a']]);
+  });
+
+  test('a new hover re-arms rest; zone leave disarms it', () => {
+    const r = recorder();
+    const d = createHoverDispatcher(r.callbacks);
+    d.move(A);
+    d.rest();
+    d.move(B);
+    r.calls.length = 0;
+    d.rest();
+    assert.deepStrictEqual(r.calls, [['rest', 'b']]);
+    d.leaveZone();
+    r.calls.length = 0;
+    d.rest();
+    assert.deepStrictEqual(r.calls, []);
   });
 });

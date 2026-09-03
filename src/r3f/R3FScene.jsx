@@ -7,6 +7,7 @@ import { R3FCamera } from './R3FCamera.jsx';
 import { isFiniteCameraPosition, resolveInitialCameraPosition } from './cameraState.js';
 import { buildSpatialGrid, queryRadius } from '../spatialIndex.js';
 import { useHoverDispatcher } from '../useHoverDispatcher.js';
+import { createPointerMotion } from '../pointerMotion.js';
 import { resolveHoverRadius } from './dotAppearance.js';
 
 const _raycaster = new THREE.Raycaster();
@@ -81,7 +82,14 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
 // pick kernel that reads the live position buffer, so hit-testing tracks the
 // moving dots during decollision rather than the settled `data`. Touches no GPU
 // meshes either way, so the WebGPU backend mounts it directly.
-export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoveredIdChange, onDotClick, onContextMenu, onBackgroundClick, pickControlRef = null, interactionRef = null, clickControlRef = null }) {
+// Rest detection: a hovered dot is "rested on" when the pointer moves slower than
+// HOVER_REST_SLOW_PX_PER_MS over it, or stops moving for HOVER_REST_MS. The
+// motion tracker runs per mouse move (constant work); the rest timer is armed
+// only while a not-yet-rested dot is hovered, so a sweep pays nothing extra.
+export const HOVER_REST_SLOW_PX_PER_MS = 0.3;
+export const HOVER_REST_MS = 120;
+
+export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoverRest, onHoveredIdChange, onDotClick, onContextMenu, onBackgroundClick, pickControlRef = null, interactionRef = null, clickControlRef = null }) {
   const { camera, gl, invalidate } = useThree();
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
   const useGpuPick = !!pickControlRef;
@@ -95,7 +103,8 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
   const dataRef = useRef(data);
   dataRef.current = data;
 
-  const dispatcher = useHoverDispatcher({ onHover, onLeave, onHoveredIdChange });
+  const dispatcher = useHoverDispatcher({ onHover, onLeave, onHoverRest, onHoveredIdChange });
+  const motion = useMemo(() => createPointerMotion({ slowPxPerMs: HOVER_REST_SLOW_PX_PER_MS }), []);
 
   // Publish the latest cursor into the GPU pick channel; R3FDotsWebGPU's frame
   // loop services it and calls `onResult(index)`. The single writer for both
@@ -137,6 +146,24 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
     // or two later; without this gate an in-flight (or queued) pick could land
     // after mouseleave and re-hover a dot we already reported as zone-left.
     let inside = false;
+    let restTimer = 0;
+    let slow = true;
+
+    // Arm the rest timer only while a not-yet-rested dot is hovered; the
+    // dispatcher's rest() is idempotent per hover, so a redundant fire is free.
+    const armRest = () => {
+      if (restTimer) clearTimeout(restTimer);
+      restTimer = 0;
+      if (!dispatcher.hovered) return;
+      restTimer = setTimeout(() => {
+        restTimer = 0;
+        if (inside) dispatcher.rest();
+      }, HOVER_REST_MS);
+    };
+    const settleHover = () => {
+      if (slow) dispatcher.rest();
+      armRest();
+    };
 
     const processMove = () => {
       rafId = 0;
@@ -163,18 +190,21 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
         publishPick('move', threshold, (index) => {
           if (!inside) return;
           dispatcher.move(index >= 0 ? (dataRef.current[index] ?? null) : null);
+          settleHover();
         });
         return;
       }
 
       const nearest = findNearestDot(spatialIndex, _worldPos.x, _worldPos.y, threshold);
       dispatcher.move(nearest ?? null);
+      settleHover();
     };
 
     const handleMove = (e) => {
       inside = true;
       pendingX = e.clientX;
       pendingY = e.clientY;
+      slow = motion.sample(e.clientX, e.clientY, e.timeStamp).slow;
       if (!rafId) {
         rafId = requestAnimationFrame(processMove);
       }
@@ -190,6 +220,9 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       }
       // Cancel a queued GPU pick too (an in-flight one is gated by `inside`).
       if (useGpuPick && pickControlRef.current) pickControlRef.current.move = null;
+      if (restTimer) clearTimeout(restTimer);
+      restTimer = 0;
+      motion.reset();
       dispatcher.leaveZone();
     };
 
@@ -199,10 +232,11 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       if (rafId) {
         cancelAnimationFrame(rafId);
       }
+      if (restTimer) clearTimeout(restTimer);
       canvas.removeEventListener('mousemove', handleMove);
       canvas.removeEventListener('mouseleave', handleLeave);
     };
-  }, [camera, gl, dispatcher, spatialIndex, useGpuPick, pickControlRef, publishPick, interactionRef]);
+  }, [camera, gl, dispatcher, motion, spatialIndex, useGpuPick, pickControlRef, publishPick, interactionRef]);
 
   // Click detection. R3FCamera's pan handler is the single click-vs-drag
   // authority: it calls clickControlRef only on a genuine click (never on the
