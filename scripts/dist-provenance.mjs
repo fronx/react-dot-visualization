@@ -7,7 +7,11 @@
 // commit that src is.
 //
 //   node scripts/dist-provenance.mjs write    # after vite build; writes dist/provenance.json
-//   node scripts/dist-provenance.mjs report   # prints { commit, dirty, distFresh }
+//   node scripts/dist-provenance.mjs report   # prints { commit, dirty, distFresh, built }
+//
+// `built` is what the dist on disk was made from ({ commit, dirty } at build
+// time, or null before any provenance was written) — the consumer's first fact
+// when "the app feels different today".
 //
 // Every path resolves against this file's own repository, never the working
 // directory: a consumer invoking it from elsewhere would otherwise get its own
@@ -17,7 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = path.resolve(fileURLToPath(import.meta.url), '../..');
 const inRepo = (...segments) => path.join(repoRoot, ...segments);
@@ -62,14 +66,14 @@ function distDigest() {
   return combineHashes(files);
 }
 
-function gitState() {
+export function gitState() {
   return {
     commit: git('rev-parse', 'HEAD').trim(),
     dirty: git('status', '--porcelain', '--', ...BUILD_INPUT_PATHS).trim() !== '',
   };
 }
 
-function write() {
+export function write() {
   if (!existsSync(inRepo('dist'))) throw new Error('dist/ not found; run the lib build first');
   const provenance = { ...gitState(), srcDigest: srcDigest(), distDigest: distDigest() };
   writeFileSync(PROVENANCE_FILE, `${JSON.stringify(provenance, null, 2)}\n`);
@@ -82,13 +86,16 @@ function report() {
   const distFresh = recorded !== null
     && recorded.srcDigest === srcDigest()
     && recorded.distDigest === distDigest();
-  console.log(JSON.stringify({ ...gitState(), distFresh }));
+  const built = recorded && { commit: recorded.commit, dirty: recorded.dirty };
+  console.log(JSON.stringify({ ...gitState(), distFresh, built }));
 }
 
-const command = process.argv[2];
-if (command === 'write') write();
-else if (command === 'report') report();
-else {
-  console.error('usage: dist-provenance.mjs write|report');
-  process.exit(2);
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  const command = process.argv[2];
+  if (command === 'write') write();
+  else if (command === 'report') report();
+  else {
+    console.error('usage: dist-provenance.mjs write|report');
+    process.exit(2);
+  }
 }

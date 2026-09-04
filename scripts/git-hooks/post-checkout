@@ -1,0 +1,5 @@
+#!/bin/sh
+# Warns (never blocks) when another live session has claimed this checkout —
+# moving HEAD under them is how a sibling's fresh commit got unreferenced on
+# 2026-09-04. Enable once per clone: git config core.hooksPath scripts/git-hooks
+node "$(dirname "$0")/../build-lib.mjs" --check-only
