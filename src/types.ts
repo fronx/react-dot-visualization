@@ -108,6 +108,17 @@ export interface DotVisualizationRef {
     transform: ZoomTransformLike,
     options?: { direct?: boolean },
   ) => boolean;
+  /**
+   * Animated counterpart to `setZoomTransform`: ease from the current camera
+   * to an exact viewBox-space transform (no data fitting, no margin).
+   * `duration` 0 or omitted commits instantly. Resolves `true` when the target
+   * was reached (or applied instantly); `false` when the move was rejected or
+   * interrupted (camera unmount mid-animation).
+   */
+  animateToZoomTransform: (
+    transform: ZoomTransformLike,
+    options?: { duration?: number; easing?: (t: number) => number },
+  ) => Promise<boolean>;
   getVisibleDotCount: () => number;
   updateVisibleDotCount: () => void;
   /** Cancel any in-flight decollision simulation. */

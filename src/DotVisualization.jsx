@@ -282,6 +282,21 @@ const DotVisualization = forwardRef((props, ref) => {
     return true;
   }, []);
 
+  // Animated counterpart to setZoomTransform: eases from the current transform
+  // to `transform` through ZoomManager's transition loop (duration 0 = instant
+  // commit via the zoom handler, like zoomToVisible's instant path).
+  const animateToZoomTransform = useCallback(async (transform, options = {}) => {
+    if (!zoomManager.current || !transform) return false;
+    const { duration = 0, easing = d3.easeCubicInOut } = options;
+    const next = d3.zoomIdentity.translate(transform.x, transform.y).scale(transform.k);
+    if (duration > 0) {
+      await zoomManager.current.animateToTransform(next, { duration, easing });
+    } else {
+      zoomManager.current.applyTransformViaZoomHandler(next);
+    }
+    return true;
+  }, []);
+
   // Generate unique dot IDs
   const dotId = useCallback((layer, item) => {
     return `dot-${layer}-${item.id}`;
@@ -777,6 +792,7 @@ const DotVisualization = forwardRef((props, ref) => {
     zoomToVisible,
     getFitTransform,
     setZoomTransform,
+    animateToZoomTransform,
     getVisibleDotCount: () => visibleDotCount,
     updateVisibleDotCount,
     getZoomTransform: () => zoomManager.current?.getCurrentTransform(),
@@ -784,7 +800,7 @@ const DotVisualization = forwardRef((props, ref) => {
     getCurrentPositions,
     decollideForConstraint: (key) => schedulerRef.current?.decollideForConstraint(key),
     getSchedulerPhase: () => schedulerRef.current?.phase,
-  }), [zoomToVisible, getFitTransform, setZoomTransform, visibleDotCount, updateVisibleDotCount, cancelDecollision, getCurrentPositions]);
+  }), [zoomToVisible, getFitTransform, setZoomTransform, animateToZoomTransform, visibleDotCount, updateVisibleDotCount, cancelDecollision, getCurrentPositions]);
 
   // Auto-fit to visible region
   useEffect(() => {

@@ -18,3 +18,10 @@ describe('classifyWheelGesture', () => {
     assert.equal(classifyWheelGesture({ ctrlKey: true, metaKey: false, altKey: false }, 'meta'), 'pinch');
   });
 });
+
+describe('PAN_DRAG_THRESHOLD_PX', () => {
+  test('is exported for consumers layering gestures over the canvas', async () => {
+    const { PAN_DRAG_THRESHOLD_PX } = await import('../src/r3f/cameraUtils.js');
+    assert.equal(PAN_DRAG_THRESHOLD_PX, 4);
+  });
+});

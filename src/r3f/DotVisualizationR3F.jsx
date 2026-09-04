@@ -589,6 +589,48 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     }
   }, [recoverInvalidCamera, dataKey]);
 
+  // Shared executor for every programmatic camera move (zoomToVisible,
+  // animateToZoomTransform): cameraMoveMode decides reject/instant/animate;
+  // animation eases linearly in camera-position space with easing applied to t.
+  const moveCameraTo = useCallback((target, duration, easing) => {
+    const moveMode = cameraMoveMode({ start: cameraStateRef.current, target, duration });
+    if (moveMode === 'reject') return Promise.resolve(false);
+    if (moveMode === 'instant') {
+      if (!setCameraPositionRef.current?.(target.x, target.y, target.z)) return Promise.resolve(false);
+      handleCameraStateChange({ ...target });
+      return Promise.resolve(true);
+    }
+    // 'animate' implies cameraStateRef.current is a finite position.
+    const startCam = { ...cameraStateRef.current };
+    const t0 = performance.now();
+    return new Promise((resolve) => {
+      const tick = () => {
+        // CameraSetter nulls setCameraPositionRef.current on camera
+        // remount/unmount; the ref can go non-callable mid-animation (backend
+        // switch, component unmount). Re-check the live value each frame
+        // rather than trusting the once-only guard at animation start.
+        if (typeof setCameraPositionRef.current !== 'function') {
+          resolve(false);
+          return;
+        }
+        const elapsed = performance.now() - t0;
+        const t = Math.min(1, elapsed / duration);
+        const e = easing(t);
+        const cx = startCam.x + (target.x - startCam.x) * e;
+        const cy = startCam.y + (target.y - startCam.y) * e;
+        const cz = startCam.z + (target.z - startCam.z) * e;
+        if (!setCameraPositionRef.current(cx, cy, cz)) {
+          resolve(false);
+          return;
+        }
+        handleCameraStateChange({ x: cx, y: cy, z: cz });
+        if (t < 1) requestAnimationFrame(tick);
+        else resolve(true);
+      };
+      requestAnimationFrame(tick);
+    });
+  }, [handleCameraStateChange]);
+
   // Imperative handle — implements the DotVisualization API surface
   useImperativeHandle(ref, () => ({
     zoomToVisible: async (
@@ -629,46 +671,15 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       }
 
       const target = d3ToCamera({ x, y, k }, W, H);
-      const moveMode = cameraMoveMode({ start: cameraStateRef.current, target, duration });
-      if (moveMode === 'reject') return false;
-      if (moveMode === 'instant') {
-        if (!setCameraPositionRef.current(target.x, target.y, target.z)) return false;
-        handleCameraStateChange({ ...target });
-        return true;
-      }
-
-      // Animated ease from current camera to target. Linear interpolation in
-      // camera-position space with the easing applied to t.
-      const startCam = cameraStateRef.current
-        ? { ...cameraStateRef.current }
-        : { x: target.x, y: target.y, z: target.z };
-      const t0 = performance.now();
-      return new Promise((resolve) => {
-        const tick = () => {
-          // CameraSetter nulls setCameraPositionRef.current on camera
-          // remount/unmount; the ref can go non-callable mid-animation (backend
-          // switch, component unmount). Re-check the live value each frame
-          // rather than trusting the once-only guard at animation start.
-          if (typeof setCameraPositionRef.current !== 'function') {
-            resolve(false);
-            return;
-          }
-          const elapsed = performance.now() - t0;
-          const t = Math.min(1, elapsed / duration);
-          const e = easing(t);
-          const cx = startCam.x + (target.x - startCam.x) * e;
-          const cy = startCam.y + (target.y - startCam.y) * e;
-          const cz = startCam.z + (target.z - startCam.z) * e;
-          if (!setCameraPositionRef.current(cx, cy, cz)) {
-            resolve(false);
-            return;
-          }
-          handleCameraStateChange({ x: cx, y: cy, z: cz });
-          if (t < 1) requestAnimationFrame(tick);
-          else resolve(true);
-        };
-        requestAnimationFrame(tick);
-      });
+      return moveCameraTo(target, duration, easing);
+    },
+    animateToZoomTransform: (transform, options = {}) => {
+      const { duration = 0, easing = d3.easeCubicInOut } = options;
+      if (!containerRef.current || !setCameraPositionRef.current) return Promise.resolve(false);
+      const { width: W, height: H } = containerRef.current.getBoundingClientRect();
+      if (!W || !H) return Promise.resolve(false);
+      const target = d3ToCamera(transform, W, H);
+      return moveCameraTo(target, duration, easing);
     },
     getVisibleDotCount: () => getCpuPositionData().length,
     getZoomTransform: () => zoomTransformFromCamera(cameraStateRef.current),
@@ -691,7 +702,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       scheduler.cancelSimulation();
     },
     getCurrentPositions: () => getCpuPositionData(),
-  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera]);
+  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera]);
 
   return (
     <div

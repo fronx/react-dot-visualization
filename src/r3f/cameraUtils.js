@@ -7,7 +7,13 @@ export const CAMERA_FOV_DEGREES = 10;
 const CAMERA_FOV_RADIANS = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const ZOOM_FACTOR_BASE = 1.003;
 const PINCH_ZOOM_MULTIPLIER = 3;
-const DRAG_THRESHOLD = 4;
+// Pointer travel (px) at which a press on the R3F canvas becomes a pan instead
+// of a click (createPanHandler). Exported so consumers layering their own
+// gestures over the canvas can stay strictly below it instead of hardcoding a
+// copy that goes stale. (The Canvas/SVG renderer's interaction paths use their
+// own 5px constant.)
+export const PAN_DRAG_THRESHOLD_PX = 4;
+const DRAG_THRESHOLD = PAN_DRAG_THRESHOLD_PX;
 
 export function classifyWheelGesture(event, scrollZoomModifier = 'meta-or-alt') {
   if (event.ctrlKey) return 'pinch';

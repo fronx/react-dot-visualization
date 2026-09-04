@@ -17,6 +17,8 @@ export const DotVisualizationR3F = lazy(() => import('./r3f/DotVisualizationR3F.
 // consumers; the pure fade helpers (no three import) are safe to export directly.
 export const ClusterLabels3D = lazy(() => import('./r3f/ClusterLabels3D.jsx'));
 export { smoothstep, makeZoomFade, clamp01 } from './r3f/labelFade.js';
+// Pure math module (no three import), safe to export directly like labelFade.
+export { PAN_DRAG_THRESHOLD_PX } from './r3f/cameraUtils.js';
 export const DotVisualizationSigma = lazy(() => import('./DotVisualizationSigma.jsx'));
 export { default as ColoredDots } from './ColoredDots.jsx';
 export { default as InteractionLayer } from './InteractionLayer.jsx';
