@@ -82,14 +82,14 @@ function findNearestDot(spatialIndex, worldX, worldY, threshold) {
 // pick kernel that reads the live position buffer, so hit-testing tracks the
 // moving dots during decollision rather than the settled `data`. Touches no GPU
 // meshes either way, so the WebGPU backend mounts it directly.
-// Rest detection: a hovered dot is "rested on" when the pointer moves slower than
-// HOVER_REST_SLOW_PX_PER_MS over it, or stops moving for HOVER_REST_MS. The
-// motion tracker runs per mouse move (constant work); the rest timer is armed
-// only while a not-yet-rested dot is hovered, so a sweep pays nothing extra.
-export const HOVER_REST_SLOW_PX_PER_MS = 0.3;
-export const HOVER_REST_MS = 120;
+// Rest detection: a hovered dot is "rested on" when the pointer is nearly
+// still over it (below `slowPxPerMs`) or has stayed on that same dot for
+// `restMs`, moving or not. A brush crosses a dot in a few milliseconds, so
+// neither fires for it. The motion tracker runs per mouse move (constant
+// work); the dwell timer is the dispatcher's, armed once per hover.
+export const HOVER_REST_DEFAULTS = Object.freeze({ slowPxPerMs: 0.05, restMs: 150 });
 
-export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoverRest, onHoveredIdChange, onDotClick, onContextMenu, onBackgroundClick, pickControlRef = null, interactionRef = null, clickControlRef = null }) {
+export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMultiplier, onHover, onLeave, onHoverRest, hoverRest = HOVER_REST_DEFAULTS, onHoveredIdChange, onDotClick, onContextMenu, onBackgroundClick, pickControlRef = null, interactionRef = null, clickControlRef = null }) {
   const { camera, gl, invalidate } = useThree();
   const rectRef = useRef(gl.domElement.getBoundingClientRect());
   const useGpuPick = !!pickControlRef;
@@ -103,8 +103,15 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
   const dataRef = useRef(data);
   dataRef.current = data;
 
-  const dispatcher = useHoverDispatcher({ onHover, onLeave, onHoverRest, onHoveredIdChange });
-  const motion = useMemo(() => createPointerMotion({ slowPxPerMs: HOVER_REST_SLOW_PX_PER_MS }), []);
+  // Tuning is read live from a ref so a consumer can adjust the feel without
+  // remounting the listeners.
+  const hoverRestRef = useRef(hoverRest);
+  hoverRestRef.current = hoverRest;
+  const dispatcher = useHoverDispatcher(
+    { onHover, onLeave, onHoverRest, onHoveredIdChange },
+    { restMs: () => hoverRestRef.current.restMs },
+  );
+  const motion = useMemo(() => createPointerMotion(), []);
 
   // Publish the latest cursor into the GPU pick channel; R3FDotsWebGPU's frame
   // loop services it and calls `onResult(index)`. The single writer for both
@@ -146,23 +153,11 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
     // or two later; without this gate an in-flight (or queued) pick could land
     // after mouseleave and re-hover a dot we already reported as zone-left.
     let inside = false;
-    let restTimer = 0;
-    let slow = true;
+    let speed = Infinity;
 
-    // Arm the rest timer only while a not-yet-rested dot is hovered; the
-    // dispatcher's rest() is idempotent per hover, so a redundant fire is free.
-    const armRest = () => {
-      if (restTimer) clearTimeout(restTimer);
-      restTimer = 0;
-      if (!dispatcher.hovered) return;
-      restTimer = setTimeout(() => {
-        restTimer = 0;
-        if (inside) dispatcher.rest();
-      }, HOVER_REST_MS);
-    };
+    // Nearly-still over a dot is rest; the same-dot dwell is the dispatcher's.
     const settleHover = () => {
-      if (slow) dispatcher.rest();
-      armRest();
+      if (speed < hoverRestRef.current.slowPxPerMs) dispatcher.rest();
     };
 
     const processMove = () => {
@@ -204,7 +199,8 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       inside = true;
       pendingX = e.clientX;
       pendingY = e.clientY;
-      slow = motion.sample(e.clientX, e.clientY, e.timeStamp).slow;
+      speed = motion.sample(e.clientX, e.clientY, e.timeStamp).speed;
+      dispatcher.pointerMoved(e);
       if (!rafId) {
         rafId = requestAnimationFrame(processMove);
       }
@@ -220,8 +216,6 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       }
       // Cancel a queued GPU pick too (an in-flight one is gated by `inside`).
       if (useGpuPick && pickControlRef.current) pickControlRef.current.move = null;
-      if (restTimer) clearTimeout(restTimer);
-      restTimer = 0;
       motion.reset();
       dispatcher.leaveZone();
     };
@@ -232,7 +226,6 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
       if (rafId) {
         cancelAnimationFrame(rafId);
       }
-      if (restTimer) clearTimeout(restTimer);
       canvas.removeEventListener('mousemove', handleMove);
       canvas.removeEventListener('mouseleave', handleLeave);
     };

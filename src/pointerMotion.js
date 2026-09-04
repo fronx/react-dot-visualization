@@ -5,19 +5,19 @@
  * Constant work per event, no allocation — a sweep across a hundred dots a
  * second costs a hundred subtractions.
  *
- * `slow` is the verdict a consumer acts on: the pointer arrived at (or lingers
- * over) a dot slowly enough to count as a deliberate stop rather than a
- * pass-through. Nothing here knows about dots; the hover dispatcher pairs the
- * verdict with the hovered item.
+ * `slow` is a convenience verdict against a cutoff; the R3F hover detector reads
+ * the raw `speed` against its live tuning. Nothing here knows about dots.
  */
-export const DEFAULT_SLOW_PX_PER_MS = 0.3;
+export const DEFAULT_SLOW_PX_PER_MS = 0.05;
 const SMOOTHING = 0.5;
 
 export function createPointerMotion({ slowPxPerMs = DEFAULT_SLOW_PX_PER_MS } = {}) {
   let lastX = NaN;
   let lastY = NaN;
   let lastT = NaN;
-  let speed = 0;
+  // Unknown until two samples exist: a pointer that just entered must not read
+  // as still, or the first dot under it would count as rested on.
+  let speed = Infinity;
 
   return {
     /** Feed one mouse-move sample; returns the smoothed px/ms and the verdict. */
@@ -28,7 +28,7 @@ export function createPointerMotion({ slowPxPerMs = DEFAULT_SLOW_PX_PER_MS } = {
           const dx = x - lastX;
           const dy = y - lastY;
           const instant = Math.sqrt(dx * dx + dy * dy) / dt;
-          speed = speed * (1 - SMOOTHING) + instant * SMOOTHING;
+          speed = Number.isFinite(speed) ? speed * (1 - SMOOTHING) + instant * SMOOTHING : instant;
         }
       }
       lastX = x;
@@ -41,7 +41,7 @@ export function createPointerMotion({ slowPxPerMs = DEFAULT_SLOW_PX_PER_MS } = {
       lastX = NaN;
       lastY = NaN;
       lastT = NaN;
-      speed = 0;
+      speed = Infinity;
     },
     get speed() {
       return speed;

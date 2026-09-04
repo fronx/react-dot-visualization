@@ -3,9 +3,9 @@ import assert from 'node:assert';
 import { createPointerMotion } from '../src/pointerMotion.js';
 
 describe('createPointerMotion', () => {
-  test('first sample has no history and reads as slow', () => {
+  test('first sample has no history and reads as NOT slow (unknown is not still)', () => {
     const m = createPointerMotion();
-    assert.deepStrictEqual(m.sample(10, 10, 100), { speed: 0, slow: true });
+    assert.deepStrictEqual(m.sample(10, 10, 100), { speed: Infinity, slow: false });
   });
 
   test('a sweep reads as fast, a creep reads as slow', () => {
@@ -32,8 +32,8 @@ describe('createPointerMotion', () => {
     const m = createPointerMotion();
     m.sample(0, 0, 5);
     const r = m.sample(50, 50, 5);
-    assert.strictEqual(Number.isFinite(r.speed), true);
-    assert.strictEqual(r.slow, true);
+    assert.strictEqual(r.slow, false);
+    assert.strictEqual(m.sample(50, 50, 200).speed < 0.001, true);
   });
 
   test('reset forgets the previous position', () => {
@@ -41,7 +41,7 @@ describe('createPointerMotion', () => {
     m.sample(0, 0, 0);
     m.sample(100, 0, 16);
     m.reset();
-    assert.deepStrictEqual(m.sample(500, 500, 32), { speed: 0, slow: true });
+    assert.deepStrictEqual(m.sample(500, 500, 32), { speed: Infinity, slow: false });
   });
 
   test('constant time per sample: a hundred thousand samples allocate nothing observable', () => {

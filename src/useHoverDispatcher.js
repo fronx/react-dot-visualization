@@ -7,12 +7,12 @@ import { createHoverDispatcher } from './hoverDispatch.js';
  * the latest callbacks: the callbacks object's fields are updated in place
  * rather than replaced, so the reference the dispatcher captured stays valid.
  */
-export function useHoverDispatcher(callbacks) {
+export function useHoverDispatcher(callbacks, options) {
   const callbacksRef = useRef({});
   Object.assign(callbacksRef.current, callbacks);
   const dispatcherRef = useRef(null);
   if (!dispatcherRef.current) {
-    dispatcherRef.current = createHoverDispatcher(callbacksRef.current);
+    dispatcherRef.current = createHoverDispatcher(callbacksRef.current, options);
   }
   return dispatcherRef.current;
 }

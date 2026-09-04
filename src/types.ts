@@ -487,6 +487,8 @@ export interface ColoredDotsProps {
   /** The pointer came to rest on the hovered dot (slow arrival, slowdown, or a
    *  pause) — intent, where `onHover` alone is a pass-through. R3F renderer only. */
   onHoverRest?: (item: DotData, event?: MouseEvent) => void;
+  /** Rest tuning: nearly-still speed cutoff (px/ms) and same-dot dwell (ms). Defaults: 0.05 / 150. */
+  hoverRest?: { slowPxPerMs: number; restMs: number };
   onClick?: (item: DotData, event?: MouseEvent) => void;
   onBackgroundClick?: (event?: MouseEvent) => void;
   onMouseDown?: (item: DotData, event?: MouseEvent) => void;
@@ -505,6 +507,8 @@ export interface InteractionLayerProps {
   /** The pointer came to rest on the hovered dot (slow arrival, slowdown, or a
    *  pause) — intent, where `onHover` alone is a pass-through. R3F renderer only. */
   onHoverRest?: (item: DotData, event?: MouseEvent) => void;
+  /** Rest tuning: nearly-still speed cutoff (px/ms) and same-dot dwell (ms). Defaults: 0.05 / 150. */
+  hoverRest?: { slowPxPerMs: number; restMs: number };
   onClick?: (item: DotData, event?: MouseEvent) => void;
   onBackgroundClick?: (event?: MouseEvent) => void;
   onDragStart?: (item: DotData, event?: MouseEvent) => void;

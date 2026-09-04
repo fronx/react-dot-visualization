@@ -110,6 +110,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     onHover,
     onLeave,
     onHoverRest,
+    hoverRest,
     onClick,
     onContextMenu,
     onBackgroundClick,
@@ -774,6 +775,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onHover={onHover}
             onLeave={onLeave}
             onHoverRest={onHoverRest}
+            hoverRest={hoverRest}
             onHoveredIdChange={setHoveredId}
             onDotClick={handleDotClick}
             onContextMenu={handleDotContextMenu}
@@ -811,6 +813,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             onHover={onHover}
             onLeave={onLeave}
             onHoverRest={onHoverRest}
+            hoverRest={hoverRest}
             onHoveredIdChange={setHoveredId}
             onDotClick={handleDotClick}
             onContextMenu={handleDotContextMenu}
