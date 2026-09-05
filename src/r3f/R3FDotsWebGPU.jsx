@@ -2184,9 +2184,19 @@ export function R3FDotsWebGPU({
     }
     return pulses;
   }, [dotStyles]);
+  // The sparse overlay carries non-pulsing transients too — a host's selection
+  // can be a hundred thousand dots — and `usePulseAnimation` rebuilds its config
+  // from whatever map it is handed on every render. Filtering to pulses here
+  // keeps that rebuild proportional to what actually pulses.
+  const dynamicPulseDotStyles = useMemo(() => {
+    if (!dynamicDotStyles?.size) return null;
+    const pulses = new Map();
+    for (const [id, style] of dynamicDotStyles) if (style?.pulse) pulses.set(id, style);
+    return pulses;
+  }, [dynamicDotStyles]);
   const pulseDotStyles = useMemo(
-    () => mergeDotStyleMaps(staticPulseDotStyles, dynamicDotStyles),
-    [staticPulseDotStyles, dynamicDotStyles],
+    () => mergeDotStyleMaps(staticPulseDotStyles, dynamicPulseDotStyles),
+    [staticPulseDotStyles, dynamicPulseDotStyles],
   );
   // The pulse clock invalidates at its own budgeted rate (30fps, same as the
   // Canvas backend renders pulses), so a pulse never forces display-rate
