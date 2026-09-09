@@ -16,6 +16,7 @@
 //   node scripts/build-lib.mjs [--allow-dirty]   # guard, vite build, write provenance
 //   node scripts/build-lib.mjs --check-only      # guard only; the post-checkout hook's warning
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -81,6 +82,22 @@ if (refusal) {
   console.error(`\n[build:lib] Not building. ${refusal}\n`);
   process.exit(1);
 }
-const build = spawnSync('npx', ['vite', 'build', '--config', 'vite.lib.config.js'], { cwd: repoRoot, stdio: 'inherit' });
+// Run vite's own JS entry point under this same Node rather than shelling out
+// to `npx`: on Windows the launcher is `npx.cmd`, which spawnSync cannot
+// resolve without `shell: true`. That ENOENT lands in `build.error`, a field
+// the old `status !== 0` check never read — so `build:lib` exited 1 with no
+// output at all, and every caller could report was "Command failed".
+// Derived from the package root, not resolved directly: vite's `exports` map
+// covers `./package.json` but not `./bin/vite.js`.
+const viteBin = path.join(
+  path.dirname(createRequire(import.meta.url).resolve('vite/package.json')),
+  'bin',
+  'vite.js',
+);
+const build = spawnSync(process.execPath, [viteBin, 'build', '--config', 'vite.lib.config.js'], { cwd: repoRoot, stdio: 'inherit' });
+if (build.error) {
+  console.error(`\n[build:lib] Could not start vite: ${build.error.message}\n`);
+  process.exit(1);
+}
 if (build.status !== 0) process.exit(build.status ?? 1);
 write();
