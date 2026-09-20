@@ -34,6 +34,7 @@ test('normalizes filter uniforms without changing resident values', () => {
     valueMask: 3,
     valueShift: 31,
     forbiddenBits: 0,
+    alternativeForbiddenBits: [],
     requiredAnyBits: 0,
     dimOpacity: 1,
   });
@@ -92,6 +93,18 @@ test('combines category membership, forbidden pitches and known status', () => {
   assert.equal(categoricalValueMatches(packed(2, 0, 0), {
     ...filter, forbiddenBits: 0, requiredAnyBits: 0,
   }), true);
+});
+
+test('accepts any complete forbidden-bit alternative without flattening them into a union', () => {
+  const filter = {
+    values: new Uint32Array(1), includedValues: 1 << 2,
+    forbiddenBits: (~0b101 & 4095) << 8,
+    alternativeForbiddenBits: [(~0b110 & 4095) << 8],
+    requiredAnyBits: PITCHED,
+  };
+  assert.equal(categoricalValueMatches(packed(2, 0b101, PITCHED), filter), true);
+  assert.equal(categoricalValueMatches(packed(2, 0b110, PITCHED), filter), true);
+  assert.equal(categoricalValueMatches(packed(2, 0b111, PITCHED), filter), false);
 });
 
 test('bit constraints use unsigned 32-bit values including bit 31', () => {

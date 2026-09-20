@@ -17,7 +17,9 @@ test('GPU bit constraints match CPU across uniform-only changes to resident data
   const resident = instancedArray(values, 'uint');
   const output = instancedArray(new Uint32Array(values.length), 'uint');
   const uniforms = Object.fromEntries(
-    ['includedValues', 'valueMask', 'valueShift', 'forbiddenBits', 'requiredAnyBits']
+    ['includedValues', 'valueMask', 'valueShift', 'forbiddenBits', 'alternativeForbiddenCount',
+      'alternativeForbiddenBits1', 'alternativeForbiddenBits2', 'alternativeForbiddenBits3',
+      'requiredAnyBits']
       .map(key => [`${key}U`, uniform(uint(0))]),
   );
   const kernel = Fn(() => {
@@ -29,12 +31,19 @@ test('GPU bit constraints match CPU across uniform-only changes to resident data
     for (const constraints of [
       { forbiddenBits: (~5 & 4095) << 8, requiredAnyBits: pitched },
       { forbiddenBits: (~5 & 4095) << 8, requiredAnyBits: pitched | neutral },
+      { forbiddenBits: (~5 & 4095) << 8,
+        alternativeForbiddenBits: [(~6 & 4095) << 8], requiredAnyBits: pitched },
       { forbiddenBits: 4095 << 8, requiredAnyBits: pitched | neutral },
       { forbiddenBits: 0, requiredAnyBits: 0 },
       { forbiddenBits: 0, requiredAnyBits: 0x80000000 },
       { forbiddenBits: 0x80000000, requiredAnyBits: 0 },
     ]) {
       const input = { values, includedValues: 1 << 2, valueMask: 255, valueShift: 0, ...constraints };
+      const alternatives = input.alternativeForbiddenBits ?? [];
+      input.alternativeForbiddenCount = alternatives.length;
+      input.alternativeForbiddenBits1 = alternatives[0] ?? 0;
+      input.alternativeForbiddenBits2 = alternatives[1] ?? 0;
+      input.alternativeForbiddenBits3 = alternatives[2] ?? 0;
       for (const key of Object.keys(uniforms)) uniforms[key].value = input[key.slice(0, -1)] >>> 0;
       await renderer.computeAsync(kernel);
       assert.deepEqual([...await readbackU32(renderer, output)],

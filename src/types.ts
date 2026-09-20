@@ -312,6 +312,10 @@ export interface CategoricalFilterInput {
   valueShift?: number;
   /** Raw-value bits that must all be absent. Zero disables this constraint. */
   forbiddenBits?: number;
+  /** Up to three alternative forbidden-bit sets. The raw value passes when it
+   *  satisfies the primary set or any alternative; useful for a small OR of
+   *  subset predicates without rewriting resident values. */
+  alternativeForbiddenBits?: readonly number[];
   /** At least one raw-value bit must be present. Zero disables this constraint. */
   requiredAnyBits?: number;
   dimColor?: [number, number, number];
