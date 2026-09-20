@@ -79,6 +79,7 @@ import {
   resolveLayeredDotStyle,
 } from './dynamicDotStyles.js';
 import {
+  MAX_CATEGORICAL_CLAUSES,
   categoricalAlphaNode,
   categoricalColorNode,
   normalizeCategoricalFilter,
@@ -361,21 +362,21 @@ function buildSemanticBuffers(N) {
 }
 
 function buildCategoricalFilterResources(count) {
-  return {
+  const resources = {
     values: instancedArray(new Uint32Array(count), 'uint'),
     enabledU: uniform(uint(0)),
     includedValuesU: uniform(uint(0)),
     valueMaskU: uniform(uint(0xff)),
     valueShiftU: uniform(uint(0)),
-    forbiddenBitsU: uniform(uint(0)),
-    alternativeForbiddenCountU: uniform(uint(0)),
-    alternativeForbiddenBits1U: uniform(uint(0)),
-    alternativeForbiddenBits2U: uniform(uint(0)),
-    alternativeForbiddenBits3U: uniform(uint(0)),
-    requiredAnyBitsU: uniform(uint(0)),
+    clauseCountU: uniform(uint(0)),
     dimColorU: uniform(colorVector(null, DEFAULT_CATEGORICAL_DIM_RGB)),
     dimOpacityU: uniform(float(0.35)),
   };
+  for (let i = 0; i < MAX_CATEGORICAL_CLAUSES; i += 1) {
+    resources[`clause${i}ClearU`] = uniform(uint(0));
+    resources[`clause${i}AnyU`] = uniform(uint(0));
+  }
+  return resources;
 }
 
 function updateCategoricalFilterUniforms(resources, input) {
@@ -385,12 +386,11 @@ function updateCategoricalFilterUniforms(resources, input) {
   resources.includedValuesU.value = normalized.includedValues;
   resources.valueMaskU.value = normalized.valueMask;
   resources.valueShiftU.value = normalized.valueShift;
-  resources.forbiddenBitsU.value = normalized.forbiddenBits;
-  resources.alternativeForbiddenCountU.value = normalized.alternativeForbiddenBits.length;
-  resources.alternativeForbiddenBits1U.value = normalized.alternativeForbiddenBits[0] ?? 0;
-  resources.alternativeForbiddenBits2U.value = normalized.alternativeForbiddenBits[1] ?? 0;
-  resources.alternativeForbiddenBits3U.value = normalized.alternativeForbiddenBits[2] ?? 0;
-  resources.requiredAnyBitsU.value = normalized.requiredAnyBits;
+  resources.clauseCountU.value = normalized.clauses.length;
+  for (let i = 0; i < MAX_CATEGORICAL_CLAUSES; i += 1) {
+    resources[`clause${i}ClearU`].value = normalized.clauses[i]?.clear ?? 0;
+    resources[`clause${i}AnyU`].value = normalized.clauses[i]?.any ?? 0;
+  }
   resources.dimOpacityU.value = normalized.dimOpacity;
   resources.dimColorU.value.copy(colorVector(input?.dimColor, DEFAULT_CATEGORICAL_DIM_RGB));
 }
@@ -1188,9 +1188,7 @@ export function R3FDotsWebGPU({
     categoricalFilter?.includedValues,
     categoricalFilter?.valueMask,
     categoricalFilter?.valueShift,
-    categoricalFilter?.forbiddenBits,
-    categoricalFilter?.alternativeForbiddenBits,
-    categoricalFilter?.requiredAnyBits,
+    categoricalFilter?.clauses,
     categoricalFilter?.dimColor,
     categoricalFilter?.dimOpacity,
     categoricalFilter?.debug,

@@ -9,23 +9,22 @@ import { float, select, uint } from 'three/tsl';
 
 export const DEFAULT_CATEGORICAL_VALUE_MASK = 0xff;
 export const DEFAULT_CATEGORICAL_DIM_OPACITY = 0.35;
+export const MAX_CATEGORICAL_CLAUSES = 4;
 
 function unsigned(value, fallback) {
   return Number.isFinite(value) ? (Math.floor(value) >>> 0) : fallback;
 }
 
 export function normalizeCategoricalFilter(input) {
-  const alternatives = Array.from(input?.alternativeForbiddenBits ?? [])
-    .slice(0, 3)
-    .map(value => unsigned(value, 0));
+  const clauses = Array.from(input?.clauses ?? [])
+    .slice(0, MAX_CATEGORICAL_CLAUSES)
+    .map(clause => ({ clear: unsigned(clause?.clear, 0), any: unsigned(clause?.any, 0) }));
   return {
     enabled: !!input?.values && input?.enabled !== false,
     includedValues: unsigned(input?.includedValues, 0),
     valueMask: unsigned(input?.valueMask, DEFAULT_CATEGORICAL_VALUE_MASK),
     valueShift: Math.min(31, unsigned(input?.valueShift, 0)),
-    forbiddenBits: unsigned(input?.forbiddenBits, 0),
-    alternativeForbiddenBits: alternatives,
-    requiredAnyBits: unsigned(input?.requiredAnyBits, 0),
+    clauses,
     dimOpacity: Number.isFinite(input?.dimOpacity)
       ? Math.max(0, Math.min(1, Number(input.dimOpacity)))
       : DEFAULT_CATEGORICAL_DIM_OPACITY,
@@ -37,10 +36,10 @@ export function categoricalValueMatches(rawValue, input) {
   if (!normalized.enabled) return true;
   const value = ((rawValue >>> normalized.valueShift) & normalized.valueMask) >>> 0;
   if (value > 31) return false;
-  const forbiddenSets = [normalized.forbiddenBits, ...normalized.alternativeForbiddenBits];
-  return (normalized.includedValues & ((1 << value) >>> 0)) !== 0
-    && forbiddenSets.some(forbidden => (rawValue & forbidden) === 0)
-    && (normalized.requiredAnyBits === 0 || (rawValue & normalized.requiredAnyBits) !== 0);
+  const clausePasses = normalized.clauses.length === 0
+    || normalized.clauses.some(clause => (rawValue & clause.clear) === 0
+      && (clause.any === 0 || (rawValue & clause.any) !== 0));
+  return (normalized.includedValues & ((1 << value) >>> 0)) !== 0 && clausePasses;
 }
 
 export function makeCategoricalValueBuffer(input, count) {
@@ -80,18 +79,17 @@ export function updateCategoricalValueBuffer(attribute, input, count, forceFull 
 export function categoricalMatchNode(rawValue, filter) {
   const value = rawValue.shiftRight(filter.valueShiftU).bitAnd(filter.valueMaskU);
   const valueBit = uint(1).shiftLeft(value);
-  const primaryPass = rawValue.bitAnd(filter.forbiddenBitsU).equal(uint(0));
-  const alternativePass = filter.alternativeForbiddenCountU.greaterThan(uint(0))
-    .and(rawValue.bitAnd(filter.alternativeForbiddenBits1U).equal(uint(0)))
-    .or(filter.alternativeForbiddenCountU.greaterThan(uint(1))
-      .and(rawValue.bitAnd(filter.alternativeForbiddenBits2U).equal(uint(0))))
-    .or(filter.alternativeForbiddenCountU.greaterThan(uint(2))
-      .and(rawValue.bitAnd(filter.alternativeForbiddenBits3U).equal(uint(0))));
-  return value.lessThan(uint(32))
-    .and(filter.includedValuesU.bitAnd(valueBit).greaterThan(uint(0)))
-    .and(primaryPass.or(alternativePass))
-    .and(filter.requiredAnyBitsU.equal(uint(0))
-      .or(rawValue.bitAnd(filter.requiredAnyBitsU).greaterThan(uint(0))));
+  const membership = value.lessThan(uint(32))
+    .and(filter.includedValuesU.bitAnd(valueBit).greaterThan(uint(0)));
+  let clausePass = filter.clauseCountU.equal(uint(0));
+  for (let i = 0; i < MAX_CATEGORICAL_CLAUSES; i += 1) {
+    const clear = filter[`clause${i}ClearU`];
+    const any = filter[`clause${i}AnyU`];
+    const clauseOk = rawValue.bitAnd(clear).equal(uint(0))
+      .and(any.equal(uint(0)).or(rawValue.bitAnd(any).greaterThan(uint(0))));
+    clausePass = clausePass.or(filter.clauseCountU.greaterThan(uint(i)).and(clauseOk));
+  }
+  return membership.and(clausePass);
 }
 
 export function categoricalColorNode(baseColor, rawValue, focus, filter) {

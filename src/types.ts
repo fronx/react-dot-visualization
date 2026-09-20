@@ -310,14 +310,9 @@ export interface CategoricalFilterInput {
   /** Extract `(value >> valueShift) & valueMask` before testing membership. */
   valueMask?: number;
   valueShift?: number;
-  /** Raw-value bits that must all be absent. Zero disables this constraint. */
-  forbiddenBits?: number;
-  /** Up to three alternative forbidden-bit sets. The raw value passes when it
-   *  satisfies the primary set or any alternative; useful for a small OR of
-   *  subset predicates without rewriting resident values. */
-  alternativeForbiddenBits?: readonly number[];
-  /** At least one raw-value bit must be present. Zero disables this constraint. */
-  requiredAnyBits?: number;
+  /** Pass if ANY clause passes. A clause passes when (value & clear) === 0
+   *  and (any === 0 || (value & any) !== 0). An empty list imposes no constraint. */
+  clauses?: readonly { clear?: number; any?: number }[];   // at most MAX_CATEGORICAL_CLAUSES (4)
   dimColor?: [number, number, number];
   /** Absolute opacity for excluded instances. */
   dimOpacity?: number;

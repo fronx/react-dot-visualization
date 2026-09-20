@@ -33,9 +33,7 @@ test('normalizes filter uniforms without changing resident values', () => {
     includedValues: 0xffffffff,
     valueMask: 3,
     valueShift: 31,
-    forbiddenBits: 0,
-    alternativeForbiddenBits: [],
-    requiredAnyBits: 0,
+    clauses: [],
     dimOpacity: 1,
   });
   assert.deepEqual([...makeCategoricalValueBuffer({ values }, 5)], [1, 2, 3, 0, 0]);
@@ -76,43 +74,71 @@ const PITCHED = 1 << 24;
 const NEUTRAL = 1 << 25;
 const packed = (kind, pitches, status) => (kind | (pitches << 8) | status) >>> 0;
 
-test('combines category membership, forbidden pitches and known status', () => {
+test('no clauses imposes no constraint beyond membership', () => {
+  const filter = { values: new Uint32Array(1), includedValues: 1 << 2 };
+  assert.equal(categoricalValueMatches(packed(2, 4095, 0), filter), true);
+  assert.equal(categoricalValueMatches(packed(1, 0, 0), filter), false);
+});
+
+test('a clear-only clause rejects any raw value carrying those bits', () => {
   const filter = {
     values: new Uint32Array(1), includedValues: 1 << 2,
-    forbiddenBits: (~0b101 & 4095) << 8, requiredAnyBits: PITCHED,
+    clauses: [{ clear: (~0b101 & 4095) << 8 }],
   };
   assert.equal(categoricalValueMatches(packed(2, 1, PITCHED), filter), true);
   assert.equal(categoricalValueMatches(packed(2, 5, PITCHED), filter), true);
   assert.equal(categoricalValueMatches(packed(2, 3, PITCHED), filter), false);
-  assert.equal(categoricalValueMatches(packed(1, 1, PITCHED), filter), false);
-  assert.equal(categoricalValueMatches(packed(2, 0, 0), filter), false);
-  assert.equal(categoricalValueMatches(packed(2, 0, NEUTRAL), filter), false);
-  assert.equal(categoricalValueMatches(packed(2, 0, NEUTRAL), {
-    ...filter, requiredAnyBits: PITCHED | NEUTRAL,
-  }), true);
-  assert.equal(categoricalValueMatches(packed(2, 0, 0), {
-    ...filter, forbiddenBits: 0, requiredAnyBits: 0,
-  }), true);
 });
 
-test('accepts any complete forbidden-bit alternative without flattening them into a union', () => {
+test('an any-only clause requires at least one of those bits', () => {
   const filter = {
     values: new Uint32Array(1), includedValues: 1 << 2,
-    forbiddenBits: (~0b101 & 4095) << 8,
-    alternativeForbiddenBits: [(~0b110 & 4095) << 8],
-    requiredAnyBits: PITCHED,
+    clauses: [{ any: PITCHED | NEUTRAL }],
+  };
+  assert.equal(categoricalValueMatches(packed(2, 0, PITCHED), filter), true);
+  assert.equal(categoricalValueMatches(packed(2, 0, NEUTRAL), filter), true);
+  assert.equal(categoricalValueMatches(packed(2, 0, 0), filter), false);
+});
+
+test('three clauses combine as OR, each requiring its own clear+any', () => {
+  const filter = {
+    values: new Uint32Array(1), includedValues: 1 << 2,
+    clauses: [
+      { clear: (~0b101 & 4095) << 8, any: PITCHED },
+      { clear: (~0b110 & 4095) << 8, any: PITCHED },
+      { any: NEUTRAL },
+    ],
   };
   assert.equal(categoricalValueMatches(packed(2, 0b101, PITCHED), filter), true);
   assert.equal(categoricalValueMatches(packed(2, 0b110, PITCHED), filter), true);
+  assert.equal(categoricalValueMatches(packed(2, 0, NEUTRAL), filter), true);
   assert.equal(categoricalValueMatches(packed(2, 0b111, PITCHED), filter), false);
+  assert.equal(categoricalValueMatches(packed(2, 0b111, 0), filter), false);
+});
+
+test('more than 4 clauses are truncated to the first 4', () => {
+  const filter = {
+    values: new Uint32Array(1), includedValues: 1, valueMask: 0,
+    clauses: [
+      { any: 1 << 0 }, { any: 1 << 1 }, { any: 1 << 2 }, { any: 1 << 3 }, { any: 1 << 4 },
+    ],
+  };
+  assert.equal(normalizeCategoricalFilter(filter).clauses.length, 4);
+  assert.equal(categoricalValueMatches(1 << 3, filter), true);
+  assert.equal(categoricalValueMatches(1 << 4, filter), false);
 });
 
 test('bit constraints use unsigned 32-bit values including bit 31', () => {
-  const filter = { values: new Uint32Array(1), includedValues: 1, requiredAnyBits: -2147483648 };
-  assert.equal(normalizeCategoricalFilter(filter).requiredAnyBits, 0x80000000);
+  const filter = {
+    values: new Uint32Array(1), includedValues: 1,
+    clauses: [{ any: -2147483648 }],
+  };
+  assert.equal(normalizeCategoricalFilter(filter).clauses[0].any, 0x80000000);
   assert.equal(categoricalValueMatches(0x80000000, filter), true);
   assert.equal(categoricalValueMatches(0, filter), false);
-  assert.equal(categoricalValueMatches(0x80000000, { ...filter, forbiddenBits: -2147483648 }), false);
+  assert.equal(categoricalValueMatches(0x80000000, {
+    ...filter, clauses: [{ clear: -2147483648, any: -2147483648 }],
+  }), false);
   assert.equal(categoricalValueMatches(0x80000000, { ...filter, enabled: false }), true);
 });
 
