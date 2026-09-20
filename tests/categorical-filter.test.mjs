@@ -33,6 +33,8 @@ test('normalizes filter uniforms without changing resident values', () => {
     includedValues: 0xffffffff,
     valueMask: 3,
     valueShift: 31,
+    forbiddenBits: 0,
+    requiredAnyBits: 0,
     dimOpacity: 1,
   });
   assert.deepEqual([...makeCategoricalValueBuffer({ values }, 5)], [1, 2, 3, 0, 0]);
@@ -67,4 +69,47 @@ test('uploads resident values once, then applies sparse deltas by index', () => 
     { start: 1, count: 1 },
     { start: 3, count: 1 },
   ]);
+});
+
+const PITCHED = 1 << 24;
+const NEUTRAL = 1 << 25;
+const packed = (kind, pitches, status) => (kind | (pitches << 8) | status) >>> 0;
+
+test('combines category membership, forbidden pitches and known status', () => {
+  const filter = {
+    values: new Uint32Array(1), includedValues: 1 << 2,
+    forbiddenBits: (~0b101 & 4095) << 8, requiredAnyBits: PITCHED,
+  };
+  assert.equal(categoricalValueMatches(packed(2, 1, PITCHED), filter), true);
+  assert.equal(categoricalValueMatches(packed(2, 5, PITCHED), filter), true);
+  assert.equal(categoricalValueMatches(packed(2, 3, PITCHED), filter), false);
+  assert.equal(categoricalValueMatches(packed(1, 1, PITCHED), filter), false);
+  assert.equal(categoricalValueMatches(packed(2, 0, 0), filter), false);
+  assert.equal(categoricalValueMatches(packed(2, 0, NEUTRAL), filter), false);
+  assert.equal(categoricalValueMatches(packed(2, 0, NEUTRAL), {
+    ...filter, requiredAnyBits: PITCHED | NEUTRAL,
+  }), true);
+  assert.equal(categoricalValueMatches(packed(2, 0, 0), {
+    ...filter, forbiddenBits: 0, requiredAnyBits: 0,
+  }), true);
+});
+
+test('bit constraints use unsigned 32-bit values including bit 31', () => {
+  const filter = { values: new Uint32Array(1), includedValues: 1, requiredAnyBits: -2147483648 };
+  assert.equal(normalizeCategoricalFilter(filter).requiredAnyBits, 0x80000000);
+  assert.equal(categoricalValueMatches(0x80000000, filter), true);
+  assert.equal(categoricalValueMatches(0, filter), false);
+  assert.equal(categoricalValueMatches(0x80000000, { ...filter, forbiddenBits: -2147483648 }), false);
+  assert.equal(categoricalValueMatches(0x80000000, { ...filter, enabled: false }), true);
+});
+
+test('sparse updates preserve all packed bits', () => {
+  const attribute = fakeAttribute(2);
+  const values = new Uint32Array([packed(2, 4095, PITCHED), 0x80000000]);
+  updateCategoricalValueBuffer(attribute, { values }, 2, true);
+  values[0] = packed(1, 0, NEUTRAL);
+  attribute.ranges = [];
+  assert.equal(updateCategoricalValueBuffer(attribute, { values, changedIndices: [0] }, 2), 1);
+  assert.deepEqual([...attribute.array], [...values]);
+  assert.deepEqual(attribute.ranges, [{ start: 0, count: 1 }]);
 });

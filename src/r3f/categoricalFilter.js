@@ -20,6 +20,8 @@ export function normalizeCategoricalFilter(input) {
     includedValues: unsigned(input?.includedValues, 0),
     valueMask: unsigned(input?.valueMask, DEFAULT_CATEGORICAL_VALUE_MASK),
     valueShift: Math.min(31, unsigned(input?.valueShift, 0)),
+    forbiddenBits: unsigned(input?.forbiddenBits, 0),
+    requiredAnyBits: unsigned(input?.requiredAnyBits, 0),
     dimOpacity: Number.isFinite(input?.dimOpacity)
       ? Math.max(0, Math.min(1, Number(input.dimOpacity)))
       : DEFAULT_CATEGORICAL_DIM_OPACITY,
@@ -31,7 +33,9 @@ export function categoricalValueMatches(rawValue, input) {
   if (!normalized.enabled) return true;
   const value = ((rawValue >>> normalized.valueShift) & normalized.valueMask) >>> 0;
   if (value > 31) return false;
-  return (normalized.includedValues & ((1 << value) >>> 0)) !== 0;
+  return (normalized.includedValues & ((1 << value) >>> 0)) !== 0
+    && (rawValue & normalized.forbiddenBits) === 0
+    && (normalized.requiredAnyBits === 0 || (rawValue & normalized.requiredAnyBits) !== 0);
 }
 
 export function makeCategoricalValueBuffer(input, count) {
@@ -71,7 +75,11 @@ export function updateCategoricalValueBuffer(attribute, input, count, forceFull 
 export function categoricalMatchNode(rawValue, filter) {
   const value = rawValue.shiftRight(filter.valueShiftU).bitAnd(filter.valueMaskU);
   const valueBit = uint(1).shiftLeft(value);
-  return value.lessThan(uint(32)).and(filter.includedValuesU.bitAnd(valueBit).greaterThan(uint(0)));
+  return value.lessThan(uint(32))
+    .and(filter.includedValuesU.bitAnd(valueBit).greaterThan(uint(0)))
+    .and(rawValue.bitAnd(filter.forbiddenBitsU).equal(uint(0)))
+    .and(filter.requiredAnyBitsU.equal(uint(0))
+      .or(rawValue.bitAnd(filter.requiredAnyBitsU).greaterThan(uint(0))));
 }
 
 export function categoricalColorNode(baseColor, rawValue, focus, filter) {

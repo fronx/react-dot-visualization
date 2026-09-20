@@ -300,7 +300,7 @@ export interface SemanticScoresInput {
 }
 
 /** WebGPU-only projection-aligned categorical filter. `values` is resident
- *  per-instance data; changing `includedValues`/`valueMask`/`valueShift`
+ *  per-instance data; changing membership or bit constraints
  *  updates uniforms only, so a filter toggle never rewrites N cosmetics.
  *  Bit `1 << extractedValue` in `includedValues` means the instance passes. */
 export interface CategoricalFilterInput {
@@ -310,6 +310,10 @@ export interface CategoricalFilterInput {
   /** Extract `(value >> valueShift) & valueMask` before testing membership. */
   valueMask?: number;
   valueShift?: number;
+  /** Raw-value bits that must all be absent. Zero disables this constraint. */
+  forbiddenBits?: number;
+  /** At least one raw-value bit must be present. Zero disables this constraint. */
+  requiredAnyBits?: number;
   dimColor?: [number, number, number];
   /** Absolute opacity for excluded instances. */
   dimOpacity?: number;

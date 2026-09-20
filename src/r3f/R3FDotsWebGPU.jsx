@@ -367,6 +367,8 @@ function buildCategoricalFilterResources(count) {
     includedValuesU: uniform(uint(0)),
     valueMaskU: uniform(uint(0xff)),
     valueShiftU: uniform(uint(0)),
+    forbiddenBitsU: uniform(uint(0)),
+    requiredAnyBitsU: uniform(uint(0)),
     dimColorU: uniform(colorVector(null, DEFAULT_CATEGORICAL_DIM_RGB)),
     dimOpacityU: uniform(float(0.35)),
   };
@@ -379,6 +381,8 @@ function updateCategoricalFilterUniforms(resources, input) {
   resources.includedValuesU.value = normalized.includedValues;
   resources.valueMaskU.value = normalized.valueMask;
   resources.valueShiftU.value = normalized.valueShift;
+  resources.forbiddenBitsU.value = normalized.forbiddenBits;
+  resources.requiredAnyBitsU.value = normalized.requiredAnyBits;
   resources.dimOpacityU.value = normalized.dimOpacity;
   resources.dimColorU.value.copy(colorVector(input?.dimColor, DEFAULT_CATEGORICAL_DIM_RGB));
 }
@@ -1176,6 +1180,8 @@ export function R3FDotsWebGPU({
     categoricalFilter?.includedValues,
     categoricalFilter?.valueMask,
     categoricalFilter?.valueShift,
+    categoricalFilter?.forbiddenBits,
+    categoricalFilter?.requiredAnyBits,
     categoricalFilter?.dimColor,
     categoricalFilter?.dimOpacity,
     categoricalFilter?.debug,
