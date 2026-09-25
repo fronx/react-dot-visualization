@@ -16,6 +16,7 @@ import {
   buildSemanticScoreChunkF16Kernel,
   buildSemanticScoreChunkKernel,
   buildSemanticScorePublishKernel,
+  NO_MATRIX_ROW,
   buildSemanticScoreSummaryKernel,
   createSemanticScoreUniforms,
 } from '../src/r3f/semanticScoreKernels.js';
@@ -43,12 +44,9 @@ function oracle(matrix, dims, query, filenameMatches, params = PARAMS, options =
   const count = filenameMatches.length;
   const out = new Float32Array(count);
   const disableBelowThreshold = options.disableBelowThreshold !== false;
-  const semanticDisableMask = options.semanticDisableMask ?? new Uint32Array(count);
   for (let row = 0; row < count; row++) {
     const combined = combinedScore(dotRow(matrix, row, dims, query), filenameMatches[row], params);
-    if (semanticDisableMask[row]) {
-      out[row] = SEMANTIC_SCORE_DISABLED;
-    } else if (disableBelowThreshold) {
+    if (disableBelowThreshold) {
       out[row] = combined >= params.threshold ? combined : SEMANTIC_SCORE_DISABLED;
     } else {
       out[row] = combined;
@@ -149,14 +147,12 @@ async function makeHarness(options = {}) {
   ]);
   const queryArray = new Float32Array([0.5, 0.5, 0.5, 0.5]);
   const filenameMatchesArray = new Uint32Array([0, 1, 0, 0, 1]);
-  const semanticDisableMaskArray = options.semanticDisableMask ?? new Uint32Array(count);
   const scoresArray = new Float32Array(count);
   scoresArray.fill(SEMANTIC_SCORE_DISABLED);
 
   const uniforms = createSemanticScoreUniforms(PARAMS);
   const query = instancedArray(queryArray, 'float');
   const filenameMatches = instancedArray(filenameMatchesArray, 'uint');
-  const semanticDisableMask = instancedArray(semanticDisableMaskArray, 'uint');
   const scores = instancedArray(scoresArray, 'float');
   const chunk0 = instancedArray(matrix.slice(0, 2 * dims), 'float');
   const chunk1 = instancedArray(matrix.slice(2 * dims), 'float');
@@ -165,7 +161,6 @@ async function makeHarness(options = {}) {
       matrix: chunk0,
       query,
       filenameMatches,
-      semanticDisableMask,
       scores,
       dims,
       count: 2,
@@ -177,7 +172,6 @@ async function makeHarness(options = {}) {
       matrix: chunk1,
       query,
       filenameMatches,
-      semanticDisableMask,
       scores,
       dims,
       count: 3,
@@ -196,8 +190,6 @@ async function makeHarness(options = {}) {
     queryArray,
     filenameMatches,
     filenameMatchesArray,
-    semanticDisableMask,
-    semanticDisableMaskArray,
     scores,
     uniforms,
     kernels,
@@ -225,48 +217,50 @@ test('semantic score chunks write renderer-ready scores into one full-layout buf
   }
 });
 
-test('semantic score publish kernel atomically copies staged scores to the visible buffer', async () => {
-  const renderer = await makeRenderer();
-  const count = 5;
-  const stagedScores = instancedArray(new Float32Array([0.1, 0.5, -1, 0.8, 0]), 'float');
-  const visibleScores = instancedArray(new Float32Array([SEMANTIC_SCORE_DISABLED, 0.2, 0.3, 0.4, 0.5]), 'float');
-  try {
-    renderer.compute(buildSemanticScorePublishKernel({
-      stagedScores,
-      visibleScores,
-      count,
-    }));
+function publish(renderer, { staged, visible, rowIndices = null, disableMask, rowCount = staged.length }) {
+  const visibleScores = instancedArray(new Float32Array(visible), 'float');
+  renderer.compute(buildSemanticScorePublishKernel({
+    stagedScores: instancedArray(new Float32Array(staged), 'float'),
+    visibleScores,
+    rowIndices: rowIndices ? instancedArray(new Uint32Array(rowIndices), 'uint') : null,
+    disableMask: instancedArray(new Uint32Array(disableMask ?? visible.length), 'uint'),
+    rowCount,
+    count: visible.length,
+  }));
+  return readbackF32(renderer, visibleScores, visible.length);
+}
 
-    assertApproxEqual(
-      new Float32Array(await readbackF32(renderer, visibleScores, count)),
-      stagedScores.value.array,
-    );
+async function withRenderer(run) {
+  const renderer = await makeRenderer();
+  try {
+    await run(renderer);
   } finally {
     const device = renderer.backend?.device;
     renderer.dispose();
     device?.destroy();
   }
-});
+}
 
-test('semantic score kernels can write all scores for direct map coloring while honoring the disable mask', async () => {
-  const semanticDisableMask = new Uint32Array([0, 1, 0, 0, 0]);
-  const h = await makeHarness({
-    disableBelowThreshold: false,
-    semanticDisableMask,
-  });
-  try {
-    for (const kernel of h.kernels) h.renderer.compute(kernel);
-    assertApproxEqual(
-      await h.readScores(),
-      oracle(h.matrix, h.dims, h.queryArray, h.filenameMatchesArray, PARAMS, {
-        disableBelowThreshold: false,
-        semanticDisableMask,
-      }),
-    );
-  } finally {
-    h.dispose();
-  }
-});
+test('semantic score publish kernel atomically copies staged scores to the visible buffer', () => withRenderer(async (renderer) => {
+  const staged = [0.1, 0.5, -1, 0.8, 0];
+  assertApproxEqual(
+    new Float32Array(await publish(renderer, { staged, visible: [SEMANTIC_SCORE_DISABLED, 0.2, 0.3, 0.4, 0.5] })),
+    new Float32Array(staged),
+  );
+}));
+
+test('semantic score publish gathers matrix rows for the displayed dots, and a masked or rowless dot keeps its own paint', () => withRenderer(async (renderer) => {
+  const D = SEMANTIC_SCORE_DISABLED;
+  assertApproxEqual(
+    new Float32Array(await publish(renderer, {
+      staged: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+      visible: [0, 0, 0, 0],
+      rowIndices: [5, 0, NO_MATRIX_ROW, 2],
+      disableMask: [0, 0, 0, 1],
+    })),
+    new Float32Array([0.6, 0.1, D, D]),
+  );
+}));
 
 test('semantic f16 score chunks unpack packed matrices on the GPU', async () => {
   const h = await makeHarness({ disableBelowThreshold: false });
@@ -280,7 +274,6 @@ test('semantic f16 score chunks unpack packed matrices on the GPU', async () => 
         matrixF16Packed: chunk0,
         query: h.query,
         filenameMatches: h.filenameMatches,
-        semanticDisableMask: h.semanticDisableMask,
         scores: h.scores,
         dims: h.dims,
         count: 2,
@@ -292,7 +285,6 @@ test('semantic f16 score chunks unpack packed matrices on the GPU', async () => 
         matrixF16Packed: chunk1,
         query: h.query,
         filenameMatches: h.filenameMatches,
-        semanticDisableMask: h.semanticDisableMask,
         scores: h.scores,
         dims: h.dims,
         count: 3,
@@ -339,7 +331,6 @@ test('semantic score kernels reuse resident buffers for a new query and threshol
 test('semantic score summary kernel reduces histogram and max without full score readback', async () => {
   const h = await makeHarness({
     disableBelowThreshold: false,
-    semanticDisableMask: new Uint32Array([0, 1, 0, 0, 0]),
   });
   try {
     for (const kernel of h.kernels) h.renderer.compute(kernel);
@@ -355,7 +346,6 @@ test('semantic score summary kernel reduces histogram and max without full score
 
     const expectedScores = oracle(h.matrix, h.dims, h.queryArray, h.filenameMatchesArray, PARAMS, {
       disableBelowThreshold: false,
-      semanticDisableMask: h.semanticDisableMaskArray,
     });
     const expectedHistogram = new Uint32Array(SEMANTIC_SCORE_SUMMARY_BUCKETS);
     let expectedMax = 0;
@@ -379,7 +369,6 @@ test('semantic score summary kernel reduces histogram and max without full score
 test('semantic matched-score kernel returns fixed scores above threshold', async () => {
   const h = await makeHarness({
     disableBelowThreshold: false,
-    semanticDisableMask: new Uint32Array([0, 1, 0, 0, 0]),
   });
   try {
     for (const kernel of h.kernels) h.renderer.compute(kernel);
@@ -395,7 +384,6 @@ test('semantic matched-score kernel returns fixed scores above threshold', async
 
     const expectedScores = oracle(h.matrix, h.dims, h.queryArray, h.filenameMatchesArray, PARAMS, {
       disableBelowThreshold: false,
-      semanticDisableMask: h.semanticDisableMaskArray,
     });
     const expected = Array.from(expectedScores, (score) => (
       score >= threshold

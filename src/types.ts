@@ -333,8 +333,14 @@ export interface SemanticGpuScoringOptions {
   matrixF16PackedChunks?: Array<{ baseRow: number; rowCount: number; matrixF16Packed: Uint32Array }>;
   dims: number;
   query: Float32Array;
+  /** Matrix-row aligned. */
   filenameMatches?: Uint8Array;
+  /** Displayed dot -> matrix row; absent when they are the same order.
+   *  `NO_MATRIX_ROW` (0xffffffff): the dot has no row and keeps its own colour.
+   *  Scores, the summary and the matched readback always cover every matrix row. */
   matrixRowIndices?: Uint32Array;
+  /** Displayed-dot aligned: 1 keeps the dot's own colour. Paint only; it never
+   *  shapes a score, the summary or the matched readback. */
   semanticDisableMask?: Uint8Array | Uint32Array;
   disableBelowThreshold?: boolean;
   threshold: number;

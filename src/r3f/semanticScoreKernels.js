@@ -60,8 +60,9 @@ export function createSemanticScoreUniforms({
  * Build one chunk of the exact semantic score pass.
  *
  * `matrix` is chunk-local, row-major normalized audio vectors. `query` is the
- * normalized text vector. `filenameMatches`, `semanticDisableMask`, and
- * `scores` are full-layout buffers indexed by global row (`baseRow + localRow`).
+ * normalized text vector. `filenameMatches` and `scores` are full-matrix
+ * buffers indexed by global row (`baseRow + localRow`). Which dots keep their
+ * own paint is the publish step's concern, never the score's.
  * The output is the renderer-ready combined score. By default scores below the
  * threshold are disabled to preserve the legacy CPU-filtered paint path; direct
  * map coloring can set `disableBelowThreshold: false` and use the material
@@ -71,7 +72,6 @@ export function buildSemanticScoreChunkKernel({
   matrix,
   query,
   filenameMatches,
-  semanticDisableMask,
   scores,
   dims,
   count,
@@ -97,14 +97,9 @@ export function buildSemanticScoreChunkKernel({
     const semantic = clamp(dot.div(uniforms.cosineCeilingU), float(0), float(1)).pow(uniforms.curveGammaU);
     const filename = float(filenameMatches.element(globalRow));
     const combined = uniforms.filenameAlphaU.mul(filename).add(oneMinusAlpha.mul(semantic));
-    const thresholded = disableBelowThreshold
+    scores.element(globalRow).assign(disableBelowThreshold
       ? select(combined.greaterThanEqual(uniforms.thresholdU), combined, disabled)
-      : combined;
-    scores.element(globalRow).assign(select(
-      semanticDisableMask.element(globalRow).greaterThan(uint(0)),
-      disabled,
-      thresholded,
-    ));
+      : combined);
   })().compute(count);
 }
 
@@ -136,7 +131,6 @@ export function buildSemanticScoreChunkF16Kernel({
   matrixF16Packed,
   query,
   filenameMatches,
-  semanticDisableMask,
   scores,
   dims,
   count,
@@ -162,14 +156,9 @@ export function buildSemanticScoreChunkF16Kernel({
     const semantic = clamp(dot.div(uniforms.cosineCeilingU), float(0), float(1)).pow(uniforms.curveGammaU);
     const filename = float(filenameMatches.element(globalRow));
     const combined = uniforms.filenameAlphaU.mul(filename).add(oneMinusAlpha.mul(semantic));
-    const thresholded = disableBelowThreshold
+    scores.element(globalRow).assign(disableBelowThreshold
       ? select(combined.greaterThanEqual(uniforms.thresholdU), combined, disabled)
-      : combined;
-    scores.element(globalRow).assign(select(
-      semanticDisableMask.element(globalRow).greaterThan(uint(0)),
-      disabled,
-      thresholded,
-    ));
+      : combined);
   })().compute(count);
 }
 
@@ -200,6 +189,9 @@ export function buildSemanticScoreSummaryKernel({
   })().compute(count);
 }
 
+/** A displayed dot with no matrix row: it keeps its own colour. */
+export const NO_MATRIX_ROW = 0xffffffff;
+
 /**
  * Publish a completed staged score pass into the material-visible score buffer.
  *
@@ -207,14 +199,26 @@ export function buildSemanticScoreSummaryKernel({
  * Writing those chunks directly to the visible buffer makes semantic paint
  * update in bands. Keeping the score pass staged and publishing once preserves
  * atomic query updates while still allowing chunked submission.
+ *
+ * Scores belong to the matrix, paint to the displayed dots: `rowIndices` maps a
+ * displayed dot to its matrix row (absent: the same index), and a dot in
+ * `disableMask` or without a row keeps its own colour.
  */
 export function buildSemanticScorePublishKernel({
   stagedScores,
   visibleScores,
+  rowIndices = null,
+  disableMask,
+  rowCount,
   count,
 }) {
+  const disabled = float(SEMANTIC_SCORE_DISABLED);
   return Fn(() => {
-    visibleScores.element(instanceIndex).assign(stagedScores.element(instanceIndex));
+    const row = rowIndices ? rowIndices.element(instanceIndex) : instanceIndex;
+    const hasRow = row.lessThan(uint(rowCount));
+    const score = stagedScores.element(select(hasRow, row, uint(0)));
+    const keepsOwnPaint = disableMask.element(instanceIndex).greaterThan(uint(0)).or(hasRow.not());
+    visibleScores.element(instanceIndex).assign(select(keepsOwnPaint, disabled, score));
   })().compute(count);
 }
 
