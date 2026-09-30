@@ -18,6 +18,7 @@ import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
 import {
   cameraMoveMode,
   cameraPositionFromTransform,
+  createCameraMoveProgress,
   isFiniteCameraPosition,
   isFiniteCameraTransform,
 } from './cameraState.js';
@@ -591,7 +592,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
 
   // Shared executor for every programmatic camera move (zoomToVisible,
   // animateToZoomTransform): cameraMoveMode decides reject/instant/animate;
-  // animation eases linearly in camera-position space with easing applied to t.
+  // animation eases linearly in camera-position space with easing applied to t,
+  // the frame-paced progress of createCameraMoveProgress (a stall delays the move).
   const moveCameraTo = useCallback((target, duration, easing) => {
     const moveMode = cameraMoveMode({ start: cameraStateRef.current, target, duration });
     if (moveMode === 'reject') return Promise.resolve(false);
@@ -602,7 +604,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     }
     // 'animate' implies cameraStateRef.current is a finite position.
     const startCam = { ...cameraStateRef.current };
-    const t0 = performance.now();
+    const progress = createCameraMoveProgress(performance.now(), duration);
     return new Promise((resolve) => {
       const tick = () => {
         // CameraSetter nulls setCameraPositionRef.current on camera
@@ -613,8 +615,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           resolve(false);
           return;
         }
-        const elapsed = performance.now() - t0;
-        const t = Math.min(1, elapsed / duration);
+        const t = progress(performance.now());
         const e = easing(t);
         const cx = startCam.x + (target.x - startCam.x) * e;
         const cy = startCam.y + (target.y - startCam.y) * e;

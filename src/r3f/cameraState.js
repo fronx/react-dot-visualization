@@ -81,3 +81,19 @@ export function cameraMoveMode({ start, target, duration }) {
   if (!(duration > 0) || !isFiniteCameraPosition(start)) return 'instant';
   return 'animate';
 }
+
+// A frame that arrives later than this after the previous one advances a camera
+// move by this much only: a long main-thread task (a 238k-dot data swap, a hidden
+// window coming back) delays the move instead of skipping it to its target.
+export const CAMERA_MOVE_MAX_FRAME_MS = 100;
+
+/** Progress (0..1) of a camera move, read once per frame with that frame's time. */
+export function createCameraMoveProgress(startMs, durationMs) {
+  let lastMs = startMs;
+  let elapsedMs = 0;
+  return (nowMs) => {
+    elapsedMs += Math.min(Math.max(nowMs - lastMs, 0), CAMERA_MOVE_MAX_FRAME_MS);
+    lastMs = nowMs;
+    return Math.min(1, elapsedMs / durationMs);
+  };
+}
