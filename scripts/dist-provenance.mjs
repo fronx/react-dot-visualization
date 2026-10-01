@@ -19,9 +19,9 @@
 // shape — the exact kind of lie the record exists to prevent.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(fileURLToPath(import.meta.url), '../..');
 const inRepo = (...segments) => path.join(repoRoot, ...segments);
@@ -90,7 +90,9 @@ function report() {
   console.log(JSON.stringify({ ...gitState(), distFresh, built }));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+// Node resolves the main module's URL through symlinks (macOS tmpdir is under
+// /var -> /private/var) but leaves argv[1] as typed, so compare real paths.
+if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) {
   const command = process.argv[2];
   if (command === 'write') write();
   else if (command === 'report') report();

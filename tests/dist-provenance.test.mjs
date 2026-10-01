@@ -40,7 +40,7 @@ test('a freshly written provenance reports fresh and clean', (t) => {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   provenance('write');
   const head = run('git', ['rev-parse', 'HEAD']).trim();
-  assert.deepEqual(report(), { commit: head, dirty: false, distFresh: true });
+  assert.deepEqual(report(), { commit: head, dirty: false, distFresh: true, built: { commit: head, dirty: false } });
 });
 
 test('the answer describes the script\'s own repository, not the caller\'s directory', (t) => {
@@ -53,7 +53,12 @@ test('the answer describes the script\'s own repository, not the caller\'s direc
   provenance('write');
   appendFileSync(path.join(elsewhere.root, 'src/index.js'), '// unrelated edit\n');
   const head = run('git', ['rev-parse', 'HEAD']).trim();
-  assert.deepEqual(report(elsewhere.root), { commit: head, dirty: false, distFresh: true });
+  assert.deepEqual(report(elsewhere.root), {
+    commit: head,
+    dirty: false,
+    distFresh: true,
+    built: { commit: head, dirty: false },
+  });
 });
 
 test('editing a build input makes the dist stale and the tree dirty', (t) => {
@@ -91,11 +96,12 @@ test('a missing provenance record reports not fresh', (t) => {
 test('a dist rebuilt before committing stays fresh after the commit lands', (t) => {
   const { root, run, provenance, report } = makeRepo();
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  const before = run('git', ['rev-parse', 'HEAD']).trim();
   appendFileSync(path.join(root, 'src/index.js'), '// fix\n');
   provenance('write');
   assert.deepEqual(report().dirty, true);
   run('git', ['add', '-A']);
   run('git', ['commit', '--quiet', '-m', 'fix']);
   const head = run('git', ['rev-parse', 'HEAD']).trim();
-  assert.deepEqual(report(), { commit: head, dirty: false, distFresh: true });
+  assert.deepEqual(report(), { commit: head, dirty: false, distFresh: true, built: { commit: before, dirty: true } });
 });
