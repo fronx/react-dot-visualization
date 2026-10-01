@@ -1,9 +1,8 @@
 import * as THREE from 'three';
 import {
-  resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus,
+  resolveBaseSize, resolveScale, resolveFill, parsedFill, resolveOpacity, resolveFocus,
 } from './dotAppearance.js';
 
-const _color = new THREE.Color();
 const _ringColor = new THREE.Color();
 
 /**
@@ -124,11 +123,11 @@ function applyFull({
     matrix[off + 15] = 1;
     needsMatrixUpdate = true;
 
-    _color.set(fill);
+    const rgb = parsedFill(fill);
     const cOff = i * 3;
-    color[cOff + 0] = _color.r;
-    color[cOff + 1] = _color.g;
-    color[cOff + 2] = _color.b;
+    color[cOff + 0] = rgb.r;
+    color[cOff + 1] = rgb.g;
+    color[cOff + 2] = rgb.b;
     needsColorUpdate = true;
 
     if (alpha) {
@@ -272,11 +271,11 @@ function applyDelta({
     matrix[off + 10] = scale;
     needsMatrixUpdate = true;
 
-    _color.set(fill);
+    const rgb = parsedFill(fill);
     const cOff = i * 3;
-    color[cOff + 0] = _color.r;
-    color[cOff + 1] = _color.g;
-    color[cOff + 2] = _color.b;
+    color[cOff + 0] = rgb.r;
+    color[cOff + 1] = rgb.g;
+    color[cOff + 2] = rgb.b;
     needsColorUpdate = true;
 
     if (alpha) {

@@ -6,6 +6,7 @@
  * (R3FDotsWebGPU, which uploads them to storage buffers). The renderers diverge
  * only in how they apply these values, never in how they compute them.
  */
+import * as THREE from 'three';
 
 // Floats per colour in the WebGPU path's colour storage buffers: RGB in a vec4
 // slot, fourth component unused. A `vec3` storage attribute is not safe to
@@ -35,6 +36,24 @@ export function resolveHoverRadius(item, radiusOverrides, defaultSize, hoverSize
 
 export function resolveFill(item, customStyle, defaultColor) {
   return customStyle.fill || customStyle.color || item.color || defaultColor || '#7c6fff';
+}
+
+// A fill's RGB, parsed once per distinct string. Every dot is repainted on each
+// data swap, and a map's fills are a small palette (folder hues, lit and dim
+// states); parsing the CSS string per dot (Color.setStyle) was most of a 158k-dot
+// repaint. The bound keeps a per-dot gradient from growing it without limit.
+// The returned colour is shared: read it, never mutate it.
+const MAX_PARSED_FILLS = 16_384;
+const parsedFills = new Map();
+
+export function parsedFill(fill) {
+  let color = parsedFills.get(fill);
+  if (color === undefined) {
+    if (parsedFills.size >= MAX_PARSED_FILLS) parsedFills.clear();
+    color = new THREE.Color(fill);
+    parsedFills.set(fill, color);
+  }
+  return color;
 }
 
 export function resolveOpacity(customStyle, isHovered, hoverOpacity, defaultOpacity) {

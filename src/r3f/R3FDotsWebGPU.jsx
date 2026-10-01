@@ -44,7 +44,7 @@ import {
   buildPickNearest, buildStoreAtomicU32, pickIndexBits,
 } from '../decollision-tsl.js';
 import {
-  resolveBaseSize, resolveScale, resolveFill, resolveOpacity, resolveFocus, resolveHoverRadius,
+  resolveBaseSize, resolveScale, resolveFill, parsedFill, resolveOpacity, resolveFocus, resolveHoverRadius,
   COLOR_STRIDE,
 } from './dotAppearance.js';
 import { buildLerpKernels } from './lerpKernels.js';
@@ -791,11 +791,11 @@ function writeCosmetic(cosmetic, data, index, opts) {
   const style = resolveLayeredDotStyle(item.id, dotStyles, dynamicDotStyles);
   const isHovered = item.id === hoveredId;
   const baseSize = resolveBaseSize(item, style, radiusOverrides, defaultSize);
-  _color.set(resolveFill(item, style, defaultColor));
+  const rgb = parsedFill(resolveFill(item, style, defaultColor));
   const c = index * COLOR_STRIDE;
-  cosmetic.colors.value.array[c] = _color.r;
-  cosmetic.colors.value.array[c + 1] = _color.g;
-  cosmetic.colors.value.array[c + 2] = _color.b;
+  cosmetic.colors.value.array[c] = rgb.r;
+  cosmetic.colors.value.array[c + 1] = rgb.g;
+  cosmetic.colors.value.array[c + 2] = rgb.b;
   cosmetic.alphas.value.array[index] = hideUnseen
     ? 0
     : resolveOpacity(style, isHovered, hoverOpacity, defaultOpacity);
