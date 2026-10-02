@@ -394,10 +394,12 @@ export interface DotVisualizationR3FProps extends DotVisualizationCommonProps {
   /** Fires when the settled positions have been applied visually (WebGPU). */
   onDecollisionVisualComplete?: (info: { count: number; reason: string; jobId: number }) => void;
   /**
-   * Fires after a base decollision completes, echoing the `dataKey` that was
-   * current when that simulation launched. An identity channel for level-state
-   * settle derivation: a late completion carries the identity it ran on, so it
-   * can never be attributed to data that replaced it mid-flight.
+   * Fires after a decollision completes (base, or a constraint run, which is
+   * the only completion new data gets when its constraint supersedes the base
+   * launch), echoing the `dataKey` that was current when that simulation
+   * launched. An identity channel for level-state settle derivation: a late
+   * completion carries the identity it ran on, so it can never be attributed
+   * to data that replaced it mid-flight.
    */
   onBaseDecollisionSettled?: (info: { dataKey: string | null }) => void;
   /**

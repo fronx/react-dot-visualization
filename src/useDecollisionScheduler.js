@@ -80,10 +80,12 @@ export function useDecollisionScheduler({
    *  launch time and echoed in onBaseSettled, so a completion can never be
    *  attributed to data that replaced the launched set mid-flight. */
   dataKey = null,
-  /** Fires after a base decollision completes, with the launch-captured
+  /** Fires after any decollision run completes, with the launch-captured
    *  identity: { dataKey }. Unlike onBaseReady's positional args, this is an
-   *  additive identity channel — consumers derive "the base layout for data X
-   *  is visually settled" from it as level state. */
+   *  additive identity channel — consumers derive "the layout for data X is
+   *  visually settled" from it as level state. Constraint runs fire it too:
+   *  one that arrives with new data supersedes the base launch, and its
+   *  completion is then the only one that new data gets. */
   onBaseSettled,
   syncDecollisionState,
   onSimulationRunningChange,
@@ -244,6 +246,7 @@ export function useDecollisionScheduler({
 
     // Use current radiusOverrides (a prop, guaranteed up-to-date on this render)
     const overrides = radiusOverridesRef.current;
+    const launchedDataKey = dataKeyRef.current;
 
     launchSimulation(sourceData, key, overrides, (finalData, launchKey) => {
       if (cache && Array.isArray(finalData)) {
@@ -252,8 +255,9 @@ export function useDecollisionScheduler({
       phaseRef.current = PHASE.READY;
       activeConstraintKeyRef.current = launchKey;
       stableOnConstraintReady(finalData, launchKey);
+      stableOnBaseSettled({ dataKey: launchedDataKey });
     });
-  }, [dataRef, launchSimulation, cache, radiusOverridesRef, stableOnConstraintReady]);
+  }, [dataRef, launchSimulation, cache, radiusOverridesRef, stableOnConstraintReady, stableOnBaseSettled, dataKeyRef]);
 
   launchConstraintRef.current = launchConstraint;
 

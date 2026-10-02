@@ -125,4 +125,85 @@ describe('useDecollisionScheduler base-completion dataKey echo', () => {
     });
     assert.deepEqual(settles, ['layout-A', 'layout-B']);
   });
+
+  // Regression for the 2026-10-02 similar-sounds settle lag: a dive commits
+  // the new layout and its focus constraint in one render. The data effect
+  // launches the base, the radiusOverrides trigger then launches the focus
+  // constraint, which supersedes the base before it completes (the GPU
+  // request channel is latest-wins). The constraint run is the new layout's
+  // final positions, so its completion must settle the new dataKey.
+  test('a constraint that supersedes the base launch still settles the new dataKey', async () => {
+    setupRoot();
+
+    const settles = [];
+    const executor = {
+      canSnapshotPositions: true,
+      hasPositionSnapshot: () => false,
+      invalidatePositionSnapshot() {},
+      runSimulation(request) {
+        let stopped = false;
+        setTimeout(() => { if (!stopped) request.onComplete(null, undefined); }, 0);
+        return { stop() { stopped = true; } };
+      },
+      runAnimation(request) {
+        setTimeout(() => request.onComplete(null, undefined), 0);
+        return { stop() {} };
+      },
+    };
+
+    function Harness({ dataKey, data, constraintKey, radiusOverrides }) {
+      const dataRef = useRef(data);
+      const processedDataRef = useRef([]);
+      const liveTransitionDataRef = useRef(null);
+      const apiRef = useRef(null);
+      const prevKeyRef = useRef(null);
+
+      useEffect(() => {
+        const changed = prevKeyRef.current !== null && prevKeyRef.current !== dataKey;
+        prevKeyRef.current = dataKey;
+        dataRef.current = data;
+        if (changed) apiRef.current.decollideForConstraint('');
+      });
+
+      apiRef.current = useDecollisionScheduler({
+        dataRef,
+        processedDataRef,
+        liveTransitionDataRef,
+        cache: null,
+        positionsAreIntermediate: false,
+        constraintKey,
+        radiusOverrides,
+        defaultSize: 2,
+        onUpdateNodes: () => {},
+        onBaseReady: () => {},
+        onConstraintReady: () => {},
+        dataKey,
+        onBaseSettled: (info) => settles.push(info.dataKey),
+        syncDecollisionState: () => {},
+        onSimulationRunningChange: () => {},
+        executor,
+      });
+      return null;
+    }
+
+    const library = [{ id: 'a', x: 1, y: 2 }, { id: 'b', x: 3, y: 4 }, { id: 'c', x: 5, y: 6 }];
+    await act(async () => {
+      root.render(React.createElement(Harness, { dataKey: 'library', data: library, constraintKey: '', radiusOverrides: new Map() }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    assert.deepEqual(settles, ['library']);
+
+    const similar = [{ id: 'a', x: 1, y: 2 }, { id: 'c', x: 5, y: 6 }];
+    await act(async () => {
+      root.render(React.createElement(Harness, {
+        dataKey: 'similar', data: similar, constraintKey: 'focus:a', radiusOverrides: new Map([['a', 6]]),
+      }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    assert.equal(settles.at(-1), 'similar');
+  });
 });
