@@ -29,7 +29,7 @@
 import React, { useMemo, useEffect, useRef, useReducer } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, uint, max, mix, clamp } from 'three/tsl';
+import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max, mix, clamp } from 'three/tsl';
 import { easeCubicOut } from 'd3';
 import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
 import {
@@ -364,17 +364,17 @@ function buildSemanticBuffers(N) {
 function buildCategoricalFilterResources(count) {
   const resources = {
     values: instancedArray(new Uint32Array(count), 'uint'),
-    enabledU: uniform(uint(0)),
-    includedValuesU: uniform(uint(0)),
-    valueMaskU: uniform(uint(0xff)),
-    valueShiftU: uniform(uint(0)),
-    clauseCountU: uniform(uint(0)),
+    enabledU: uniform(0, 'uint'),
+    includedValuesU: uniform(0, 'uint'),
+    valueMaskU: uniform(0xff, 'uint'),
+    valueShiftU: uniform(0, 'uint'),
+    clauseCountU: uniform(0, 'uint'),
     dimColorU: uniform(colorVector(null, DEFAULT_CATEGORICAL_DIM_RGB)),
     dimOpacityU: uniform(float(0.35)),
   };
   for (let i = 0; i < MAX_CATEGORICAL_CLAUSES; i += 1) {
-    resources[`clause${i}ClearU`] = uniform(uint(0));
-    resources[`clause${i}AnyU`] = uniform(uint(0));
+    resources[`clause${i}ClearU`] = uniform(0, 'uint');
+    resources[`clause${i}AnyU`] = uniform(0, 'uint');
   }
   return resources;
 }

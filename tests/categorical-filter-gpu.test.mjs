@@ -16,33 +16,38 @@ test('GPU clause matching matches CPU across uniform-only changes to resident da
   const values = new Uint32Array([
     2 | (1 << 8) | pitched, 2 | (5 << 8) | pitched,
     2 | (3 << 8) | pitched, 1 | (1 << 8) | pitched,
-    2, 2 | neutral, 2 | 0x80000000,
+    2, 2 | neutral, 2 | 0x80000000, 2 | (1 << 4),
   ]);
   const resident = instancedArray(values, 'uint');
   const output = instancedArray(new Uint32Array(values.length), 'uint');
   const uniformKeys = ['includedValues', 'valueMask', 'valueShift', 'clauseCount'];
   for (let i = 0; i < MAX_CATEGORICAL_CLAUSES; i += 1) uniformKeys.push(`clause${i}Clear`, `clause${i}Any`);
-  const uniforms = Object.fromEntries(uniformKeys.map(key => [`${key}U`, uniform(uint(0))]));
+  const uniforms = Object.fromEntries(uniformKeys.map(key => [`${key}U`, uniform(0, 'uint')]));
   const kernel = Fn(() => {
     output.element(instanceIndex).assign(select(
       categoricalMatchNode(resident.element(instanceIndex), uniforms), uint(1), uint(0),
     ));
   })().compute(values.length);
   try {
-    for (const clauses of [
-      [],
-      [{ clear: (~5 & 4095) << 8 }],
-      [{ any: pitched | neutral }],
-      [
+    for (const { clauses, includedValues = 1 << 2, valueMask = 255 } of [
+      { clauses: [] },
+      { clauses: [{ clear: (~5 & 4095) << 8 }] },
+      { clauses: [{ any: pitched | neutral }] },
+      { clauses: [
         { clear: (~5 & 4095) << 8, any: pitched },
         { clear: (~6 & 4095) << 8, any: pitched },
         { any: neutral },
-      ],
-      [{ any: 1 << 0 }, { any: 1 << 1 }, { any: 1 << 2 }, { any: 1 << 3 }, { any: pitched }],
-      [{ any: 0x80000000 }],
-      [{ clear: 0x80000000 }],
+      ] },
+      { clauses: [{ any: 1 << 0 }, { any: 1 << 1 }, { any: 1 << 2 }, { any: 1 << 3 }, { any: pitched }] },
+      { clauses: [{ any: 0x80000000 }] },
+      { clauses: [{ clear: 0x80000000 }] },
+      // Masks whose set bits span more than 24 places: a float-typed uniform
+      // rounds away their low bits (gpu-tsl-compute.md, uniform typing).
+      { clauses: [], includedValues: ((1 << 2) | (1 << 31)) >>> 0 },
+      { clauses: [{ any: (2 | 0x80000000) >>> 0 }] },
+      { clauses: [{ clear: ((1 << 4) | (1 << 31)) >>> 0 }], valueMask: 3 },
     ]) {
-      const input = { values, includedValues: 1 << 2, valueMask: 255, valueShift: 0, clauses };
+      const input = { values, includedValues, valueMask, valueShift: 0, clauses };
       const truncated = clauses.slice(0, MAX_CATEGORICAL_CLAUSES);
       uniforms.clauseCountU.value = truncated.length;
       for (let i = 0; i < MAX_CATEGORICAL_CLAUSES; i += 1) {
