@@ -29,7 +29,7 @@ const vertexShader = /* glsl */`
   }
 `;
 
-// Focus-ring geometry constants (mirror utils/focusDotSizing.ts in fingertip):
+// Focus-ring geometry constants, as fractions of the quad radius:
 //   inner disc spans 0..INNER_END
 //   gap (transparent) spans INNER_END..GAP_END
 //   outer ring spans GAP_END..1.0

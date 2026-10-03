@@ -9,7 +9,6 @@ import {
   createPanHandler,
   computeFitZ,
   computeZoomOutCapZ,
-  minCameraZForDotRadius,
   CAMERA_FOV_DEGREES,
 } from './cameraUtils.js';
 import { finiteBoundsForData } from '../utils.js';
@@ -28,9 +27,7 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-const NO_OCCLUSION = { left: 0, right: 0, top: 0, bottom: 0 };
-
-export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt', occlusion = NO_OCCLUSION, largestDotSize = 0, maxDotScreenRadiusPx = null }) {
+export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt', occlusion = {}, minZForHeight = () => 0 }) {
   const controlsRef = useRef(null);
   const { camera, gl, size, invalidate } = useThree();
 
@@ -138,7 +135,7 @@ export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], inter
         // zoom-to-cursor
         const oldZ = camera.position.z;
         const isPinch = gesture === 'pinch';
-        const minZ = Math.max(CAMERA_Z_MIN, minCameraZForDotRadius(largestDotSize, size.height, maxDotScreenRadiusPx));
+        const minZ = Math.max(CAMERA_Z_MIN, minZForHeight(size.height));
         const newZ = Math.max(minZ, Math.min(maxZ, oldZ * calculateZoomFactor(event.deltaY, isPinch)));
         if (Math.abs(newZ - oldZ) < 0.001) return;
 
@@ -173,7 +170,7 @@ export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], inter
 
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', handleWheel);
-  }, [camera, gl, size, maxZ, scrollZoomModifier, invalidate, onInvalidCamera, largestDotSize, maxDotScreenRadiusPx]);
+  }, [camera, gl, size, maxZ, scrollZoomModifier, invalidate, onInvalidCamera, minZForHeight]);
 
   return (
     <OrbitControls

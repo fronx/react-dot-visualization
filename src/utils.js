@@ -28,9 +28,14 @@ export function boundsForData(data, dotSize = 2) {
  *  giant dots (2-3 initial dots at 50-100px during import) don't fill the screen;
  *  it shrinks with the dots. */
 export function fitPaddingForData(data, dotSize = 2) {
+  return largestDotRadius(data, dotSize) * 4;
+}
+
+/** The largest dot radius in `data` (a dot without a size draws at `dotSize`). */
+export function largestDotRadius(data, dotSize = 2) {
   let maxRadius = 0;
   for (const obj of data) maxRadius = Math.max(maxRadius, obj.size || dotSize);
-  return maxRadius * 4;
+  return maxRadius;
 }
 
 /** `bounds` grown by `pad` on every side. */

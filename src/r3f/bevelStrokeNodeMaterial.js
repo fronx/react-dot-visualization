@@ -17,7 +17,8 @@ import {
   sRGBTransferOETF,
 } from 'three/tsl';
 
-// Focus-ring geometry (mirror utils/focusDotSizing.ts in fingertip):
+// Focus-ring geometry, as fractions of the quad radius (a host sizes a ringed
+// dot's quad at OUTER_RATIO x its inner disc):
 //   inner disc 0..INNER_END, transparent gap INNER_END..GAP_END, outer ring GAP_END..1
 //   OUTER_RATIO = 1 + GAP_RATIO(0.4) + RING_RATIO(0.3) = 1.7
 export const INNER_END = 1.0 / 1.7;

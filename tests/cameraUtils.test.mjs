@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 
-import { CAMERA_FOV_DEGREES, classifyWheelGesture, computeZoomOutCapZ } from '../src/r3f/cameraUtils.js';
+import { readFileSync } from 'node:fs';
+import {
+  CAMERA_FOV_DEGREES, PAN_DRAG_THRESHOLD_PX, capTransformScale, classifyWheelGesture, computeZoomOutCapZ,
+  maxScaleForDotRadius, minCameraZForDotRadius,
+} from '../src/r3f/cameraUtils.js';
+import { padBounds, renderedBounds } from '../src/utils.js';
 
 describe('classifyWheelGesture', () => {
   test('keeps the meta-or-alt default backward compatible', () => {
@@ -20,8 +25,7 @@ describe('classifyWheelGesture', () => {
 });
 
 describe('PAN_DRAG_THRESHOLD_PX', () => {
-  test('is exported for consumers layering gestures over the canvas', async () => {
-    const { PAN_DRAG_THRESHOLD_PX } = await import('../src/r3f/cameraUtils.js');
+  test('is exported for consumers layering gestures over the canvas', () => {
     assert.equal(PAN_DRAG_THRESHOLD_PX, 4);
   });
 });
@@ -47,8 +51,7 @@ describe('computeZoomOutCapZ', () => {
 });
 
 describe('renderedBounds', () => {
-  test('reads a world-convention buffer (y negated) back into data space', async () => {
-    const { renderedBounds, padBounds } = await import('../src/utils.js');
+  test('reads a world-convention buffer (y negated) back into data space', () => {
     const b = renderedBounds(new Float32Array([1, -5, 3, 20, -2, 0]));
     assert.deepEqual(b, { minX: -2, maxX: 3, minY: -20, maxY: 5 });
     assert.deepEqual(padBounds(b, 1), { minX: -3, maxX: 4, minY: -21, maxY: 6 });
@@ -60,8 +63,7 @@ describe('R3FCamera OrbitControls', () => {
   // still the origin on the first frame after a placed camera; a cap passed here
   // moved a restored one-dot map's camera ~1300 px off, unreported (2026-10-03).
   // The wheel handler owns the zoom-out cap.
-  test('never receives the zoom-out cap as maxDistance', async () => {
-    const { readFileSync } = await import('node:fs');
+  test('never receives the zoom-out cap as maxDistance', () => {
     const source = readFileSync(new URL('../src/r3f/R3FCamera.jsx', import.meta.url), 'utf8');
     assert.match(source, /maxDistance=\{CAMERA_Z_MAX\}/);
     assert.doesNotMatch(source, /maxDistance=\{maxZ\}/);
@@ -69,14 +71,26 @@ describe('R3FCamera OrbitControls', () => {
 });
 
 describe('dot-size zoom limit', () => {
-  test('the closest camera and the largest scale draw the largest dot at the limit', async () => {
-    const { minCameraZForDotRadius, maxScaleForDotRadius, CAMERA_FOV_DEGREES: fov } = await import('../src/r3f/cameraUtils.js');
-    const tan = Math.tan((fov * Math.PI / 180) / 2);
+  test('the closest camera and the largest scale draw the largest dot at the limit', () => {
+    const tan = Math.tan((CAMERA_FOV_DEGREES * Math.PI / 180) / 2);
     const z = minCameraZForDotRadius(2, 600, 24);
     assert.ok(Math.abs((2 * 600) / (2 * z * tan) - 24) < 1e-9);
     const k = maxScaleForDotRadius(2, 600, 24);
     assert.ok(Math.abs(2 * k * (600 / 100) - 24) < 1e-9);
     assert.equal(minCameraZForDotRadius(2, 600, null), 0);
     assert.equal(maxScaleForDotRadius(2, 600, null), Infinity);
+  });
+});
+
+describe('capTransformScale', () => {
+  test('zooms out about the centre, leaving a transform under the cap alone', () => {
+    const t = { k: 8, x: -300, y: -100 };
+    const centre = { x: 60, y: 40 };
+    const capped = capTransformScale(t, 2, centre);
+    assert.equal(capped.k, 2);
+    // The data point under the centre stays under it.
+    const atCentre = (tr) => [(centre.x - tr.x) / tr.k, (centre.y - tr.y) / tr.k];
+    assert.deepEqual(atCentre(capped), atCentre(t));
+    assert.equal(capTransformScale(t, 10, centre), t);
   });
 });

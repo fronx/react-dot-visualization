@@ -57,12 +57,12 @@ export function calculatePan({ screenDeltaX, screenDeltaY, cameraZ, containerWid
 /**
  * Compute camera Z needed to fit a data bounding box, with margin.
  */
-export function computeFitZ(minX, maxX, minY, maxY, aspect, margin = 0.9) {
+export function computeFitZ(minX, maxX, minY, maxY, aspect, margin = 0.9, marginH = margin) {
   const dataW = maxX - minX;
   const dataH = maxY - minY;
   if (dataW === 0 && dataH === 0) return 65;
 
-  const neededForH = (dataH / 2 / margin) / Math.tan(CAMERA_FOV_RADIANS / 2);
+  const neededForH = (dataH / 2 / marginH) / Math.tan(CAMERA_FOV_RADIANS / 2);
   const neededForW = (dataW / 2 / margin) / Math.tan(CAMERA_FOV_RADIANS / 2) / aspect;
   return Math.max(neededForH, neededForW, 1);
 }
@@ -78,13 +78,8 @@ export function computeZoomOutCapZ(bounds, size, occlusion = {}, fraction = 0.4)
   const { left = 0, right = 0, top = 0, bottom = 0 } = occlusion;
   const visibleW = Math.max(1, size.width - left - right) / size.width;
   const visibleH = Math.max(1, size.height - top - bottom) / size.height;
-  const dataW = bounds.maxX - bounds.minX;
-  const dataH = bounds.maxY - bounds.minY;
-  if (dataW === 0 && dataH === 0) return 65;
-  const tan = Math.tan(CAMERA_FOV_RADIANS / 2);
-  const neededForH = (dataH / 2 / (fraction * visibleH)) / tan;
-  const neededForW = (dataW / 2 / (fraction * visibleW)) / tan / (size.width / size.height);
-  return Math.max(neededForH, neededForW, 1);
+  return computeFitZ(bounds.minX, bounds.maxX, bounds.minY, bounds.maxY, size.width / size.height,
+    fraction * visibleW, fraction * visibleH);
 }
 
 /**
@@ -101,6 +96,21 @@ export function minCameraZForDotRadius(dotRadius, heightPx, maxRadiusPx) {
 export function maxScaleForDotRadius(dotRadius, heightPx, maxRadiusPx) {
   if (!(maxRadiusPx > 0) || !(dotRadius > 0) || !(heightPx > 0)) return Infinity;
   return (maxRadiusPx * 100) / (heightPx * dotRadius);
+}
+
+/**
+ * A viewBox transform zoomed out to at most `maxK`, about `centre` (viewBox
+ * coordinates): what sat at the centre stays there. For a fit centred in the
+ * visible area, that is the fit at the capped scale.
+ */
+export function capTransformScale(transform, maxK, centre) {
+  if (!(transform.k > maxK)) return transform;
+  const r = maxK / transform.k;
+  return {
+    k: maxK,
+    x: centre.x - r * (centre.x - transform.x),
+    y: centre.y - r * (centre.y - transform.y),
+  };
 }
 
 export function createPanHandler({ canvas, getCameraZ, onPan, onPanStart, onPanEnd, onClick }) {

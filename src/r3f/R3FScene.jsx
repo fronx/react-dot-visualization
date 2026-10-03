@@ -314,15 +314,14 @@ export function HoverDetector({ data, radiusOverrides, defaultSize, hoverSizeMul
   return null;
 }
 
-export function CameraInitializer({ data, initialized, initialTransform, onInit, computeFitTarget, minZForHeight = () => 0 }) {
+export function CameraInitializer({ data, initialized, initialTransform, onInit, computeFitTarget, toCamera }) {
   const { camera, size, invalidate } = useThree();
   const hasRun = useRef(false);
 
   useEffect(() => {
     if (hasRun.current || initialized.current || data.length === 0) return;
-    const resolved = resolveInitialCameraPosition({ data, size, initialTransform, computeFitTarget });
-    if (!resolved) return;
-    const position = { ...resolved, z: Math.max(resolved.z, minZForHeight(size.height)) };
+    const position = resolveInitialCameraPosition({ data, size, initialTransform, computeFitTarget, toCamera });
+    if (!position) return;
 
     camera.position.set(position.x, position.y, position.z);
     // Initialization is a successful finite commit, not an attempted effect.
@@ -331,7 +330,7 @@ export function CameraInitializer({ data, initialized, initialTransform, onInit,
     initialized.current = true;
     invalidate();
     onInit?.(position);
-  }, [data, camera, size, initialized, initialTransform, computeFitTarget, invalidate, onInit, minZForHeight]);
+  }, [data, camera, size, initialized, initialTransform, computeFitTarget, invalidate, onInit, toCamera]);
 
   return null;
 }

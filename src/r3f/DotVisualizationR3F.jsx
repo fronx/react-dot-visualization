@@ -14,7 +14,7 @@ import { R3FCamera } from './R3FCamera.jsx';
 import { R3FDotsWebGPU, BASE_MAX_SOLVER_ITERATIONS, CONSTRAINT_MAX_SOLVER_ITERATIONS } from './R3FDotsWebGPU.jsx';
 import { makeGpuExecutor } from './gpuDecollisionExecutor.js';
 import { createSingleFlightWebGpuRendererFactory } from './webgpuRendererFactory.js';
-import { CAMERA_FOV_DEGREES, maxScaleForDotRadius, minCameraZForDotRadius } from './cameraUtils.js';
+import { CAMERA_FOV_DEGREES, capTransformScale, maxScaleForDotRadius, minCameraZForDotRadius } from './cameraUtils.js';
 import {
   cameraMoveMode,
   cameraPositionFromTransform,
@@ -22,7 +22,7 @@ import {
   isFiniteCameraPosition,
   isFiniteCameraTransform,
 } from './cameraState.js';
-import { boundsForData, computeFitTransformToVisible, fitPaddingForData, padBounds, renderedBounds } from '../utils.js';
+import { boundsForData, computeFitTransformToVisible, largestDotRadius, padBounds, renderedBounds } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
 import { useStablePositions } from '../useStablePositions.js';
 import { usePositionChangeDetection, detectDotSizeChange } from '../usePositionChangeDetection.js';
@@ -71,6 +71,15 @@ const viewBoxForContainer = (rect) => [
   R3F_VIEWBOX_HEIGHT * (rect.width / rect.height),
   R3F_VIEWBOX_HEIGHT,
 ];
+
+/** The centre of the area `occlusion` leaves free, in viewBox coordinates. */
+const visibleCentre = (size, occlusion) => {
+  const vbPerPx = R3F_VIEWBOX_HEIGHT / size.height;
+  return {
+    x: (occlusion.left + Math.max(1, size.width - occlusion.left - occlusion.right) / 2) * vbPerPx,
+    y: (occlusion.top + Math.max(1, size.height - occlusion.top - occlusion.bottom) / 2) * vbPerPx,
+  };
+};
 
 /**
  * Drop-in replacement for DotVisualization using R3F (WebGL) rendering.
@@ -538,31 +547,35 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     reportCameraRef.current?.();
   }, []);
 
+  const occlusion = useMemo(
+    () => ({ left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom }),
+    [occludeLeft, occludeRight, occludeTop, occludeBottom],
+  );
+  // Latest occlusion, read when a fit is computed: an awaited fit must not frame
+  // into the free area as it was when the fit was asked for.
+  const occlusionRef = useRef(occlusion);
+  occlusionRef.current = occlusion;
+
+  // The largest dot's world radius: what the zoom-in limit is measured on.
+  const largestDotSize = useMemo(() => largestDotRadius(controlData, defaultSize), [controlData, defaultSize]);
+  const minZForHeight = useCallback(
+    (heightPx) => minCameraZForDotRadius(largestDotSize, heightPx, maxDotScreenRadiusPx),
+    [largestDotSize, maxDotScreenRadiusPx],
+  );
+
   // Convert a viewBox-space D3 transform {x, y, k} to a Three.js camera
   // position. The transform lives in the same coordinate space Canvas's
   // ZoomManager uses ([0, 0, 100*aspect, 100]); the camera-world frame
   // numerically matches viewBox coords with Y negated when data is placed
   // (`_dummy.position.set(item.x, -item.y, 0)` in R3FDots), so this conversion
-  // is the algebraic inverse of getZoomTransform below.
-  // The largest dot's world radius: what the zoom-in limit is measured on.
-  const largestDotSize = useMemo(() => {
-    let largest = defaultSize;
-    for (const d of controlData) if (d.size > largest) largest = d.size;
-    return largest;
-  }, [controlData, defaultSize]);
-  const minZForHeight = useCallback(
-    (heightPx) => minCameraZForDotRadius(largestDotSize, heightPx, maxDotScreenRadiusPx),
-    [largestDotSize, maxDotScreenRadiusPx],
-  );
-  const d3ToCamera = useCallback((transform, W, H) => {
-    const position = cameraPositionFromTransform(transform, { width: W, height: H });
-    return position && { ...position, z: Math.max(position.z, minZForHeight(H)) };
-  }, [minZForHeight]);
-
-  // Latest occlusion, read when a fit is computed: an awaited fit must not frame
-  // into the free area as it was when the fit was asked for.
-  const occlusionRef = useRef(null);
-  occlusionRef.current = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
+  // is the algebraic inverse of getZoomTransform below. Every programmatic
+  // camera (fits, restores, set/animate) passes here, so the dot-size zoom
+  // limit holds for all of them, zooming out about the visible area's centre.
+  const d3ToCamera = useCallback((transform, size, maxK = Infinity) => {
+    if (!isFiniteCameraTransform(transform)) return null;
+    const k = Math.min(maxK, maxScaleForDotRadius(largestDotSize, size.height, maxDotScreenRadiusPx));
+    return cameraPositionFromTransform(capTransformScale(transform, k, visibleCentre(size, occlusionRef.current)), size);
+  }, [largestDotSize, maxDotScreenRadiusPx]);
   const zoomToVisibleSeqRef = useRef(0);
   // Compute the viewBox-space fit transform honoring occlusion. Shares the
   // math + convention with Canvas's ZoomManager.
@@ -574,11 +587,6 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     const fit = computeFitTransformToVisible(bounds, viewBox, rect, occlusionRef.current, margin);
     return isFiniteCameraTransform(fit) ? fit : null;
   }, [defaultSize]);
-
-  const cameraOcclusion = useMemo(
-    () => ({ left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom }),
-    [occludeLeft, occludeRight, occludeTop, occludeBottom],
-  );
 
   const getCpuPositionData = useCallback(() => {
     const refData = processedDataRef.current;
@@ -594,8 +602,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     if (!containerRef.current) return null;
     const fit = computeFit(controlData, 0.9);
     if (!fit) return null;
-    const rect = containerRef.current.getBoundingClientRect();
-    return d3ToCamera(fit, rect.width, rect.height);
+    return d3ToCamera(fit, containerRef.current.getBoundingClientRect());
   }, [computeFit, d3ToCamera, controlData]);
 
   const recoverInvalidCamera = useCallback(() => {
@@ -675,46 +682,22 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       // maps. One position read-back, ~1.6 ms at 238k dots.
       const drawn = dataOverride ? null : await gpuControlRef.current.readPositions?.();
       if (seq !== zoomToVisibleSeqRef.current) return false;
-      const drawnBounds = drawn ? renderedBounds(drawn.positions) : null;
-      const bounds = drawnBounds
-        ? padBounds(drawnBounds, fitPaddingForData(dataToUse, defaultSize))
+      const bounds = drawn
+        ? padBounds(renderedBounds(drawn.positions), largestDotSize * 4)
         : boundsForData(dataToUse, defaultSize);
       const fit = computeFit(dataToUse, margin, bounds);
       if (!fit) return false;
-      maxScale = Math.min(maxScale, maxScaleForDotRadius(largestDotSize, containerRef.current.getBoundingClientRect().height, maxDotScreenRadiusPx));
-
-      const rect = containerRef.current.getBoundingClientRect();
-      const W = rect.width, H = rect.height;
-
-      // Cap k at maxScale; re-center bounds in the visible (occlusion-aware)
-      // region at the capped k. Done in viewBox-space — mirrors the
-      // Canvas ZoomManager's matching block so behavior stays in lockstep.
-      let { k, x, y } = fit;
-      if (k > maxScale) {
-        k = maxScale;
-        const cx = (bounds.minX + bounds.maxX) / 2;
-        const cy = (bounds.minY + bounds.maxY) / 2;
-        const [vbX, vbY, vbW, vbH] = viewBoxForContainer(rect);
-        const sx = W / vbW;
-        const sy = H / vbH;
-        const occ = occlusionRef.current;
-        const visWpx = Math.max(1, W - occ.left - occ.right);
-        const visHpx = Math.max(1, H - occ.top - occ.bottom);
-        const visCxVb = vbX + (occ.left + visWpx / 2) / sx;
-        const visCyVb = vbY + (occ.top + visHpx / 2) / sy;
-        x = visCxVb - k * cx;
-        y = visCyVb - k * cy;
-      }
-
-      const target = d3ToCamera({ x, y, k }, W, H);
+      // The fit is centred in the visible area, so capping its scale about that
+      // centre keeps the bounds centred (Canvas's ZoomManager does the same).
+      const target = d3ToCamera(fit, containerRef.current.getBoundingClientRect(), maxScale);
       return moveCameraTo(target, duration, easing);
     },
     animateToZoomTransform: (transform, options = {}) => {
       const { duration = 0, easing = d3.easeCubicInOut } = options;
       if (!containerRef.current || !setCameraPositionRef.current) return Promise.resolve(false);
-      const { width: W, height: H } = containerRef.current.getBoundingClientRect();
-      if (!W || !H) return Promise.resolve(false);
-      const target = d3ToCamera(transform, W, H);
+      const rect = containerRef.current.getBoundingClientRect();
+      if (!rect.width || !rect.height) return Promise.resolve(false);
+      const target = d3ToCamera(transform, rect);
       return moveCameraTo(target, duration, easing);
     },
     getVisibleDotCount: () => getCpuPositionData().length,
@@ -726,9 +709,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     },
     setZoomTransform: (transform, _options = {}) => {
       if (!containerRef.current || !setCameraPositionRef.current) return false;
-      const { width: W, height: H } = containerRef.current.getBoundingClientRect();
-      if (!W || !H) return false;
-      const target = d3ToCamera(transform, W, H);
+      const rect = containerRef.current.getBoundingClientRect();
+      if (!rect.width || !rect.height) return false;
+      const target = d3ToCamera(transform, rect);
       if (!target || !setCameraPositionRef.current(target.x, target.y, target.z)) return false;
       handleCameraStateChange({ ...target });
       return true;
@@ -741,12 +724,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     /** WebGPU: the positions the GPU draws, or null: { data, positions } with
      *  positions as world x, y pairs (y = -data y), paired with data by index. */
     readRenderedPositions: async () => (await gpuControlRef.current.readPositions?.()) ?? null,
-    /** WebGPU: the drawn extent in data space, one tight pass, or null. */
-    readRenderedBounds: async () => {
-      const read = await gpuControlRef.current.readPositions?.();
-      return read ? renderedBounds(read.positions) : null;
-    },
-  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera, largestDotSize, maxDotScreenRadiusPx]);
+  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, scheduler, zoomTransformFromCamera, largestDotSize]);
 
   return (
     <div
@@ -792,11 +770,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             initialTransform={initialTransform}
             computeFitTarget={computeInitialFitTarget}
             onInit={handleCameraStateChange}
-            minZForHeight={minZForHeight}
+            toCamera={d3ToCamera}
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} occlusion={cameraOcclusion} largestDotSize={largestDotSize} maxDotScreenRadiusPx={maxDotScreenRadiusPx} />
+          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} occlusion={occlusion} minZForHeight={minZForHeight} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dataKey={dataKey}

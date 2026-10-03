@@ -64,12 +64,12 @@ function fallbackCameraPosition(data, size) {
   return isFiniteCameraPosition(position) ? position : null;
 }
 
-export function resolveInitialCameraPosition({ data, size, initialTransform, computeFitTarget }) {
+export function resolveInitialCameraPosition({ data, size, initialTransform, computeFitTarget, toCamera = cameraPositionFromTransform }) {
   if (!data?.length || !isFinitePositiveSize(size)) return null;
   // A corrupt remembered transform is absence, not authority. Prefer the same
   // occlusion-aware fit as zoomToVisible, retaining the raw-bounds fallback for
   // consumers that do not provide that fit surface.
-  const restored = cameraPositionFromTransform(initialTransform, size);
+  const restored = toCamera(initialTransform, size);
   if (restored) return restored;
   const fitted = computeFitTarget?.() ?? null;
   if (isFiniteCameraPosition(fitted)) return fitted;
