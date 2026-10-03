@@ -14,7 +14,7 @@ import { R3FCamera } from './R3FCamera.jsx';
 import { R3FDotsWebGPU, BASE_MAX_SOLVER_ITERATIONS, CONSTRAINT_MAX_SOLVER_ITERATIONS } from './R3FDotsWebGPU.jsx';
 import { makeGpuExecutor } from './gpuDecollisionExecutor.js';
 import { createSingleFlightWebGpuRendererFactory } from './webgpuRendererFactory.js';
-import { CAMERA_FOV_DEGREES } from './cameraUtils.js';
+import { CAMERA_FOV_DEGREES, maxScaleForDotRadius, minCameraZForDotRadius } from './cameraUtils.js';
 import {
   cameraMoveMode,
   cameraPositionFromTransform,
@@ -100,6 +100,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     // Unlike DotVisualization's dotStrokeWidth (world units), this is unitless.
     dotStrokeWidthFraction = 0.05,
     hoverSizeMultiplier = 1.5,
+    // The largest a dot may draw (CSS px radius): a zoom-in limit for fits,
+    // code-driven camera moves and wheel/pinch alike. null = no limit.
+    maxDotScreenRadiusPx = null,
     hoverOpacity = 1.0,
     categoricalFilter = null,
     semanticScores = null,
@@ -541,9 +544,20 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   // numerically matches viewBox coords with Y negated when data is placed
   // (`_dummy.position.set(item.x, -item.y, 0)` in R3FDots), so this conversion
   // is the algebraic inverse of getZoomTransform below.
+  // The largest dot's world radius: what the zoom-in limit is measured on.
+  const largestDotSize = useMemo(() => {
+    let largest = defaultSize;
+    for (const d of controlData) if (d.size > largest) largest = d.size;
+    return largest;
+  }, [controlData, defaultSize]);
+  const minZForHeight = useCallback(
+    (heightPx) => minCameraZForDotRadius(largestDotSize, heightPx, maxDotScreenRadiusPx),
+    [largestDotSize, maxDotScreenRadiusPx],
+  );
   const d3ToCamera = useCallback((transform, W, H) => {
-    return cameraPositionFromTransform(transform, { width: W, height: H });
-  }, []);
+    const position = cameraPositionFromTransform(transform, { width: W, height: H });
+    return position && { ...position, z: Math.max(position.z, minZForHeight(H)) };
+  }, [minZForHeight]);
 
   // Latest occlusion, read when a fit is computed: an awaited fit must not frame
   // into the free area as it was when the fit was asked for.
@@ -667,6 +681,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         : boundsForData(dataToUse, defaultSize);
       const fit = computeFit(dataToUse, margin, bounds);
       if (!fit) return false;
+      maxScale = Math.min(maxScale, maxScaleForDotRadius(largestDotSize, containerRef.current.getBoundingClientRect().height, maxDotScreenRadiusPx));
 
       const rect = containerRef.current.getBoundingClientRect();
       const W = rect.width, H = rect.height;
@@ -731,7 +746,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       const read = await gpuControlRef.current.readPositions?.();
       return read ? renderedBounds(read.positions) : null;
     },
-  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera]);
+  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera, largestDotSize, maxDotScreenRadiusPx]);
 
   return (
     <div
@@ -777,10 +792,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             initialTransform={initialTransform}
             computeFitTarget={computeInitialFitTarget}
             onInit={handleCameraStateChange}
+            minZForHeight={minZForHeight}
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} occlusion={cameraOcclusion} />
+          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} occlusion={cameraOcclusion} largestDotSize={largestDotSize} maxDotScreenRadiusPx={maxDotScreenRadiusPx} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dataKey={dataKey}

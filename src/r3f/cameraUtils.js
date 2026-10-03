@@ -87,6 +87,22 @@ export function computeZoomOutCapZ(bounds, size, occlusion = {}, fraction = 0.4)
   return Math.max(neededForH, neededForW, 1);
 }
 
+/**
+ * The closest the camera may come so a dot of world radius `dotRadius` draws at
+ * most `maxRadiusPx` (CSS px) on a canvas `heightPx` tall: dot size is a zoom
+ * limit, for fits and for wheel/pinch alike. 0 when there is no limit.
+ */
+export function minCameraZForDotRadius(dotRadius, heightPx, maxRadiusPx) {
+  if (!(maxRadiusPx > 0) || !(dotRadius > 0) || !(heightPx > 0)) return 0;
+  return (dotRadius * heightPx) / (2 * Math.tan(CAMERA_FOV_RADIANS / 2) * maxRadiusPx);
+}
+
+/** The same limit as a d3 zoom scale (viewBox 100 tall): Infinity when none. */
+export function maxScaleForDotRadius(dotRadius, heightPx, maxRadiusPx) {
+  if (!(maxRadiusPx > 0) || !(dotRadius > 0) || !(heightPx > 0)) return Infinity;
+  return (maxRadiusPx * 100) / (heightPx * dotRadius);
+}
+
 export function createPanHandler({ canvas, getCameraZ, onPan, onPanStart, onPanEnd, onClick }) {
   let isPanning = false;
   let isPointerDown = false;

@@ -193,6 +193,9 @@ export interface DotVisualizationCommonProps {
   dotStrokeWidthFraction?: number | null;
   hoverSizeMultiplier?: number;
   hoverOpacity?: number;
+  /** The largest a dot may draw (CSS px radius): limits zooming in, for fits,
+   *  code-driven camera moves, and wheel/pinch alike. null = no limit. */
+  maxDotScreenRadiusPx?: number | null;
   edgeColor?: string;
   edgeOpacity?: number;
   /**

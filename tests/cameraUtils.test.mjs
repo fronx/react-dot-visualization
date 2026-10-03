@@ -67,3 +67,16 @@ describe('R3FCamera OrbitControls', () => {
     assert.doesNotMatch(source, /maxDistance=\{maxZ\}/);
   });
 });
+
+describe('dot-size zoom limit', () => {
+  test('the closest camera and the largest scale draw the largest dot at the limit', async () => {
+    const { minCameraZForDotRadius, maxScaleForDotRadius, CAMERA_FOV_DEGREES: fov } = await import('../src/r3f/cameraUtils.js');
+    const tan = Math.tan((fov * Math.PI / 180) / 2);
+    const z = minCameraZForDotRadius(2, 600, 24);
+    assert.ok(Math.abs((2 * 600) / (2 * z * tan) - 24) < 1e-9);
+    const k = maxScaleForDotRadius(2, 600, 24);
+    assert.ok(Math.abs(2 * k * (600 / 100) - 24) < 1e-9);
+    assert.equal(minCameraZForDotRadius(2, 600, null), 0);
+    assert.equal(maxScaleForDotRadius(2, 600, null), Infinity);
+  });
+});
