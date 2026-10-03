@@ -26,7 +26,7 @@
  * dotAppearance.js — the same source of truth R3FDots uses — so hover, dim, and
  * focus behave identically across backends; only the upload mechanism differs.
  */
-import React, { useMemo, useEffect, useRef, useReducer } from 'react';
+import React, { useMemo, useEffect, useRef, useReducer, useState } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
 import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max, mix, clamp, varying } from 'three/tsl';
@@ -763,13 +763,17 @@ function updateSemanticScoringInputBuffers(resources, scoring) {
 // Resolve fill/opacity/focus/scale for every dot via the shared appearance
 // rules (dotAppearance.js) and upload them. Identical rule set to R3FDots'
 // applyDotStylesToInstances — the renderers differ only in the write target.
+// Returns the first focus locator it passes ({ index, px } or null), found on the
+// same visit to every dot's style, so finding it costs no extra scan.
 function writeCosmetics(cosmetic, data, opts) {
   const colAttr = cosmetic.colors.value;
   const alphaAttr = cosmetic.alphas.value;
   const focusAttr = cosmetic.focus.value;
   const scaleAttr = cosmetic.scales.value;
+  let locator = null;
   for (let i = 0; i < data.length; i++) {
-    writeCosmetic(cosmetic, data, i, opts);
+    const style = writeCosmetic(cosmetic, data, i, opts);
+    if (!locator && style.focusLocator) locator = focusLocatorAt(i, style);
   }
   // Declare the full ranges explicitly. A pulse/hover effect can append sparse
   // ranges before the renderer consumes this update; leaving the range list
@@ -783,10 +787,12 @@ function writeCosmetics(cosmetic, data, opts) {
   alphaAttr.needsUpdate = true;
   focusAttr.needsUpdate = true;
   scaleAttr.needsUpdate = true;
+  return locator;
 }
 
+// The style written (truthy), or null when the index is out of range.
 function writeCosmetic(cosmetic, data, index, opts) {
-  if (index === undefined || index < 0 || index >= data.length) return false;
+  if (index === undefined || index < 0 || index >= data.length) return null;
   const {
     defaultColor, defaultSize, defaultOpacity, dotStyles, dynamicDotStyles,
     radiusOverrides, hoveredId, hoverSizeMultiplier, hoverOpacity,
@@ -808,7 +814,7 @@ function writeCosmetic(cosmetic, data, index, opts) {
   cosmetic.scales.value.array[index] = hideUnseen
     ? 0
     : resolveScale(baseSize, isHovered, hoverSizeMultiplier);
-  return true;
+  return style;
 }
 
 function revealStreamingCosmetics(cosmetic, data, indices, opts) {
@@ -854,15 +860,14 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
-function firstFocusLocator(styles) {
-  if (!styles) return undefined;
-  for (const [id, style] of styles) {
-    if (!style?.focusLocator || !style.focusRing) continue;
-    const options = style.focusLocator === true ? {} : style.focusLocator;
-    return { id, px: { ...FOCUS_LOCATOR_DEFAULTS, ...options } };
-  }
-  return undefined;
+function focusLocatorAt(index, style) {
+  if (!style.focusLocator || !style.focusRing) return null;
+  const options = style.focusLocator === true ? {} : style.focusLocator;
+  return { index, px: { ...FOCUS_LOCATOR_DEFAULTS, ...options } };
 }
+
+const sameLocator = (a, b) => a === b || (!!a && !!b && a.index === b.index
+  && a.px.radiusPx === b.px.radiusPx && a.px.ringPx === b.px.ringPx);
 
 // Locator geometry: the quad grows to the ring's floor; the inner disc keeps its
 // own (min-px-floored) radius and the ring its own thickness, both re-expressed
@@ -1098,6 +1103,8 @@ export function R3FDotsWebGPU({
 
   // Cosmetic buffers sized to the seed, seeded with the current style, rewritten
   // in place on restyle — so hover/selection/pulse/focus never touch positions.
+  // The first dot styled focusLocator, found by the cosmetic writes themselves.
+  const [locator, setLocator] = useState(null);
   const cosmetic = useMemo(
     () => (buffers && data && data.length
       ? buildCosmeticBuffers(buffers.N, data, cosmeticOpts)
@@ -1108,7 +1115,8 @@ export function R3FDotsWebGPU({
   useEffect(() => {
     if (cosmetic && data && data.length) {
       if (streamingPositions?.hideUnseen) return;
-      writeCosmetics(cosmetic, data, cosmeticOpts);
+      const found = writeCosmetics(cosmetic, data, cosmeticOpts);
+      setLocator((prev) => (sameLocator(prev, found) ? prev : found));
       invalidate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2281,10 +2289,17 @@ export function R3FDotsWebGPU({
 
     const changedIds = collectChangedDynamicStyleIds(previous, dynamicDotStyles);
     const changedIndices = [];
+    let nextLocator = locator;
     for (const id of changedIds) {
       const index = idToIndex.get(id);
-      if (writeCosmetic(cosmetic, data, index, cosmeticOpts)) changedIndices.push(index);
+      const style = writeCosmetic(cosmetic, data, index, cosmeticOpts);
+      if (!style) continue;
+      changedIndices.push(index);
+      const found = focusLocatorAt(index, style);
+      if (found) nextLocator = found;
+      else if (nextLocator?.index === index) nextLocator = null;
     }
+    if (!sameLocator(nextLocator, locator)) setLocator(nextLocator);
     if (decollisionDebug) {
       console.log(
         `[rdv-cosmetic] dynamic changed=${changedIds.size} uploaded=${changedIndices.length} n=${data.length}`,
@@ -2346,18 +2361,13 @@ export function R3FDotsWebGPU({
     invalidate();
   }, [hoverMesh, hoveredId, idToIndex, hoveredIndexU, invalidate]);
 
-  const locator = useMemo(
-    () => firstFocusLocator(dynamicDotStyles) ?? firstFocusLocator(dotStyles),
-    [dotStyles, dynamicDotStyles],
-  );
   useEffect(() => {
     if (!locatorMesh) return;
-    const idx = locator ? idToIndex.get(locator.id) : undefined;
-    locatorIndexU.value = idx ?? NO_HOVER_INDEX;
-    locatorMesh.visible = idx !== undefined;
+    locatorIndexU.value = locator ? locator.index : NO_HOVER_INDEX;
+    locatorMesh.visible = !!locator;
     if (locator) locatorPxRef.current = locator.px;
     invalidate();
-  }, [locatorMesh, locator, idToIndex, locatorIndexU, invalidate]);
+  }, [locatorMesh, locator, locatorIndexU, invalidate]);
 
   const ringBuffers = useMemo(() => {
     const count = pulseIds.length;
