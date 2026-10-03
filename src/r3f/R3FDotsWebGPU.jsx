@@ -117,11 +117,10 @@ const TAN_HALF_FOV = Math.tan(CAMERA_FOV_RAD / 2);
 // than a pixel misses every pixel center). Clamped in-shader against pxPerWorld.
 const MIN_SCREEN_PX = 1.5;
 // The focus locator (`focusLocator` style): zoomed out, its ring stops shrinking
-// at this outer radius and keeps at least this thickness (device px), while the
-// inner disc shrinks with the other dots — a hollow "you are here" circle that
-// covers only a thin line of what lies under it.
-const FOCUS_LOCATOR_RADIUS_PX = 24;
-const FOCUS_LOCATOR_RING_PX = 4;
+// at `radiusPx` and keeps at least `ringPx` of thickness (CSS px, like the pulse
+// ring's targetPixels), while the inner disc shrinks with the other dots — a
+// hollow "you are here" circle that covers only a thin line of what lies under it.
+const FOCUS_LOCATOR_DEFAULTS = { radiusPx: 12, ringPx: 2 };
 
 const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
@@ -855,21 +854,26 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
-function firstFocusLocatorId(styles) {
+function firstFocusLocator(styles) {
   if (!styles) return undefined;
-  for (const [id, style] of styles) if (style?.focusLocator && style.focusRing) return id;
+  for (const [id, style] of styles) {
+    if (!style?.focusLocator || !style.focusRing) continue;
+    const options = style.focusLocator === true ? {} : style.focusLocator;
+    return { id, px: { ...FOCUS_LOCATOR_DEFAULTS, ...options } };
+  }
   return undefined;
 }
 
 // Locator geometry: the quad grows to the ring's floor; the inner disc keeps its
 // own (min-px-floored) radius and the ring its own thickness, both re-expressed
 // as fractions of the grown quad. Equal to the fixed ratios when zoomed in.
-function focusLocatorGeometry(dotScale, pxPerWorldU) {
-  const scale = max(dotScale, float(FOCUS_LOCATOR_RADIUS_PX).div(pxPerWorldU));
+// radiusU / ringU are device px (CSS px x pixel ratio, set per frame).
+function focusLocatorGeometry(dotScale, pxPerWorldU, { radiusU, ringU }) {
+  const scale = max(dotScale, radiusU.div(pxPerWorldU));
   const shrink = dotScale.div(scale);
   const ringFraction = max(
     float(1 - GAP_END).mul(shrink),
-    float(FOCUS_LOCATOR_RING_PX).div(scale.mul(pxPerWorldU)),
+    ringU.div(scale.mul(pxPerWorldU)),
   );
   return {
     scale,
@@ -878,7 +882,7 @@ function focusLocatorGeometry(dotScale, pxPerWorldU) {
   };
 }
 
-function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null, focusLocator = false }) {
+function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null, focusLocator = null }) {
   const baseColor = cosmetic.colors.element(indexNode).xyz;
   const semanticScore = semantic ? semantic.scores.element(indexNode) : null;
   const semanticColor = semantic
@@ -906,7 +910,7 @@ function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffe
   // streaming slots. Otherwise hidden dots flash as min-size dots.
   const rawScale = cosmetic.scales.element(indexNode);
   const flooredScale = max(rawScale, float(MIN_SCREEN_PX).div(pxPerWorldU));
-  const locator = focusLocator ? focusLocatorGeometry(flooredScale, pxPerWorldU) : null;
+  const locator = focusLocator ? focusLocatorGeometry(flooredScale, pxPerWorldU, focusLocator) : null;
   const material = createBevelStrokeNodeMaterial({
     instanceColor,
     instanceAlpha: entryFactor ? instanceAlpha.mul(entryFactor) : instanceAlpha,
@@ -1420,6 +1424,8 @@ export function R3FDotsWebGPU({
   // Hovered instance index, read in-shader by the main mesh (to drop it) and the overlay (to redraw it on top).
   const hoveredIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
   const locatorIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
+  const locatorPxU = useMemo(() => ({ radiusU: uniform(float(0)), ringU: uniform(float(0)) }), []);
+  const locatorPxRef = useRef(FOCUS_LOCATOR_DEFAULTS);
 
   // Device px per world unit at the dot plane (z=0), refreshed each frame so the
   // min-screen-size clamp in buildDotMesh tracks zoom. Seeded large so dots are
@@ -2160,6 +2166,8 @@ export function R3FDotsWebGPU({
     const dpr = state.gl.getPixelRatio();
     const pxPerWorld = (state.size.height / (2 * state.camera.position.z * TAN_HALF_FOV)) * dpr;
     pxPerWorldU.value = pxPerWorld;
+    locatorPxU.radiusU.value = locatorPxRef.current.radiusPx * dpr;
+    locatorPxU.ringU.value = locatorPxRef.current.ringPx * dpr;
     // Crossfade by the projected size of a typical dot: dots when large, density when small.
     densityFadeU.value = densityFadeForProjectedPx(defaultSize * pxPerWorld);
 
@@ -2210,11 +2218,11 @@ export function R3FDotsWebGPU({
   // focused dot stays findable in the zoomed-out regime.
   const locatorMesh = useMemo(() => {
     if (!buffers || !cosmetic || !semantic) return null;
-    const m = buildDotMesh(locatorIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, entryRamp, focusLocator: true });
+    const m = buildDotMesh(locatorIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, entryRamp, focusLocator: locatorPxU });
     m.renderOrder = 11;
     m.visible = false;
     return m;
-  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, locatorIndexU, pxPerWorldU, entryRamp]);
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, locatorIndexU, locatorPxU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(locatorMesh), [locatorMesh]);
 
   // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────
@@ -2338,17 +2346,18 @@ export function R3FDotsWebGPU({
     invalidate();
   }, [hoverMesh, hoveredId, idToIndex, hoveredIndexU, invalidate]);
 
-  const locatorId = useMemo(
-    () => firstFocusLocatorId(dynamicDotStyles) ?? firstFocusLocatorId(dotStyles),
+  const locator = useMemo(
+    () => firstFocusLocator(dynamicDotStyles) ?? firstFocusLocator(dotStyles),
     [dotStyles, dynamicDotStyles],
   );
   useEffect(() => {
     if (!locatorMesh) return;
-    const idx = locatorId != null ? idToIndex.get(locatorId) : undefined;
+    const idx = locator ? idToIndex.get(locator.id) : undefined;
     locatorIndexU.value = idx ?? NO_HOVER_INDEX;
     locatorMesh.visible = idx !== undefined;
+    if (locator) locatorPxRef.current = locator.px;
     invalidate();
-  }, [locatorMesh, locatorId, idToIndex, locatorIndexU, invalidate]);
+  }, [locatorMesh, locator, idToIndex, locatorIndexU, invalidate]);
 
   const ringBuffers = useMemo(() => {
     const count = pulseIds.length;
