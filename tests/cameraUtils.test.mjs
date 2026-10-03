@@ -62,3 +62,16 @@ describe('largestSizeRatio', () => {
     assert.equal(largestSizeRatio([{}, {}], null, 2), 1);
   });
 });
+
+describe('R3FCamera OrbitControls', () => {
+  // OrbitControls.update() clamps the camera's distance to its target, which is
+  // still the origin on the first frame after a placed camera; a cap passed here
+  // moved a restored one-dot map's camera ~1300 px off, unreported (2026-10-03).
+  // The wheel handler owns the zoom-out cap.
+  test('never receives the zoom-out cap as maxDistance', async () => {
+    const { readFileSync } = await import('node:fs');
+    const source = readFileSync(new URL('../src/r3f/R3FCamera.jsx', import.meta.url), 'utf8');
+    assert.match(source, /maxDistance=\{CAMERA_Z_MAX\}/);
+    assert.doesNotMatch(source, /maxDistance=\{maxZ\}/);
+  });
+});
