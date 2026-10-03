@@ -12,10 +12,9 @@ import {
   CAMERA_FOV_DEGREES,
 } from './cameraUtils.js';
 import { finiteBoundsForData } from '../utils.js';
-import { isFiniteCameraPosition } from './cameraState.js';
+import { CAMERA_Z_MAX, isFiniteCameraPosition } from './cameraState.js';
 
 const CAMERA_Z_MIN = 0.5;
-const CAMERA_Z_MAX = 5000; // absolute zoom-out ceiling (safety)
 // Most-zoomed-out state keeps the whole graph filling at least this fraction of
 // the visible (unoccluded) area, so it never shrinks to a useless speck; a fit
 // fills ~0.9 of the same area, so it is always reachable.

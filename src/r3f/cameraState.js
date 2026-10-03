@@ -2,7 +2,9 @@ import { CAMERA_FOV_DEGREES, computeFitZ } from './cameraUtils.js';
 
 const CAMERA_FOV_RADIANS = CAMERA_FOV_DEGREES * (Math.PI / 180);
 const CAMERA_Z_MIN = 0.5;
-const CAMERA_Z_MAX = 5000;
+// The farthest any camera goes (safety), well inside the far plane (100000): a
+// two-dot map's fit into a small free area needed more than the old 5000.
+export const CAMERA_Z_MAX = 20000;
 const VIEWBOX_HEIGHT = 100;
 
 function isFinitePositiveSize(size) {
