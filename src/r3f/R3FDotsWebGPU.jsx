@@ -29,9 +29,9 @@
 import React, { useMemo, useEffect, useRef, useReducer } from 'react';
 import * as THREE from 'three/webgpu';
 import { useFrame, useThree } from '@react-three/fiber';
-import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max, mix, clamp } from 'three/tsl';
+import { instanceIndex, vec2, vec3, instancedArray, positionLocal, uniform, select, float, max, mix, clamp, varying } from 'three/tsl';
 import { easeCubicOut } from 'd3';
-import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial } from './bevelStrokeNodeMaterial.js';
+import { createBevelStrokeNodeMaterial, createPulseDiscNodeMaterial, INNER_END, GAP_END } from './bevelStrokeNodeMaterial.js';
 import {
   createDensityRenderTarget, createSplatScene, createDensityResolveMesh,
   densityFadeForProjectedPx, BANDWIDTH_PX,
@@ -116,6 +116,12 @@ const TAN_HALF_FOV = Math.tan(CAMERA_FOV_RAD / 2);
 // Keeps sub-pixel dots from winking out when zoomed far out (a quad smaller
 // than a pixel misses every pixel center). Clamped in-shader against pxPerWorld.
 const MIN_SCREEN_PX = 1.5;
+// The focus locator (`focusLocator` style): zoomed out, its ring stops shrinking
+// at this outer radius and keeps at least this thickness (device px), while the
+// inner disc shrinks with the other dots — a hollow "you are here" circle that
+// covers only a thin line of what lies under it.
+const FOCUS_LOCATOR_RADIUS_PX = 14;
+const FOCUS_LOCATOR_RING_PX = 3;
 
 const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
@@ -849,7 +855,30 @@ function writeHoverCosmetic(cosmetic, data, index, opts, isHovered) {
 // and position from `buffers`, indexed by `indexNode`. The main mesh indexes by
 // instanceIndex; the hover overlay reuses this with a fixed uniform index.
 // `scaleMul` lets the main mesh collapse the hovered instance to zero size.
-function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null }) {
+function firstFocusLocatorId(styles) {
+  if (!styles) return undefined;
+  for (const [id, style] of styles) if (style?.focusLocator && style.focusRing) return id;
+  return undefined;
+}
+
+// Locator geometry: the quad grows to the ring's floor; the inner disc keeps its
+// own (min-px-floored) radius and the ring its own thickness, both re-expressed
+// as fractions of the grown quad. Equal to the fixed ratios when zoomed in.
+function focusLocatorGeometry(dotScale, pxPerWorldU) {
+  const scale = max(dotScale, float(FOCUS_LOCATOR_RADIUS_PX).div(pxPerWorldU));
+  const shrink = dotScale.div(scale);
+  const ringFraction = max(
+    float(1 - GAP_END).mul(shrink),
+    float(FOCUS_LOCATOR_RING_PX).div(scale.mul(pxPerWorldU)),
+  );
+  return {
+    scale,
+    innerEnd: varying(float(INNER_END).mul(shrink)),
+    gapEnd: varying(float(1).sub(ringFraction)),
+  };
+}
+
+function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null, focusLocator = false }) {
   const baseColor = cosmetic.colors.element(indexNode).xyz;
   const semanticScore = semantic ? semantic.scores.element(indexNode) : null;
   const semanticColor = semantic
@@ -872,22 +901,21 @@ function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffe
   const entryFactor = entryRamp
     ? mix(entryRamp.progressU, float(1), entryRamp.ramp0.element(indexNode))
     : null;
+  // Floor visible dots at MIN_SCREEN_PX device px so they don't vanish when
+  // zoomed out, but preserve an exact zero scale for intentionally hidden
+  // streaming slots. Otherwise hidden dots flash as min-size dots.
+  const rawScale = cosmetic.scales.element(indexNode);
+  const flooredScale = max(rawScale, float(MIN_SCREEN_PX).div(pxPerWorldU));
+  const locator = focusLocator ? focusLocatorGeometry(flooredScale, pxPerWorldU) : null;
   const material = createBevelStrokeNodeMaterial({
     instanceColor,
     instanceAlpha: entryFactor ? instanceAlpha.mul(entryFactor) : instanceAlpha,
     instanceFocus: focus,
     strokeColor: dotStroke,
     strokeWidthFraction: dotStrokeWidthFraction,
+    ...(locator && { innerEnd: locator.innerEnd, gapEnd: locator.gapEnd }),
   });
-  // Floor visible dots at MIN_SCREEN_PX device px so they don't vanish when
-  // zoomed out, but preserve an exact zero scale for intentionally hidden
-  // streaming slots. Otherwise hidden dots flash as min-size dots.
-  const rawScale = cosmetic.scales.element(indexNode);
-  const baseScale = select(
-    rawScale.greaterThan(0),
-    max(rawScale, float(MIN_SCREEN_PX).div(pxPerWorldU)),
-    float(0),
-  );
+  const baseScale = select(rawScale.greaterThan(0), locator ? locator.scale : flooredScale, float(0));
   const modScale = scaleMul ? baseScale.mul(scaleMul) : baseScale;
   // Entry ramp scales AFTER the min-px clamp so newcomers genuinely grow from 0.
   const scale = entryFactor ? modScale.mul(entryFactor) : modScale;
@@ -1391,6 +1419,7 @@ export function R3FDotsWebGPU({
 
   // Hovered instance index, read in-shader by the main mesh (to drop it) and the overlay (to redraw it on top).
   const hoveredIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
+  const locatorIndexU = useMemo(() => uniform(NO_HOVER_INDEX, 'uint'), []);
 
   // Device px per world unit at the dot plane (z=0), refreshed each frame so the
   // min-screen-size clamp in buildDotMesh tracks zoom. Seeded large so dots are
@@ -2155,21 +2184,38 @@ export function R3FDotsWebGPU({
     if (!buffers || !cosmetic || !semantic) return null;
     // Collapse the hovered instance to zero size so it draws once: the overlay
     // redraws it on top (the canvas renderer draws the hovered dot last).
-    const scaleMul = select(instanceIndex.equal(hoveredIndexU), float(0), float(1));
+    // The focus locator draws its own dot above the density layer, so the main
+    // mesh drops it the same way.
+    const scaleMul = select(
+      instanceIndex.equal(hoveredIndexU).or(instanceIndex.equal(locatorIndexU)),
+      float(0), float(1),
+    );
     return buildDotMesh(instanceIndex, buffers.N, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp });
-  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU, entryRamp]);
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, locatorIndexU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(mesh), [mesh]);
 
   // Redraw the hovered dot after the main mesh (renderOrder 1) so it sits on top
   // of overlapping dots, matching the canvas renderer.
   const hoverMesh = useMemo(() => {
     if (!buffers || !cosmetic || !semantic) return null;
-    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, entryRamp });
+    const scaleMul = select(hoveredIndexU.equal(locatorIndexU), float(0), float(1));
+    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp });
     m.renderOrder = 1;
     m.visible = false;
     return m;
-  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, pxPerWorldU, entryRamp]);
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, locatorIndexU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(hoverMesh), [hoverMesh]);
+
+  // The focus locator sits above the density layer (renderOrder 10), so a
+  // focused dot stays findable in the zoomed-out regime.
+  const locatorMesh = useMemo(() => {
+    if (!buffers || !cosmetic || !semantic) return null;
+    const m = buildDotMesh(locatorIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, entryRamp, focusLocator: true });
+    m.renderOrder = 11;
+    m.visible = false;
+    return m;
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, locatorIndexU, pxPerWorldU, entryRamp]);
+  useEffect(() => () => disposeMesh(locatorMesh), [locatorMesh]);
 
   // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────
   // Same machinery as R3FDots: usePulseAnimation drives a phase clock, this
@@ -2291,6 +2337,18 @@ export function R3FDotsWebGPU({
     hoverMesh.visible = true;
     invalidate();
   }, [hoverMesh, hoveredId, idToIndex, hoveredIndexU, invalidate]);
+
+  const locatorId = useMemo(
+    () => firstFocusLocatorId(dynamicDotStyles) ?? firstFocusLocatorId(dotStyles),
+    [dotStyles, dynamicDotStyles],
+  );
+  useEffect(() => {
+    if (!locatorMesh) return;
+    const idx = locatorId != null ? idToIndex.get(locatorId) : undefined;
+    locatorIndexU.value = idx ?? NO_HOVER_INDEX;
+    locatorMesh.visible = idx !== undefined;
+    invalidate();
+  }, [locatorMesh, locatorId, idToIndex, locatorIndexU, invalidate]);
 
   const ringBuffers = useMemo(() => {
     const count = pulseIds.length;
@@ -2430,6 +2488,7 @@ export function R3FDotsWebGPU({
     <>
       <primitive object={mesh} />
       {hoverMesh && <primitive object={hoverMesh} />}
+      {locatorMesh && <primitive object={locatorMesh} />}
       {ringMesh && <primitive object={ringMesh} />}
       <primitive object={densityMesh} />
     </>

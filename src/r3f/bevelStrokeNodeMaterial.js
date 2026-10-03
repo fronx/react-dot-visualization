@@ -20,8 +20,8 @@ import {
 // Focus-ring geometry (mirror utils/focusDotSizing.ts in fingertip):
 //   inner disc 0..INNER_END, transparent gap INNER_END..GAP_END, outer ring GAP_END..1
 //   OUTER_RATIO = 1 + GAP_RATIO(0.4) + RING_RATIO(0.3) = 1.7
-const INNER_END = 1.0 / 1.7;
-const GAP_END = 1.4 / 1.7;
+export const INNER_END = 1.0 / 1.7;
+export const GAP_END = 1.4 / 1.7;
 
 export function createBevelStrokeNodeMaterial({
   instanceColor,
@@ -29,6 +29,11 @@ export function createBevelStrokeNodeMaterial({
   instanceFocus,
   strokeColor = '#111',
   strokeWidthFraction = 0.05,
+  // Per-instance focus geometry (fractions of the quad radius); the defaults are
+  // the fixed ratios. The focus locator passes nodes that keep the ring at a
+  // screen-space floor while the inner disc stays its own size.
+  innerEnd = float(INNER_END),
+  gapEnd = float(GAP_END),
 }) {
   const material = new MeshBasicNodeMaterial({ transparent: true, depthWrite: false });
 
@@ -46,8 +51,8 @@ export function createBevelStrokeNodeMaterial({
   const edge = fwidth(dist);
 
   // Focus visual: inner disc + outer ring (transparent gap between).
-  const innerCov = float(1).sub(smoothstep(float(INNER_END).sub(edge), float(INNER_END).add(edge), dist));
-  const ringInner = smoothstep(float(GAP_END).sub(edge), float(GAP_END).add(edge), dist);
+  const innerCov = float(1).sub(smoothstep(innerEnd.sub(edge), innerEnd.add(edge), dist));
+  const ringInner = smoothstep(gapEnd.sub(edge), gapEnd.add(edge), dist);
   const ringOuter = float(1).sub(smoothstep(float(1).sub(edge), float(1), dist));
   const focusCoverage = max(innerCov, ringInner.mul(ringOuter));
 

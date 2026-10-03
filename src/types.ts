@@ -49,6 +49,7 @@ export interface DotStyle {
   pulse?: PulseConfig;   // pulse animation effect
   hoverSizeMultiplier?: number; // per-dot hover size multiplier override
   focusRing?: boolean; // R3F: render as the built-in inner+outer-ring focus visual
+  focusLocator?: boolean; // WebGPU: draw this focus dot above the density layer, its ring floored at a screen size (first such dot only)
 }
 
 // The dotStyles prop type
