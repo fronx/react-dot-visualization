@@ -120,8 +120,8 @@ const MIN_SCREEN_PX = 1.5;
 // at this outer radius and keeps at least this thickness (device px), while the
 // inner disc shrinks with the other dots — a hollow "you are here" circle that
 // covers only a thin line of what lies under it.
-const FOCUS_LOCATOR_RADIUS_PX = 14;
-const FOCUS_LOCATOR_RING_PX = 3;
+const FOCUS_LOCATOR_RADIUS_PX = 24;
+const FOCUS_LOCATOR_RING_PX = 4;
 
 const EMPTY_STYLE = {};
 const EMPTY_RADIUS_OVERRIDES = new Map();
