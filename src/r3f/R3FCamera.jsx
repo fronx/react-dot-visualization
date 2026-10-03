@@ -182,7 +182,12 @@ export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], inter
       enableDamping
       dampingFactor={0.1}
       minDistance={CAMERA_Z_MIN}
-      maxDistance={maxZ}
+      // Not maxZ: the wheel handler enforces the zoom-out cap, and OrbitControls'
+      // own zoom is off, so a cap here only clamps the camera's distance to the
+      // controls' target — still the origin on the first frame after a placed
+      // camera — and moves it unreported (a one-dot map restored to its saved
+      // camera drew nothing, 2026-10-03).
+      maxDistance={CAMERA_Z_MAX}
     />
   );
 }
