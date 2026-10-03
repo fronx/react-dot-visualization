@@ -1521,6 +1521,25 @@ export function R3FDotsWebGPU({
   const deferredReqId = useRef(0);
   const hasSettledGpuLayoutRef = useRef(false);
   const snapshotKeysRef = useRef(new Set());
+  // The positions the GPU draws, read back on request: { ids, positions } with
+  // positions in data space (x, y pairs). What the sim and swaps settled on can
+  // differ from the data the host passed; fits and probes need the drawn truth.
+  useEffect(() => {
+    if (!gpuControlRef?.current || !buffers || !data) return undefined;
+    const readPositions = async () => {
+      const raw = new Float32Array(await gl.getArrayBufferAsync(buffers.positions.value));
+      const positions = new Float32Array(data.length * 2);
+      for (let i = 0; i < data.length; i++) {
+        positions[i * 2] = raw[i * 2];
+        positions[i * 2 + 1] = -raw[i * 2 + 1];
+      }
+      return { ids: data.map((d) => d.id), positions };
+    };
+    gpuControlRef.current.readPositions = readPositions;
+    return () => {
+      if (gpuControlRef.current?.readPositions === readPositions) delete gpuControlRef.current.readPositions;
+    };
+  }, [gpuControlRef, buffers, data, gl]);
   useEffect(() => {
     if (!gpuControlRef?.current) return undefined;
     gpuControlRef.current.positionSnapshots = snapshotKeysRef.current;

@@ -708,6 +708,8 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       scheduler.cancelSimulation();
     },
     getCurrentPositions: () => getCpuPositionData(),
+    /** WebGPU: the positions the GPU draws ({ ids, positions } in data space), or null. */
+    readRenderedPositions: async () => (await gpuControlRef.current.readPositions?.()) ?? null,
   }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera]);
 
   return (
