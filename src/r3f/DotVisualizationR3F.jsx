@@ -682,8 +682,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       // maps. One position read-back, ~1.6 ms at 238k dots.
       const drawn = dataOverride ? null : await gpuControlRef.current.readPositions?.();
       if (seq !== zoomToVisibleSeqRef.current) return false;
+      // Drawn positions are already spread: they need room for the disc and a
+      // focus ring (1.5x the largest dot), not the 4x a data fit leaves for
+      // decollision; 4x put a two-dot map past the camera's farthest distance.
       const bounds = drawn
-        ? padBounds(renderedBounds(drawn.positions), largestDotSize * 4)
+        ? padBounds(renderedBounds(drawn.positions), largestDotSize * 2)
         : boundsForData(dataToUse, defaultSize);
       const fit = computeFit(dataToUse, margin, bounds);
       if (!fit) return false;
