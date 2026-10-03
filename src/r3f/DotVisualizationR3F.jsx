@@ -22,7 +22,7 @@ import {
   isFiniteCameraPosition,
   isFiniteCameraTransform,
 } from './cameraState.js';
-import { boundsForData, computeFitTransformToVisible } from '../utils.js';
+import { boundsForData, computeFitTransformToVisible, renderedBounds } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
 import { useStablePositions } from '../useStablePositions.js';
 import { usePositionChangeDetection, detectDotSizeChange } from '../usePositionChangeDetection.js';
@@ -708,8 +708,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       scheduler.cancelSimulation();
     },
     getCurrentPositions: () => getCpuPositionData(),
-    /** WebGPU: the positions the GPU draws ({ ids, positions } in data space), or null. */
+    /** WebGPU: the positions the GPU draws, or null: { data, positions } with
+     *  positions as world x, y pairs (y = -data y), paired with data by index. */
     readRenderedPositions: async () => (await gpuControlRef.current.readPositions?.()) ?? null,
+    /** WebGPU: the drawn extent in data space, one tight pass, or null. */
+    readRenderedBounds: async () => {
+      const read = await gpuControlRef.current.readPositions?.();
+      return read ? renderedBounds(read.positions) : null;
+    },
   }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera]);
 
   return (

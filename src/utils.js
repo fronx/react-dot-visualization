@@ -438,3 +438,14 @@ export function countVisibleDots(data, transform, viewBox, defaultSize = 2) {
   return visibleCount;
 }
 
+
+/** Data-space bounds of a world-convention position buffer (x, -y pairs). */
+export function renderedBounds(positions) {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < positions.length; i += 2) {
+    const x = positions[i], y = -positions[i + 1];
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+  }
+  return minX <= maxX ? { minX, maxX, minY, maxY } : null;
+}
