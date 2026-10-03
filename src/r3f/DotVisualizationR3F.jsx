@@ -545,6 +545,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     return cameraPositionFromTransform(transform, { width: W, height: H });
   }, []);
 
+  // Latest occlusion, read when a fit is computed: an awaited fit must not frame
+  // into the free area as it was when the fit was asked for.
+  const occlusionRef = useRef(null);
+  occlusionRef.current = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
+  const zoomToVisibleSeqRef = useRef(0);
   // Compute the viewBox-space fit transform honoring occlusion. Shares the
   // math + convention with Canvas's ZoomManager.
   const computeFit = useCallback((dataToUse, margin, bounds = boundsForData(dataToUse, defaultSize)) => {
@@ -552,10 +557,9 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     const rect = containerRef.current.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
     const viewBox = viewBoxForContainer(rect);
-    const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
-    const fit = computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
+    const fit = computeFitTransformToVisible(bounds, viewBox, rect, occlusionRef.current, margin);
     return isFiniteCameraTransform(fit) ? fit : null;
-  }, [defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom]);
+  }, [defaultSize]);
 
   const cameraOcclusion = useMemo(
     () => ({ left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom }),
@@ -647,12 +651,16 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       maxScale = Infinity
     ) => {
       if (!containerRef.current || !setCameraPositionRef.current) return false;
+      // The read-back below awaits: a fit asked for meanwhile supersedes this one,
+      // and the occlusion is read when the fit is computed, not when it was asked.
+      const seq = ++zoomToVisibleSeqRef.current;
       const dataToUse = dataOverride || getCpuPositionData();
       const margin = marginOverride ?? 0.9;
       // A whole-graph fit frames what the GPU draws: decollision can push dots
       // (a big focus ring among them) well past the data's extent on small
       // maps. One position read-back, ~1.6 ms at 238k dots.
       const drawn = dataOverride ? null : await gpuControlRef.current.readPositions?.();
+      if (seq !== zoomToVisibleSeqRef.current) return false;
       const drawnBounds = drawn ? renderedBounds(drawn.positions) : null;
       const bounds = drawnBounds
         ? padBounds(drawnBounds, fitPaddingForData(dataToUse, defaultSize))
@@ -674,10 +682,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
         const [vbX, vbY, vbW, vbH] = viewBoxForContainer(rect);
         const sx = W / vbW;
         const sy = H / vbH;
-        const visWpx = Math.max(1, W - occludeLeft - occludeRight);
-        const visHpx = Math.max(1, H - occludeTop - occludeBottom);
-        const visCxVb = vbX + (occludeLeft + visWpx / 2) / sx;
-        const visCyVb = vbY + (occludeTop + visHpx / 2) / sy;
+        const occ = occlusionRef.current;
+        const visWpx = Math.max(1, W - occ.left - occ.right);
+        const visHpx = Math.max(1, H - occ.top - occ.bottom);
+        const visCxVb = vbX + (occ.left + visWpx / 2) / sx;
+        const visCyVb = vbY + (occ.top + visHpx / 2) / sy;
         x = visCxVb - k * cx;
         y = visCyVb - k * cy;
       }
