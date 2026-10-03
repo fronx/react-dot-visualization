@@ -55,14 +55,6 @@ describe('renderedBounds', () => {
   });
 });
 
-describe('largestSizeRatio', () => {
-  test('counts sizes and radius overrides against the default size', async () => {
-    const { largestSizeRatio } = await import('../src/utils.js');
-    assert.equal(largestSizeRatio([{ size: 2 }, {}], new Map([['a', 3]]), 2), 1.5);
-    assert.equal(largestSizeRatio([{}, {}], null, 2), 1);
-  });
-});
-
 describe('R3FCamera OrbitControls', () => {
   // OrbitControls.update() clamps the camera's distance to its target, which is
   // still the origin on the first frame after a placed camera; a cap passed here

@@ -887,7 +887,7 @@ function focusLocatorGeometry(dotScale, pxPerWorldU, { radiusU, ringU }) {
   };
 }
 
-function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, sizeFactorU, entryRamp = null, focusLocator = null }) {
+function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp = null, focusLocator = null }) {
   const baseColor = cosmetic.colors.element(indexNode).xyz;
   const semanticScore = semantic ? semantic.scores.element(indexNode) : null;
   const semanticColor = semantic
@@ -913,7 +913,7 @@ function buildDotMesh(indexNode, count, { cosmetic, semantic, categorical, buffe
   // Floor visible dots at MIN_SCREEN_PX device px so they don't vanish when
   // zoomed out, but preserve an exact zero scale for intentionally hidden
   // streaming slots. Otherwise hidden dots flash as min-size dots.
-  const rawScale = cosmetic.scales.element(indexNode).mul(sizeFactorU);
+  const rawScale = cosmetic.scales.element(indexNode);
   const flooredScale = max(rawScale, float(MIN_SCREEN_PX).div(pxPerWorldU));
   const locator = focusLocator ? focusLocatorGeometry(flooredScale, pxPerWorldU, focusLocator) : null;
   const material = createBevelStrokeNodeMaterial({
@@ -951,11 +951,6 @@ export function R3FDotsWebGPU({
   hoveredId = null,
   hoverSizeMultiplier = 1.5,
   hoverOpacity = 1.0,
-  // Draw every dot at this on-screen radius (CSS px) at any zoom, keeping their
-  // relative sizes (a dot twice defaultSize draws twice as big); hover picks
-  // the same size. For maps of a handful of dots, whose world sizes are
-  // meaningless. null = world-sized dots.
-  fixedDotRadiusPx = null,
   categoricalFilter = null,
   semanticScores = null,
   semanticGpuScoring = null,
@@ -1444,8 +1439,6 @@ export function R3FDotsWebGPU({
   // min-screen-size clamp in buildDotMesh tracks zoom. Seeded large so dots are
   // not enlarged on the first frame, before the real value lands.
   const pxPerWorldU = useMemo(() => uniform(float(1e6)), []);
-  // World size → drawn size: 1, or fixedDotRadiusPx / (defaultSize on screen).
-  const sizeFactorU = useMemo(() => uniform(float(1)), []);
   const bandwidthPxU = useMemo(() => uniform(float(BANDWIDTH_PX)), []);
   const densityFadeU = useMemo(() => uniform(float(0)), []);
 
@@ -1485,7 +1478,7 @@ export function R3FDotsWebGPU({
       clear: buildStoreAtomicU32({ buffer: pickResult, value: 0xffffffff }),
       pickNearest: buildPickNearest({
         positions: buffers.positions, pickRadii, pickResult,
-        cursor: pickCursorU, threshold: pickThresholdU, count: N, radiusScale: sizeFactorU,
+        cursor: pickCursorU, threshold: pickThresholdU, count: N,
       }),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2197,7 +2190,6 @@ export function R3FDotsWebGPU({
     const dpr = state.gl.getPixelRatio();
     const pxPerWorld = (state.size.height / (2 * state.camera.position.z * TAN_HALF_FOV)) * dpr;
     pxPerWorldU.value = pxPerWorld;
-    sizeFactorU.value = fixedDotRadiusPx > 0 && defaultSize > 0 ? (fixedDotRadiusPx * dpr) / (pxPerWorld * defaultSize) : 1;
     locatorPxU.radiusU.value = locatorPxRef.current.radiusPx * dpr;
     locatorPxU.ringU.value = locatorPxRef.current.ringPx * dpr;
     // Crossfade by the projected size of a typical dot: dots when large, density when small.
@@ -2230,8 +2222,8 @@ export function R3FDotsWebGPU({
       instanceIndex.equal(hoveredIndexU).or(instanceIndex.equal(locatorIndexU)),
       float(0), float(1),
     );
-    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, sizeFactorU, entryRamp });
-  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, locatorIndexU, pxPerWorldU, sizeFactorU, entryRamp]);
+    return buildDotMesh(instanceIndex, buffers.N, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp });
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, locatorIndexU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(mesh), [mesh]);
 
   // Redraw the hovered dot after the main mesh (renderOrder 1) so it sits on top
@@ -2239,22 +2231,22 @@ export function R3FDotsWebGPU({
   const hoverMesh = useMemo(() => {
     if (!buffers || !cosmetic || !semantic) return null;
     const scaleMul = select(hoveredIndexU.equal(locatorIndexU), float(0), float(1));
-    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, sizeFactorU, entryRamp });
+    const m = buildDotMesh(hoveredIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, scaleMul, pxPerWorldU, entryRamp });
     m.renderOrder = 1;
     m.visible = false;
     return m;
-  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, locatorIndexU, pxPerWorldU, sizeFactorU, entryRamp]);
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, hoveredIndexU, locatorIndexU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(hoverMesh), [hoverMesh]);
 
   // The focus locator sits above the density layer (renderOrder 10), so a
   // focused dot stays findable in the zoomed-out regime.
   const locatorMesh = useMemo(() => {
     if (!buffers || !cosmetic || !semantic) return null;
-    const m = buildDotMesh(locatorIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, sizeFactorU, entryRamp, focusLocator: locatorPxU });
+    const m = buildDotMesh(locatorIndexU, 1, { cosmetic, semantic, categorical, buffers, dotStroke, dotStrokeWidthFraction, pxPerWorldU, entryRamp, focusLocator: locatorPxU });
     m.renderOrder = 11;
     m.visible = false;
     return m;
-  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, locatorIndexU, locatorPxU, pxPerWorldU, sizeFactorU, entryRamp]);
+  }, [buffers, cosmetic, semantic, categorical, dotStroke, dotStrokeWidthFraction, locatorIndexU, locatorPxU, pxPerWorldU, entryRamp]);
   useEffect(() => () => disposeMesh(locatorMesh), [locatorMesh]);
 
   // ── Pulse (ring + dot size/opacity oscillation) ──────────────────────────
@@ -2420,7 +2412,7 @@ export function R3FDotsWebGPU({
     // CPU `data` array is only the seed/source layout after decollision starts.
     const dotIndex = ringBuffers.indices.element(instanceIndex);
     const rp = buffers.positions.element(dotIndex);
-    const rs = ringBuffers.scales.element(instanceIndex).mul(sizeFactorU);
+    const rs = ringBuffers.scales.element(instanceIndex);
     material.positionNode = vec3(positionLocal.xy.mul(rs.mul(2.0)).add(rp), -0.1);
     const m = new THREE.InstancedMesh(geometry, material, ringBuffers.count);
     m.frustumCulled = false;

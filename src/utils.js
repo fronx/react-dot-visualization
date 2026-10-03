@@ -453,14 +453,3 @@ export function renderedBounds(positions) {
   }
   return minX <= maxX ? { minX, maxX, minY, maxY } : null;
 }
-
-/** The largest dot's radius as a multiple of `defaultSize` (sizes and radius
- *  overrides both count): fixed-size dots draw at this multiple of the fixed
- *  radius, so it is how far the fitted free area must shrink. */
-export function largestSizeRatio(data, radiusOverrides, defaultSize) {
-  if (!(defaultSize > 0)) return 1;
-  let largest = defaultSize;
-  for (const d of data) largest = Math.max(largest, d.size || defaultSize);
-  if (radiusOverrides) for (const r of radiusOverrides.values()) largest = Math.max(largest, r);
-  return largest / defaultSize;
-}
