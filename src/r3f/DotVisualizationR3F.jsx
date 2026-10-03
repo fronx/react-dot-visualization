@@ -22,7 +22,7 @@ import {
   isFiniteCameraPosition,
   isFiniteCameraTransform,
 } from './cameraState.js';
-import { boundsForData, computeFitTransformToVisible, renderedBounds } from '../utils.js';
+import { boundsForData, computeFitTransformToVisible, fitPaddingForData, padBounds, renderedBounds } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
 import { useStablePositions } from '../useStablePositions.js';
 import { usePositionChangeDetection, detectDotSizeChange } from '../usePositionChangeDetection.js';
@@ -547,11 +547,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
 
   // Compute the viewBox-space fit transform honoring occlusion. Shares the
   // math + convention with Canvas's ZoomManager.
-  const computeFit = useCallback((dataToUse, margin) => {
+  const computeFit = useCallback((dataToUse, margin, bounds = boundsForData(dataToUse, defaultSize)) => {
     if (!containerRef.current || !dataToUse?.length) return null;
     const rect = containerRef.current.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
-    const bounds = boundsForData(dataToUse, defaultSize);
     const viewBox = viewBoxForContainer(rect);
     const occlusion = { left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom };
     const fit = computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
@@ -650,7 +649,15 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       if (!containerRef.current || !setCameraPositionRef.current) return false;
       const dataToUse = dataOverride || getCpuPositionData();
       const margin = marginOverride ?? 0.9;
-      const fit = computeFit(dataToUse, margin);
+      // A whole-graph fit frames what the GPU draws: decollision can push dots
+      // (a big focus ring among them) well past the data's extent on small
+      // maps. One position read-back, ~1.6 ms at 238k dots.
+      const drawn = dataOverride ? null : await gpuControlRef.current.readPositions?.();
+      const drawnBounds = drawn ? renderedBounds(drawn.positions) : null;
+      const bounds = drawnBounds
+        ? padBounds(drawnBounds, fitPaddingForData(dataToUse, defaultSize))
+        : boundsForData(dataToUse, defaultSize);
+      const fit = computeFit(dataToUse, margin, bounds);
       if (!fit) return false;
 
       const rect = containerRef.current.getBoundingClientRect();
@@ -662,7 +669,6 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       let { k, x, y } = fit;
       if (k > maxScale) {
         k = maxScale;
-        const bounds = boundsForData(dataToUse, defaultSize);
         const cx = (bounds.minX + bounds.maxX) / 2;
         const cy = (bounds.minY + bounds.maxY) / 2;
         const [vbX, vbY, vbW, vbH] = viewBoxForContainer(rect);

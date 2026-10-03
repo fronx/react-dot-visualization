@@ -8,17 +8,7 @@ export function boundsForData(data, dotSize = 2) {
     };
   }
 
-  // Find the maximum radius among all dots
-  const maxRadius = data.reduce((max, obj) => {
-    const radius = obj.size || dotSize;
-    return Math.max(max, radius);
-  }, 0);
-
-  // Add 4x padding to prevent giant dots from filling the screen.
-  // When rendering only 2-3 initial dots at large sizes (50-100px), fitting them to 90%
-  // of screen would be overwhelming. This padding creates a minimum boundary that scales
-  // with dot size, ensuring comfortable spacing as dots shrink during import.
-  const paddedRadius = maxRadius * 4;
+  const paddedRadius = fitPaddingForData(data, dotSize);
 
   // Calculate bounds using each dot's center position plus the padded radius
   return data.reduce((acc, obj) => ({
@@ -32,6 +22,20 @@ export function boundsForData(data, dotSize = 2) {
     maxX: -Infinity,
     maxY: -Infinity,
   });
+}
+
+/** The margin a fit keeps around dot centres: 4x the largest radius, so a few
+ *  giant dots (2-3 initial dots at 50-100px during import) don't fill the screen;
+ *  it shrinks with the dots. */
+export function fitPaddingForData(data, dotSize = 2) {
+  let maxRadius = 0;
+  for (const obj of data) maxRadius = Math.max(maxRadius, obj.size || dotSize);
+  return maxRadius * 4;
+}
+
+/** `bounds` grown by `pad` on every side. */
+export function padBounds(bounds, pad) {
+  return { minX: bounds.minX - pad, minY: bounds.minY - pad, maxX: bounds.maxX + pad, maxY: bounds.maxY + pad };
 }
 
 // Bounding box over finite points only. boundsForData does not skip NaN, and

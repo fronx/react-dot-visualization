@@ -45,3 +45,12 @@ describe('computeZoomOutCapZ', () => {
     assert.ok(Math.abs(z - (107.5 / 2 / 0.4) / tan) < 1e-6);
   });
 });
+
+describe('renderedBounds', () => {
+  test('reads a world-convention buffer (y negated) back into data space', async () => {
+    const { renderedBounds, padBounds } = await import('../src/utils.js');
+    const b = renderedBounds(new Float32Array([1, -5, 3, 20, -2, 0]));
+    assert.deepEqual(b, { minX: -2, maxX: 3, minY: -20, maxY: 5 });
+    assert.deepEqual(padBounds(b, 1), { minX: -3, maxX: 4, minY: -21, maxY: 6 });
+  });
+});
