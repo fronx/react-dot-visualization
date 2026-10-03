@@ -22,7 +22,7 @@ import {
   isFiniteCameraPosition,
   isFiniteCameraTransform,
 } from './cameraState.js';
-import { boundsForData, computeFitTransformToVisible, fitPaddingForData, padBounds, renderedBounds } from '../utils.js';
+import { boundsForData, computeFitTransformToVisible, fitPaddingForData, largestSizeRatio, padBounds, renderedBounds } from '../utils.js';
 import { useDecollisionScheduler } from '../useDecollisionScheduler.js';
 import { useStablePositions } from '../useStablePositions.js';
 import { usePositionChangeDetection, detectDotSizeChange } from '../usePositionChangeDetection.js';
@@ -100,6 +100,10 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     // Unlike DotVisualization's dotStrokeWidth (world units), this is unitless.
     dotStrokeWidthFraction = 0.05,
     hoverSizeMultiplier = 1.5,
+    // WebGPU: draw dots at this on-screen radius (CSS px) at any zoom, keeping
+    // relative sizes; a whole-graph fit then frames the dot centres into the free
+    // area inset by the largest drawn radius. null = world-sized dots.
+    fixedDotRadiusPx = null,
     hoverOpacity = 1.0,
     categoricalFilter = null,
     semanticScores = null,
@@ -552,12 +556,14 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
   const zoomToVisibleSeqRef = useRef(0);
   // Compute the viewBox-space fit transform honoring occlusion. Shares the
   // math + convention with Canvas's ZoomManager.
-  const computeFit = useCallback((dataToUse, margin, bounds = boundsForData(dataToUse, defaultSize)) => {
+  const computeFit = useCallback((dataToUse, margin, bounds = boundsForData(dataToUse, defaultSize), insetPx = 0) => {
     if (!containerRef.current || !dataToUse?.length) return null;
     const rect = containerRef.current.getBoundingClientRect();
     if (!rect.width || !rect.height) return null;
     const viewBox = viewBoxForContainer(rect);
-    const fit = computeFitTransformToVisible(bounds, viewBox, rect, occlusionRef.current, margin);
+    const o = occlusionRef.current;
+    const occlusion = { left: o.left + insetPx, right: o.right + insetPx, top: o.top + insetPx, bottom: o.bottom + insetPx };
+    const fit = computeFitTransformToVisible(bounds, viewBox, rect, occlusion, margin);
     return isFiniteCameraTransform(fit) ? fit : null;
   }, [defaultSize]);
 
@@ -662,10 +668,17 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       const drawn = dataOverride ? null : await gpuControlRef.current.readPositions?.();
       if (seq !== zoomToVisibleSeqRef.current) return false;
       const drawnBounds = drawn ? renderedBounds(drawn.positions) : null;
-      const bounds = drawnBounds
-        ? padBounds(drawnBounds, fitPaddingForData(dataToUse, defaultSize))
-        : boundsForData(dataToUse, defaultSize);
-      const fit = computeFit(dataToUse, margin, bounds);
+      const fixed = fixedDotRadiusPx > 0 && !dataOverride;
+      // Fixed-size dots: no world padding (their world size means nothing); the
+      // free area shrinks by the largest drawn radius instead, and a lone dot's
+      // zero extent gets one dot of room so the fit stays finite.
+      const bounds = fixed
+        ? padBounds(drawnBounds ?? boundsForData(dataToUse, 0), defaultSize)
+        : drawnBounds
+          ? padBounds(drawnBounds, fitPaddingForData(dataToUse, defaultSize))
+          : boundsForData(dataToUse, defaultSize);
+      const insetPx = fixed ? fixedDotRadiusPx * largestSizeRatio(dataToUse, radiusOverrides, defaultSize) : 0;
+      const fit = computeFit(dataToUse, margin, bounds, insetPx);
       if (!fit) return false;
 
       const rect = containerRef.current.getBoundingClientRect();
@@ -731,7 +744,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
       const read = await gpuControlRef.current.readPositions?.();
       return read ? renderedBounds(read.positions) : null;
     },
-  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera]);
+  }), [getCpuPositionData, defaultSize, computeFit, d3ToCamera, handleCameraStateChange, moveCameraTo, occludeLeft, occludeRight, occludeTop, occludeBottom, scheduler, zoomTransformFromCamera, fixedDotRadiusPx, radiusOverrides]);
 
   return (
     <div
@@ -796,6 +809,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
             hoveredId={hoveredId}
             hoverSizeMultiplier={hoverSizeMultiplier}
             hoverOpacity={hoverOpacity}
+            fixedDotRadiusPx={fixedDotRadiusPx}
             categoricalFilter={categoricalFilter}
             semanticScores={semanticScores}
             semanticGpuScoring={semanticGpuScoring}

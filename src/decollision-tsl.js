@@ -240,7 +240,7 @@ export function pickIndexBits(count) {
  * maximum real packed value at 0xfffffffe, so a genuine edge-of-threshold hit on
  * the last index can never collide with "no hit".
  */
-export function buildPickNearest({ positions, pickRadii, pickResult, cursor, threshold, count }) {
+export function buildPickNearest({ positions, pickRadii, pickResult, cursor, threshold, count, radiusScale = float(1) }) {
   const indexBits = pickIndexBits(count);
   const indexScale = 2 ** indexBits;
   const qMax = (2 ** (32 - indexBits)) - 2;
@@ -248,7 +248,7 @@ export function buildPickNearest({ positions, pickRadii, pickResult, cursor, thr
     const i = instanceIndex;
     const delta = positions.element(i).sub(cursor);
     const distSq = delta.dot(delta);
-    const limit = min(pickRadii.element(i), threshold);
+    const limit = min(pickRadii.element(i).mul(radiusScale), threshold);
     If(distSq.lessThanEqual(limit.mul(limit)), () => {
       const ratio = clamp(distSq.div(threshold.mul(threshold)), float(0), float(1));
       const q = floor(ratio.mul(float(qMax)));

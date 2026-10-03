@@ -54,3 +54,11 @@ describe('renderedBounds', () => {
     assert.deepEqual(padBounds(b, 1), { minX: -3, maxX: 4, minY: -21, maxY: 6 });
   });
 });
+
+describe('largestSizeRatio', () => {
+  test('counts sizes and radius overrides against the default size', async () => {
+    const { largestSizeRatio } = await import('../src/utils.js');
+    assert.equal(largestSizeRatio([{ size: 2 }, {}], new Map([['a', 3]]), 2), 1.5);
+    assert.equal(largestSizeRatio([{}, {}], null, 2), 1);
+  });
+});

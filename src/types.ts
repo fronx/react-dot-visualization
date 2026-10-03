@@ -131,6 +131,10 @@ export interface DotVisualizationRef {
    * items; Canvas returns bare `{id, x, y}` records.
    */
   getCurrentPositions: () => DotPosition[];
+  /** WebGPU: what the GPU draws, world x/-y pairs paired with `data` by index; null elsewhere. */
+  readRenderedPositions?: () => Promise<{ data: DotData[]; positions: Float32Array } | null>;
+  /** WebGPU: the drawn extent in data space; null elsewhere. */
+  readRenderedBounds?: () => Promise<{ minX: number; maxX: number; minY: number; maxY: number } | null>;
   /** Canvas renderer only: kick a decollision pass for a constraint key. */
   decollideForConstraint?: (constraintKey: string) => void;
   /** Canvas renderer only: current decollision-scheduler phase. */
@@ -193,6 +197,10 @@ export interface DotVisualizationCommonProps {
   dotStrokeWidthFraction?: number | null;
   hoverSizeMultiplier?: number;
   hoverOpacity?: number;
+  /** WebGPU: draw every dot at this on-screen radius (CSS px) at any zoom,
+   *  keeping relative sizes; whole-graph fits inset the free area by the
+   *  largest drawn radius. null/undefined = world-sized dots. */
+  fixedDotRadiusPx?: number | null;
   edgeColor?: string;
   edgeOpacity?: number;
   /**
