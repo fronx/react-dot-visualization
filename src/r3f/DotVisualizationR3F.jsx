@@ -558,6 +558,11 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     return isFiniteCameraTransform(fit) ? fit : null;
   }, [defaultSize, occludeLeft, occludeRight, occludeTop, occludeBottom]);
 
+  const cameraOcclusion = useMemo(
+    () => ({ left: occludeLeft, right: occludeRight, top: occludeTop, bottom: occludeBottom }),
+    [occludeLeft, occludeRight, occludeTop, occludeBottom],
+  );
+
   const getCpuPositionData = useCallback(() => {
     const refData = processedDataRef.current;
     return refData?.length ? refData : controlData;
@@ -752,7 +757,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} />
+          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} occlusion={cameraOcclusion} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dataKey={dataKey}

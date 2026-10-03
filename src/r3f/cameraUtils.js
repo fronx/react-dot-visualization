@@ -67,6 +67,26 @@ export function computeFitZ(minX, maxX, minY, maxY, aspect, margin = 0.9) {
   return Math.max(neededForH, neededForW, 1);
 }
 
+/**
+ * The farthest the camera may pull back: the graph keeps at least `fraction`
+ * of the *visible* area, the canvas minus the edges the host covers. Measured
+ * against the whole canvas, a fit into a small visible area asked for more
+ * distance than the cap allowed; the camera stopped short and drew the graph
+ * too large and off-centre (hidden under the covering UI).
+ */
+export function computeZoomOutCapZ(bounds, size, occlusion = {}, fraction = 0.4) {
+  const { left = 0, right = 0, top = 0, bottom = 0 } = occlusion;
+  const visibleW = Math.max(1, size.width - left - right) / size.width;
+  const visibleH = Math.max(1, size.height - top - bottom) / size.height;
+  const dataW = bounds.maxX - bounds.minX;
+  const dataH = bounds.maxY - bounds.minY;
+  if (dataW === 0 && dataH === 0) return 65;
+  const tan = Math.tan(CAMERA_FOV_RADIANS / 2);
+  const neededForH = (dataH / 2 / (fraction * visibleH)) / tan;
+  const neededForW = (dataW / 2 / (fraction * visibleW)) / tan / (size.width / size.height);
+  return Math.max(neededForH, neededForW, 1);
+}
+
 export function createPanHandler({ canvas, getCameraZ, onPan, onPanStart, onPanEnd, onClick }) {
   let isPanning = false;
   let isPointerDown = false;

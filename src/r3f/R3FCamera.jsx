@@ -8,6 +8,7 @@ import {
   calculatePan,
   createPanHandler,
   computeFitZ,
+  computeZoomOutCapZ,
   CAMERA_FOV_DEGREES,
 } from './cameraUtils.js';
 import { finiteBoundsForData } from '../utils.js';
@@ -16,8 +17,8 @@ import { isFiniteCameraPosition } from './cameraState.js';
 const CAMERA_Z_MIN = 0.5;
 const CAMERA_Z_MAX = 5000; // absolute zoom-out ceiling (safety)
 // Most-zoomed-out state keeps the whole graph filling at least this fraction of
-// the viewport, so it never shrinks to a useless speck. computeFitZ's margin IS
-// this fraction; initial fit uses ~0.85, so the graph can still shrink a bit.
+// the visible (unoccluded) area, so it never shrinks to a useless speck; a fit
+// fills ~0.9 of the same area, so it is always reachable.
 const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
 
 /**
@@ -26,7 +27,9 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt' }) {
+const NO_OCCLUSION = { left: 0, right: 0, top: 0, bottom: 0 };
+
+export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt', occlusion = NO_OCCLUSION }) {
   const controlsRef = useRef(null);
   const { camera, gl, size, invalidate } = useThree();
 
@@ -37,13 +40,9 @@ export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], inter
   const maxZ = useMemo(() => {
     if (!dataBounds) return CAMERA_Z_MAX;
     if (!(size.width > 0) || !(size.height > 0)) return CAMERA_Z_MAX;
-    const aspect = size.width / size.height;
-    const z = computeFitZ(
-      dataBounds.minX, dataBounds.maxX, dataBounds.minY, dataBounds.maxY,
-      aspect, MIN_GRAPH_VIEWPORT_FRACTION,
-    );
+    const z = computeZoomOutCapZ(dataBounds, size, occlusion, MIN_GRAPH_VIEWPORT_FRACTION);
     return Number.isFinite(z) ? Math.min(CAMERA_Z_MAX, z) : CAMERA_Z_MAX;
-  }, [dataBounds, size.width, size.height]);
+  }, [dataBounds, size.width, size.height, occlusion.left, occlusion.right, occlusion.top, occlusion.bottom]);
 
   // OrbitControls targets the origin by default, but CameraInitializer and
   // zoomToVisible place the camera at arbitrary (x, y). Without keeping the
