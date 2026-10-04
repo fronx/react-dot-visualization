@@ -60,6 +60,9 @@ function ClusterLabels3D({
       }
 
       const opacity = zoomOpacity * baseOpacity * (fade ? clamp01(fade(cameraZ)) : 1);
+      // A faded-out label costs no draw call.
+      const visible = opacity > 0.004;
+      if (billboard.visible !== visible) billboard.visible = visible;
       if (Math.abs(material.opacity - opacity) > 0.004) material.opacity = opacity;
       if (shadowMaterial) {
         const shadowOpacity = opacity * shadowStrength;
@@ -108,6 +111,7 @@ function ClusterLabelSprite({
   onClusterHover,
 }) {
   const [geometry, setGeometry] = useState(null);
+  const [haloGeometry, setHaloGeometry] = useState(null);
   const [anchor, setAnchor] = useState([0, 0]);
   const billboardRef = useRef(null);
   const entryRef = useRef(null);
@@ -124,6 +128,7 @@ function ClusterLabelSprite({
         const { min, max } = info.planeBounds;
         setAnchor([(min.x + max.x) / 2, (min.y + max.y) / 2]);
         setGeometry(info.geometry);
+        setHaloGeometry(info.haloGeometry ?? null);
       })
       .catch((err) => console.error('[ClusterLabels3D] text geometry failed', cluster.text, err));
     return () => {
@@ -171,6 +176,15 @@ function ClusterLabelSprite({
   useEffect(() => {
     material.color.set(color);
   }, [material, color]);
+
+  // A halo may fade out at its edge through per-vertex alpha (a `color` attribute with four components).
+  useEffect(() => {
+    if (!shadowMaterial) return;
+    const vertexColors = Boolean(haloGeometry?.getAttribute?.('color'));
+    if (shadowMaterial.vertexColors === vertexColors) return;
+    shadowMaterial.vertexColors = vertexColors;
+    shadowMaterial.needsUpdate = true;
+  }, [shadowMaterial, haloGeometry]);
 
   useEffect(
     () => () => {
@@ -230,9 +244,9 @@ function ClusterLabelSprite({
       <group position={[-anchor[0], -anchor[1], 0]}>
         {shadowMaterial && (
           <mesh
-            geometry={geometry}
+            geometry={haloGeometry ?? geometry}
             material={shadowMaterial}
-            position={[shadowOffset, -shadowOffset, -0.01]}
+            position={haloGeometry ? [0, 0, -0.01] : [shadowOffset, -shadowOffset, -0.01]}
             renderOrder={renderOrder}
             frustumCulled={false}
           />
