@@ -449,9 +449,6 @@ export interface DotVisualizationR3FProps extends DotVisualizationCommonProps {
  */
 export interface ClusterLabelTextGeometry {
   geometry: unknown;
-  /** Optional dark halo drawn behind the text in place of the offset shadow. A four-component `color` attribute
-   *  fades it per vertex (e.g. opaque under the text, clear at its edge). */
-  haloGeometry?: unknown;
   planeBounds: {
     min: { x: number; y: number };
     max: { x: number; y: number };
