@@ -449,6 +449,9 @@ export interface DotVisualizationR3FProps extends DotVisualizationCommonProps {
  */
 export interface ClusterLabelTextGeometry {
   geometry: unknown;
+  /** Optional shadow drawn behind the text, unshifted, in place of the one offset copy (e.g. an outline: the glyphs
+   *  merged at small offsets in several directions). */
+  shadowGeometry?: unknown;
   planeBounds: {
     min: { x: number; y: number };
     max: { x: number; y: number };

@@ -111,6 +111,7 @@ function ClusterLabelSprite({
   onClusterHover,
 }) {
   const [geometry, setGeometry] = useState(null);
+  const [shadowGeometry, setShadowGeometry] = useState(null);
   const [anchor, setAnchor] = useState([0, 0]);
   const billboardRef = useRef(null);
   const entryRef = useRef(null);
@@ -127,6 +128,7 @@ function ClusterLabelSprite({
         const { min, max } = info.planeBounds;
         setAnchor([(min.x + max.x) / 2, (min.y + max.y) / 2]);
         setGeometry(info.geometry);
+        setShadowGeometry(info.shadowGeometry ?? null);
       })
       .catch((err) => console.error('[ClusterLabels3D] text geometry failed', cluster.text, err));
     return () => {
@@ -233,9 +235,9 @@ function ClusterLabelSprite({
       <group position={[-anchor[0], -anchor[1], 0]}>
         {shadowMaterial && (
           <mesh
-            geometry={geometry}
+            geometry={shadowGeometry ?? geometry}
             material={shadowMaterial}
-            position={[shadowOffset, -shadowOffset, -0.01]}
+            position={shadowGeometry ? [0, 0, -0.01] : [shadowOffset, -shadowOffset, -0.01]}
             renderOrder={renderOrder}
             frustumCulled={false}
           />
