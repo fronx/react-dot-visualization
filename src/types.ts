@@ -469,6 +469,8 @@ export interface ClusterLabelDatum {
   fontSize?: number;
   color?: string;
   opacity?: number;
+  /** This label's own zoom fade (camera z to opacity), multiplied with the set's `fadeOpacity`. */
+  fade?: (cameraZ: number) => number;
 }
 
 /** Props for the `ClusterLabels3D` in-scene caption layer (WebGPU backend),
@@ -483,6 +485,8 @@ export interface ClusterLabels3DProps {
   /** Zoom fade: maps `camera.position.z` to opacity (see `makeZoomFade`). */
   fadeOpacity?: (cameraZ: number) => number;
   labelZ?: number;
+  /** Draw order above the dot layers (default 20; the focus locator is 11). */
+  renderOrder?: number;
   defaultColor?: string;
   shadowColor?: string;
   shadowStrength?: number;

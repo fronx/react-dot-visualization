@@ -16,6 +16,9 @@ import { clamp01 } from './labelFade.js';
 
 const DEFAULT_MIN_SCREEN_PX = 22;
 const DEFAULT_FONT_SIZE = 52;
+// The dot layers draw with renderOrder up to 11 (focus locator) and write no
+// depth, so a caption below that order is painted over by the dots it names.
+const DEFAULT_RENDER_ORDER = 20;
 
 function ClusterLabels3D({
   clusters = [],
@@ -24,6 +27,7 @@ function ClusterLabels3D({
   minScreenPx = DEFAULT_MIN_SCREEN_PX,
   fadeOpacity,
   labelZ = 0,
+  renderOrder = DEFAULT_RENDER_ORDER,
   defaultColor = '#ffffff',
   shadowColor = '#000000',
   shadowStrength = 0.8,
@@ -40,13 +44,14 @@ function ClusterLabels3D({
   }, []);
 
   useFrame(() => {
-    const zoomOpacity = fadeOpacity ? clamp01(fadeOpacity(camera.position.z)) : 1;
+    const cameraZ = camera.position.z;
+    const zoomOpacity = fadeOpacity ? clamp01(fadeOpacity(cameraZ)) : 1;
     // minScreenPx <= 0 keeps each label at its own world size (here, scaled to
     // the cluster footprint); only the floor path needs the per-frame distance.
     const floored = minScreenPx > 0;
     const tanHalfFov = floored ? Math.tan(THREE.MathUtils.degToRad(camera.fov ?? 10) / 2) : 0;
     registry.current.forEach((entry) => {
-      const { billboard, material, shadowMaterial, baseOpacity } = entry;
+      const { billboard, material, shadowMaterial, baseOpacity, fade } = entry;
       if (!billboard) return;
       if (floored) {
         const distance = billboard.getWorldPosition(worldPos).distanceTo(camera.position);
@@ -54,7 +59,7 @@ function ClusterLabels3D({
         billboard.scale.setScalar(Math.max(1, (minScreenPx * unitsPerPixel) / entry.fontSize));
       }
 
-      const opacity = zoomOpacity * baseOpacity;
+      const opacity = zoomOpacity * baseOpacity * (fade ? clamp01(fade(cameraZ)) : 1);
       if (Math.abs(material.opacity - opacity) > 0.004) material.opacity = opacity;
       if (shadowMaterial) {
         const shadowOpacity = opacity * shadowStrength;
@@ -76,6 +81,7 @@ function ClusterLabels3D({
           createTextGeometry={createTextGeometry}
           fontSize={fontSize}
           labelZ={labelZ}
+          renderOrder={renderOrder}
           color={cluster.color ?? defaultColor}
           shadowColor={shadowColor}
           shadowStrength={shadowStrength}
@@ -93,6 +99,7 @@ function ClusterLabelSprite({
   createTextGeometry,
   fontSize,
   labelZ,
+  renderOrder,
   color,
   shadowColor,
   shadowStrength,
@@ -125,6 +132,8 @@ function ClusterLabelSprite({
   }, [cluster.text, labelFontSize, createTextGeometry]);
 
   const baseOpacity = cluster.opacity ?? 1;
+  // Optional per-label zoom fade, multiplied with the set's `fadeOpacity`.
+  const fade = cluster.fade;
 
   const material = useMemo(
     () =>
@@ -177,14 +186,14 @@ function ClusterLabelSprite({
       entryRef.current = null;
       return;
     }
-    const entry = { billboard: billboardRef.current, material, shadowMaterial, baseOpacity, fontSize: labelFontSize };
+    const entry = { billboard: billboardRef.current, material, shadowMaterial, baseOpacity, fade, fontSize: labelFontSize };
     entryRef.current = entry;
     register(cluster.id, entry);
     return () => {
       register(cluster.id, null);
       entryRef.current = null;
     };
-  }, [geometry, material, shadowMaterial, baseOpacity, labelFontSize, cluster.id, register]);
+  }, [geometry, material, shadowMaterial, baseOpacity, fade, labelFontSize, cluster.id, register]);
 
   const setBillboardRef = useCallback((instance) => {
     billboardRef.current = instance;
@@ -224,10 +233,11 @@ function ClusterLabelSprite({
             geometry={geometry}
             material={shadowMaterial}
             position={[shadowOffset, -shadowOffset, -0.01]}
+            renderOrder={renderOrder}
             frustumCulled={false}
           />
         )}
-        <mesh geometry={geometry} material={material} frustumCulled={false} {...handlers} />
+        <mesh geometry={geometry} material={material} renderOrder={renderOrder + 1} frustumCulled={false} {...handlers} />
       </group>
     </Billboard>
   );
