@@ -1,6 +1,8 @@
 import { useRef, useCallback, useEffect, useMemo } from 'react';
 import * as d3 from 'd3';
-import { PHASE, onIntermediateChange, onBaseComplete, onConstraintRequest, onColdStart } from './decollisionScheduler.js';
+import {
+  PHASE, onIntermediateChange, onBaseComplete, onConstraintRequest, onColdStart, onRedecollideRequest,
+} from './decollisionScheduler.js';
 import { makeCpuExecutor } from './cpuDecollisionExecutor.js';
 import { useLatest } from './useLatest.js';
 import { useStableCallback } from './useStableCallback.js';
@@ -427,7 +429,7 @@ export function useDecollisionScheduler({
     const baseCachedPositions = resolveCachedTarget(cache, executor, '', dataLength);
     const isRunning = simulationRef.current != null && phaseRef.current === PHASE.READY;
     const activeKey = activeConstraintKeyRef.current;
-    const result = onConstraintRequest(phaseRef.current, key, cachedPositions, isRunning, activeKey, baseCachedPositions);
+    const result = onRedecollideRequest(phaseRef.current, key, cachedPositions, isRunning, activeKey, baseCachedPositions);
     processAction(result.action);
   }, [cache, executor, processAction, dataRef]);
 

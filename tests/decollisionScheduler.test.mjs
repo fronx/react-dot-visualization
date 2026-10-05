@@ -5,6 +5,7 @@ import {
   onIntermediateChange,
   onBaseComplete,
   onConstraintRequest,
+  onRedecollideRequest,
   onConstraintComplete,
   onColdStart,
 } from '../src/decollisionScheduler.js';
@@ -502,5 +503,32 @@ describe('import transition — stable positions during intermediate full re-ren
   test('first data arrival (no stable positions) → apply immediately', () => {
     // Even during import, the first render has no stable positions to keep
     assert.strictEqual(shouldUseStable(false || true, 0), false);
+  });
+});
+
+describe('decollision scheduler — re-decollide requests', () => {
+  test('a fresh base request replaces a pending base run instead of queueing behind it', () => {
+    // Two maps arrive in quick succession: the first one's base run is still
+    // pending when the second replaces the data. Queued, the second would wait
+    // on a run the GPU channel never starts (its data identity left the screen).
+    const result = onRedecollideRequest(PHASE.BASE_DECOLLISION, '', null, false, '', null);
+    assert.deepStrictEqual(result.action, { type: 'launch-base' });
+  });
+
+  test('a constraint request during a base run still queues', () => {
+    const result = onRedecollideRequest(PHASE.BASE_DECOLLISION, 'focus:a', null, false, '', null);
+    assert.deepStrictEqual(result.action, { type: 'queue-constraint', constraintKey: 'focus:a' });
+  });
+
+  test('while the layout is still arriving, a fresh base request waits for it', () => {
+    const result = onRedecollideRequest(PHASE.AWAITING_LAYOUT, '', null, false, '', null);
+    assert.deepStrictEqual(result.action, { type: 'queue-constraint', constraintKey: '' });
+  });
+
+  test('once ready, it is an ordinary request', () => {
+    assert.deepStrictEqual(
+      onRedecollideRequest(PHASE.READY, '', null, false, '', null),
+      onConstraintRequest(PHASE.READY, '', null, false, '', null),
+    );
   });
 });

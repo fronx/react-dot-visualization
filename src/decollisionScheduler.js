@@ -88,6 +88,21 @@ function hasPositionTarget(target) {
 }
 
 /**
+ * A caller asks for a fresh decollision of `constraintKey` because the data
+ * under it changed (scope, length, size). While a base run is pending, a fresh
+ * base request replaces it: the pending run was issued for the data that just
+ * left, and a detached executor (the GPU request channel) never starts a run
+ * whose identity is no longer displayed, so queueing behind it would wait
+ * forever. Every other case is an ordinary constraint request.
+ */
+export function onRedecollideRequest(currentPhase, constraintKey, ...rest) {
+  if (currentPhase === PHASE.BASE_DECOLLISION && constraintKey === '') {
+    return { action: { type: 'launch-base' } };
+  }
+  return onConstraintRequest(currentPhase, constraintKey, ...rest);
+}
+
+/**
  * Handle a constraint decollision request.
  *
  * Rule: constraint-to-constraint transitions always go through base visually.
