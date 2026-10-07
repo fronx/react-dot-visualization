@@ -14,6 +14,8 @@ import { clamp01 } from './labelFade.js';
 // Zoom-fade helpers (smoothstep, makeZoomFade) live in ./labelFade.js so they
 // can be imported without the three/drei stack.
 
+const isThenable = (value) => typeof value?.then === 'function';
+
 const DEFAULT_MIN_SCREEN_PX = 22;
 const DEFAULT_FONT_SIZE = 52;
 // The dot layers draw with renderOrder up to 11 (focus locator) and write no
@@ -113,31 +115,35 @@ function ClusterLabelSprite({
   onClusterClick,
   onClusterHover,
 }) {
-  const [geometry, setGeometry] = useState(null);
-  const [shadowGeometry, setShadowGeometry] = useState(null);
-  const [anchor, setAnchor] = useState([0, 0]);
   const billboardRef = useRef(null);
   const entryRef = useRef(null);
 
   const labelFontSize = cluster.fontSize ?? fontSize;
 
+  // The factory owns geometry lifetime (it may cache/share instances), so we never dispose it here; this
+  // component only owns its materials. Letters it already has come back as a value and draw in this render,
+  // with the frame that brings their dots; letters still being built come back as a promise.
+  const created = useMemo(
+    () => createTextGeometry(cluster.text, { size: labelFontSize }),
+    [cluster.text, labelFontSize, createTextGeometry],
+  );
+  const [resolved, setResolved] = useState(null);
   useEffect(() => {
+    if (!isThenable(created)) return undefined;
     let cancelled = false;
-    Promise.resolve(createTextGeometry(cluster.text, { size: labelFontSize }))
-      .then((info) => {
-        // The factory owns geometry lifetime (it may cache/share instances), so
-        // we never dispose it here — this component only owns its materials.
-        if (cancelled) return;
-        const { min, max } = info.planeBounds;
-        setAnchor([(min.x + max.x) / 2, (min.y + max.y) / 2]);
-        setGeometry(info.geometry);
-        setShadowGeometry(info.shadowGeometry ?? null);
-      })
+    created
+      .then((info) => { if (!cancelled) setResolved({ created, info }); })
       .catch((err) => console.error('[ClusterLabels3D] text geometry failed', cluster.text, err));
     return () => {
       cancelled = true;
     };
-  }, [cluster.text, labelFontSize, createTextGeometry]);
+  }, [created, cluster.text]);
+  const info = isThenable(created) ? (resolved?.created === created ? resolved.info : null) : created;
+  const geometry = info?.geometry ?? null;
+  const shadowGeometry = info?.shadowGeometry ?? null;
+  const anchor = info
+    ? [(info.planeBounds.min.x + info.planeBounds.max.x) / 2, (info.planeBounds.min.y + info.planeBounds.max.y) / 2]
+    : [0, 0];
 
   const baseOpacity = cluster.opacity ?? 1;
   // Optional per-label zoom fade, multiplied with the set's `fadeOpacity`.
