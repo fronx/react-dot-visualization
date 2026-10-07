@@ -34,14 +34,17 @@ function ClusterLabels3D({
   onClusterClick,
   onClusterHover,
 }) {
-  const { camera, size: viewport } = useThree();
+  const { camera, size: viewport, invalidate } = useThree();
   const registry = useRef(new Map());
   const worldPos = useMemo(() => new THREE.Vector3(), []);
 
+  // A label's letters arrive after the scene last drew; under the demand frameloop nothing else asks
+  // for the frame that shows them (or stops showing a removed one).
   const register = useCallback((id, entry) => {
     if (entry) registry.current.set(id, entry);
     else registry.current.delete(id);
-  }, []);
+    invalidate();
+  }, [invalidate]);
 
   useFrame(() => {
     const cameraZ = camera.position.z;
