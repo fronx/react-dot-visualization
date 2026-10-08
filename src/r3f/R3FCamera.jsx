@@ -63,35 +63,40 @@ export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], inter
 
   // A resize leaves the map where it was on screen, once the camera has its
   // first placement (before it, a report would file the default camera as the
-  // user's). The window's screen origin is re-read at every press too, because
-  // a window move fires nothing here and a resize after one would otherwise
-  // count the move as growth.
-  useEffect(() => {
+  // user's). Applied at frame time, not when the size arrives: a step that
+  // moves the window (left or top edge) can deliver its new size a frame
+  // before its new screen origin, and a stale origin read then was kept for
+  // good (map-steady-on-resize, 2026-10-08). A window move fires nothing here,
+  // so the origin is also re-read at every press, else a resize after a move
+  // would count the move as growth.
+  const placedForRef = useRef(null);
+  useFrame(({ size }) => {
+    const placedFor = placedForRef.current;
     const windowOrigin = { x: window.screenX, y: window.screenY };
-    const readWindowOrigin = () => { windowOrigin.x = window.screenX; windowOrigin.y = window.screenY; };
-    const onScreen = (s) => ({ left: windowOrigin.x + s.left, top: windowOrigin.y + s.top, width: s.width, height: s.height });
-    let last = store.getState().size;
-    const unsubscribe = store.subscribe(({ size: next }) => {
-      if (next === last || !(next.width > 0) || !(next.height > 0)) return;
-      const from = onScreen(last);
-      readWindowOrigin();
-      const to = onScreen(next);
-      last = next;
-      if (!initialized?.current || !(from.width > 0) || !(from.height > 0) || !isFiniteCameraPosition(camera.position)) return;
-      const moved = cameraForCanvasChange(camera.position, from, to);
-      if (!isFiniteCameraPosition(moved)) return;
-      camera.position.set(moved.x, moved.y, moved.z);
-      controlsRef.current?.target.set(moved.x, moved.y, 0);
-      controlsRef.current?.update();
-      invalidate();
-      onTransformChange?.();
-    });
+    placedForRef.current = { windowOrigin, size };
+    if (!placedFor || (placedFor.size.width === size.width && placedFor.size.height === size.height)) return;
+    if (!(size.width > 0) || !(size.height > 0)) return;
+    if (!(placedFor.size.width > 0) || !(placedFor.size.height > 0)) return;
+    if (!initialized?.current || !isFiniteCameraPosition(camera.position)) return;
+    const onScreen = ({ windowOrigin: o, size: s }) => ({ left: o.x + s.left, top: o.y + s.top, width: s.width, height: s.height });
+    const moved = cameraForCanvasChange(camera.position, onScreen(placedFor), onScreen(placedForRef.current));
+    if (!isFiniteCameraPosition(moved)) return;
+    camera.position.set(moved.x, moved.y, moved.z);
+    controlsRef.current?.target.set(moved.x, moved.y, 0);
+    controlsRef.current?.update();
+    onTransformChange?.();
+  });
+  useEffect(() => {
+    const unsubscribe = store.subscribe((state, prev) => { if (state.size !== prev.size) invalidate(); });
+    const readWindowOrigin = () => {
+      if (placedForRef.current) placedForRef.current = { ...placedForRef.current, windowOrigin: { x: window.screenX, y: window.screenY } };
+    };
     window.addEventListener('pointerdown', readWindowOrigin, { capture: true, passive: true });
     return () => {
       unsubscribe();
       window.removeEventListener('pointerdown', readWindowOrigin, { capture: true });
     };
-  }, [store, camera, invalidate, onTransformChange, initialized]);
+  }, [store, invalidate]);
 
   // Drag-to-pan
   useEffect(() => {
