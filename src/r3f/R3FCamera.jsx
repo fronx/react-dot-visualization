@@ -63,40 +63,47 @@ export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], inter
 
   // A resize leaves the map where it was on screen, once the camera has its
   // first placement (before it, a report would file the default camera as the
-  // user's). Applied at frame time, not when the size arrives: a step that
-  // moves the window (left or top edge) can deliver its new size a frame
-  // before its new screen origin, and a stale origin read then was kept for
-  // good (map-steady-on-resize, 2026-10-08). A window move fires nothing here,
-  // so the origin is also re-read at every press, else a resize after a move
-  // would count the move as growth.
-  const placedForRef = useRef(null);
+  // user's). The window's size and its screen origin reach the page as
+  // separate updates, a frame or a step apart when an edge drag moves the
+  // window (left or top edge), so no single reading of the pair can be trusted.
+  // The camera is therefore always derived from the gesture's start, the
+  // canvas on screen and the camera when it began: an inconsistent reading
+  // costs only its own frame, and the first consistent one puts every dot back
+  // (map-steady-on-resize, 2026-10-08). A gesture starts at a press (a window
+  // move fires nothing here, and a resize after one would count the move as
+  // growth) and whenever anything else moved the camera.
+  const resizeStartRef = useRef(null);
+  const placedRef = useRef(null);
+  const canvasOnScreen = (size) => ({ left: window.screenX + size.left, top: window.screenY + size.top, width: size.width, height: size.height });
+  const isAt = (p) => !!p && Math.abs(camera.position.x - p.x) + Math.abs(camera.position.y - p.y) + Math.abs(camera.position.z - p.z) <= 1e-6 * Math.max(1, p.z);
+  const startResize = (size) => {
+    const placeable = initialized?.current && size.width > 0 && size.height > 0 && isFiniteCameraPosition(camera.position);
+    resizeStartRef.current = placeable ? { canvas: canvasOnScreen(size), camera: camera.position.clone() } : null;
+    placedRef.current = resizeStartRef.current?.camera ?? null;
+  };
   useFrame(({ size }) => {
-    const placedFor = placedForRef.current;
-    const windowOrigin = { x: window.screenX, y: window.screenY };
-    placedForRef.current = { windowOrigin, size };
-    if (!placedFor || (placedFor.size.width === size.width && placedFor.size.height === size.height)) return;
+    const start = resizeStartRef.current;
+    if (!start || !isAt(placedRef.current)) { startResize(size); return; }
     if (!(size.width > 0) || !(size.height > 0)) return;
-    if (!(placedFor.size.width > 0) || !(placedFor.size.height > 0)) return;
-    if (!initialized?.current || !isFiniteCameraPosition(camera.position)) return;
-    const onScreen = ({ windowOrigin: o, size: s }) => ({ left: o.x + s.left, top: o.y + s.top, width: s.width, height: s.height });
-    const moved = cameraForCanvasChange(camera.position, onScreen(placedFor), onScreen(placedForRef.current));
-    if (!isFiniteCameraPosition(moved)) return;
+    const moved = cameraForCanvasChange(start.camera, start.canvas, canvasOnScreen(size));
+    if (!isFiniteCameraPosition(moved) || isAt(moved)) return;
     camera.position.set(moved.x, moved.y, moved.z);
+    placedRef.current = moved;
     controlsRef.current?.target.set(moved.x, moved.y, 0);
     controlsRef.current?.update();
+    // The next frame reads the pair again: the origin can still be on its way.
+    invalidate();
     onTransformChange?.();
   });
   useEffect(() => {
     const unsubscribe = store.subscribe((state, prev) => { if (state.size !== prev.size) invalidate(); });
-    const readWindowOrigin = () => {
-      if (placedForRef.current) placedForRef.current = { ...placedForRef.current, windowOrigin: { x: window.screenX, y: window.screenY } };
-    };
-    window.addEventListener('pointerdown', readWindowOrigin, { capture: true, passive: true });
+    const startGesture = () => startResize(store.getState().size);
+    window.addEventListener('pointerdown', startGesture, { capture: true, passive: true });
     return () => {
       unsubscribe();
-      window.removeEventListener('pointerdown', readWindowOrigin, { capture: true });
+      window.removeEventListener('pointerdown', startGesture, { capture: true });
     };
-  }, [store, invalidate]);
+  }, [store, invalidate, camera, initialized]);
 
   // Drag-to-pan
   useEffect(() => {
