@@ -83,6 +83,26 @@ export function computeZoomOutCapZ(bounds, size, occlusion = {}, fraction = 0.4)
 }
 
 /**
+ * The camera that leaves every dot where it was on screen when the canvas
+ * changes its rect on screen (`from` → `to`, `{ left, top, width, height }` in
+ * screen px): the same pixels per world unit, so z follows the height under the
+ * fixed field of view, and a shift by however far the canvas centre moved.
+ * Each axis's origin shift is clamped to what the size change can explain (the
+ * near edge stayed, the far edge stayed, or between), so a stale origin reading
+ * costs at most the size change, never a whole window move.
+ */
+export function cameraForCanvasChange(camera, from, to) {
+  const pixelsPerUnit = from.height / (2 * camera.z * Math.tan(CAMERA_FOV_RADIANS / 2));
+  const centreShift = (originShift, growth) =>
+    Math.min(Math.max(originShift, Math.min(0, -growth)), Math.max(0, -growth)) + growth / 2;
+  return {
+    x: camera.x + centreShift(to.left - from.left, to.width - from.width) / pixelsPerUnit,
+    y: camera.y - centreShift(to.top - from.top, to.height - from.height) / pixelsPerUnit,
+    z: camera.z * (to.height / from.height),
+  };
+}
+
+/**
  * The closest the camera may come so a dot of world radius `dotRadius` draws at
  * most `maxRadiusPx` (CSS px) on a canvas `heightPx` tall: dot size is a zoom
  * limit, for fits and for wheel/pinch alike. 0 when there is no limit.

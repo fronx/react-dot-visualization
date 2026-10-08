@@ -470,7 +470,7 @@ export function R3FScene({
       />
       <CameraReporter reportRef={reportCameraRef} onCameraStateChange={onCameraStateChange} />
       {setCameraRef && <CameraSetter setCameraRef={setCameraRef} />}
-      <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={onInvalidCamera} data={data} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} />
+      <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={onInvalidCamera} data={data} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} initialized={cameraInitialized} />
 
       {showEdges && edges.length > 0 && (
         <R3FEdges

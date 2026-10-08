@@ -3,7 +3,7 @@ import { describe, test } from 'node:test';
 
 import { readFileSync } from 'node:fs';
 import {
-  CAMERA_FOV_DEGREES, PAN_DRAG_THRESHOLD_PX, capTransformScale, classifyWheelGesture, computeZoomOutCapZ,
+  CAMERA_FOV_DEGREES, PAN_DRAG_THRESHOLD_PX, cameraForCanvasChange, capTransformScale, classifyWheelGesture, computeZoomOutCapZ,
   maxScaleForDotRadius, minCameraZForDotRadius,
 } from '../src/r3f/cameraUtils.js';
 import { padBounds, renderedBounds } from '../src/utils.js';
@@ -47,6 +47,40 @@ describe('computeZoomOutCapZ', () => {
     const tan = Math.tan((CAMERA_FOV_DEGREES * Math.PI / 180) / 2);
     const z = computeZoomOutCapZ(bounds, size, {}, 0.4);
     assert.ok(Math.abs(z - (107.5 / 2 / 0.4) / tan) < 1e-6);
+  });
+});
+
+describe('cameraForCanvasChange', () => {
+  const tan = Math.tan((CAMERA_FOV_DEGREES * Math.PI / 180) / 2);
+  const onScreen = (camera, rect, [wx, wy]) => {
+    const pixelsPerUnit = rect.height / (2 * camera.z * tan);
+    return [rect.left + rect.width / 2 + (wx - camera.x) * pixelsPerUnit, rect.top + rect.height / 2 - (wy - camera.y) * pixelsPerUnit];
+  };
+  const camera = { x: 40, y: -30, z: 900 };
+  const from = { left: 300, top: 120, width: 1000, height: 700 };
+  const dots = [[40, -30], [0, 0], [95, -80], [-20, 15]];
+  const assertDotsStay = (to) => {
+    const next = cameraForCanvasChange(camera, from, to);
+    for (const dot of dots) {
+      const [x0, y0] = onScreen(camera, from, dot);
+      const [x1, y1] = onScreen(next, to, dot);
+      assert.ok(Math.abs(x1 - x0) < 1e-6 && Math.abs(y1 - y0) < 1e-6, `${dot} moved from ${x0},${y0} to ${x1},${y1}`);
+    }
+  };
+
+  test('dragging the right edge keeps every dot still', () => assertDotsStay({ ...from, width: 1180 }));
+  test('dragging the left edge keeps every dot still', () => assertDotsStay({ ...from, left: 220, width: 1080 }));
+  test('dragging the bottom edge keeps every dot still and the scale', () => assertDotsStay({ ...from, height: 520 }));
+  test('dragging the top edge keeps every dot still and the scale', () => assertDotsStay({ ...from, top: 20, height: 800 }));
+  test('dragging a corner keeps every dot still', () => assertDotsStay({ left: 350, top: 120, width: 950, height: 860 }));
+  test('a canvas that moves inside its window keeps every dot still', () => assertDotsStay({ ...from, left: 100, width: 1200 }));
+
+  test('an origin shift the size change cannot explain moves dots by at most the size change', () => {
+    // The window also moved 400px right since the last reading, unseen; it grew 10px on the right.
+    const to = { ...from, left: 700, width: 1010 };
+    const next = cameraForCanvasChange(camera, from, to);
+    const expected = cameraForCanvasChange(camera, from, { ...from, width: 1010 });
+    assert.deepEqual(next, expected);
   });
 });
 

@@ -1,5 +1,5 @@
 import { useRef, useEffect, useMemo } from 'react';
-import { useThree, useFrame } from '@react-three/fiber';
+import { useThree, useFrame, useStore } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import {
   classifyWheelGesture,
@@ -9,6 +9,7 @@ import {
   createPanHandler,
   computeFitZ,
   computeZoomOutCapZ,
+  cameraForCanvasChange,
   CAMERA_FOV_DEGREES,
 } from './cameraUtils.js';
 import { finiteBoundsForData } from '../utils.js';
@@ -26,9 +27,10 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt', occlusion = {}, minZForHeight = () => 0 }) {
+export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt', occlusion = {}, minZForHeight = () => 0, initialized = null }) {
   const controlsRef = useRef(null);
   const { camera, gl, size, invalidate } = useThree();
+  const store = useStore();
 
   // Graph-aware zoom-out cap: derive the max camera distance from the data
   // bounds so the whole graph never shrinks below MIN_GRAPH_VIEWPORT_FRACTION
@@ -58,6 +60,38 @@ export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], inter
       controls.update();
     }
   });
+
+  // A resize leaves the map where it was on screen, once the camera has its
+  // first placement (before it, a report would file the default camera as the
+  // user's). The window's screen origin is re-read at every press too, because
+  // a window move fires nothing here and a resize after one would otherwise
+  // count the move as growth.
+  useEffect(() => {
+    const windowOrigin = { x: window.screenX, y: window.screenY };
+    const readWindowOrigin = () => { windowOrigin.x = window.screenX; windowOrigin.y = window.screenY; };
+    const onScreen = (s) => ({ left: windowOrigin.x + s.left, top: windowOrigin.y + s.top, width: s.width, height: s.height });
+    let last = store.getState().size;
+    const unsubscribe = store.subscribe(({ size: next }) => {
+      if (next === last || !(next.width > 0) || !(next.height > 0)) return;
+      const from = onScreen(last);
+      readWindowOrigin();
+      const to = onScreen(next);
+      last = next;
+      if (!initialized?.current || !(from.width > 0) || !(from.height > 0) || !isFiniteCameraPosition(camera.position)) return;
+      const moved = cameraForCanvasChange(camera.position, from, to);
+      if (!isFiniteCameraPosition(moved)) return;
+      camera.position.set(moved.x, moved.y, moved.z);
+      controlsRef.current?.target.set(moved.x, moved.y, 0);
+      controlsRef.current?.update();
+      invalidate();
+      onTransformChange?.();
+    });
+    window.addEventListener('pointerdown', readWindowOrigin, { capture: true, passive: true });
+    return () => {
+      unsubscribe();
+      window.removeEventListener('pointerdown', readWindowOrigin, { capture: true });
+    };
+  }, [store, camera, invalidate, onTransformChange, initialized]);
 
   // Drag-to-pan
   useEffect(() => {
