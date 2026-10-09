@@ -3,7 +3,7 @@ import { describe, test } from 'node:test';
 
 import { readFileSync } from 'node:fs';
 import {
-  CAMERA_FOV_DEGREES, PAN_DRAG_THRESHOLD_PX, cameraForCanvasChange, capTransformScale, classifyWheelGesture, computeZoomOutCapZ,
+  CAMERA_FOV_DEGREES, PAN_DRAG_THRESHOLD_PX, cameraForCanvasChange, createPanHandler, capTransformScale, classifyWheelGesture, computeZoomOutCapZ,
   maxScaleForDotRadius, minCameraZForDotRadius,
 } from '../src/r3f/cameraUtils.js';
 import { padBounds, renderedBounds } from '../src/utils.js';
@@ -126,5 +126,39 @@ describe('capTransformScale', () => {
     const atCentre = (tr) => [(centre.x - tr.x) / tr.k, (centre.y - tr.y) / tr.k];
     assert.deepEqual(atCentre(capped), atCentre(t));
     assert.equal(capTransformScale(t, 10, centre), t);
+  });
+});
+
+describe('createPanHandler', () => {
+  const press = (canPan) => {
+    const handlers = {};
+    const canvas = {
+      style: {},
+      addEventListener: (type, fn) => { handlers[type] = fn; },
+      removeEventListener: () => {},
+      getBoundingClientRect: () => ({ width: 800, height: 600 }),
+    };
+    const calls = { pan: 0, click: 0 };
+    createPanHandler({
+      canvas, getCameraZ: () => 10, onPan: () => { calls.pan += 1; }, onClick: () => { calls.click += 1; },
+      ...(canPan ? { canPan } : {}),
+    });
+    const at = (x) => ({ button: 0, clientX: x, clientY: 0 });
+    return { calls, down: (x) => handlers.mousedown(at(x)), move: (x) => handlers.mousemove(at(x)), up: (x) => handlers.mouseup(at(x)) };
+  };
+
+  test('pans a drag and clicks a press that stays put', () => {
+    const drag = press();
+    drag.down(0); drag.move(PAN_DRAG_THRESHOLD_PX + 10); drag.up(PAN_DRAG_THRESHOLD_PX + 10);
+    assert.deepEqual(drag.calls, { pan: 1, click: 0 });
+    const click = press();
+    click.down(0); click.up(0);
+    assert.deepEqual(click.calls, { pan: 0, click: 1 });
+  });
+
+  test('canPan false keeps the camera still, and the drag is still no click', () => {
+    const drag = press(() => false);
+    drag.down(0); drag.move(PAN_DRAG_THRESHOLD_PX + 10); drag.move(PAN_DRAG_THRESHOLD_PX + 40); drag.up(PAN_DRAG_THRESHOLD_PX + 40);
+    assert.deepEqual(drag.calls, { pan: 0, click: 0 });
   });
 });

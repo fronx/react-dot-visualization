@@ -228,6 +228,9 @@ export interface DotVisualizationCommonProps {
   occludeBottom?: number;
   /** Suppress hover acquisition while the camera is being panned/zoomed. */
   blockHoverDuringInteraction?: boolean;
+  /** Asked when a press first travels: false leaves that drag to the consumer
+   *  (a lasso) and the camera still. Read at gesture time, so it never re-renders. */
+  canPan?: () => boolean;
   onHover?: (item: DotData | null, event?: MouseEvent) => void;
   onLeave?: (item: DotData | null, event?: MouseEvent | null) => void;
   onClick?: (item: DotData, event?: MouseEvent) => void;

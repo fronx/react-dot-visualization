@@ -27,8 +27,10 @@ const MIN_GRAPH_VIEWPORT_FRACTION = 0.4;
  * - Scroll to pan (trackpad two-finger scroll)
  * - Pinch or modifier+scroll to zoom, zoom-to-cursor
  */
-export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt', occlusion = {}, minZForHeight = () => 0, initialized = null }) {
+export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], interactionRef = null, clickControlRef = null, scrollZoomModifier = 'meta-or-alt', occlusion = {}, minZForHeight = () => 0, initialized = null, canPan }) {
   const controlsRef = useRef(null);
+  const canPanRef = useRef(canPan);
+  canPanRef.current = canPan;
   const { camera, gl, size, invalidate } = useThree();
   const store = useStore();
 
@@ -117,6 +119,7 @@ export function R3FCamera({ onTransformChange, onInvalidCamera, data = [], inter
       // the browser synthesizes after a drag. HoverDetector publishes its pick
       // logic into clickControlRef.
       onClick: (e) => { if (clickControlRef) clickControlRef.current?.(e); },
+      canPan: () => canPanRef.current?.() ?? true,
       onPan: (worldDeltaX, worldDeltaY) => {
         const next = {
           x: camera.position.x + worldDeltaX,

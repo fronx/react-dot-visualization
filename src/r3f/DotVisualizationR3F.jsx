@@ -156,6 +156,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
     occludeTop = 0,
     occludeBottom = 0,
     scrollZoomModifier = 'meta-or-alt',
+    canPan,
     className = '',
     style = {},
     children,
@@ -777,7 +778,7 @@ const DotVisualizationR3F = forwardRef(function DotVisualizationR3F(props, ref) 
           />
           <CameraReporter reportRef={reportCameraRef} onCameraStateChange={handleCameraStateChange} />
           <CameraSetter setCameraRef={setCameraPositionRef} />
-          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} occlusion={occlusion} minZForHeight={minZForHeight} initialized={cameraInitialized} />
+          <R3FCamera onTransformChange={handleTransformChange} onInvalidCamera={recoverInvalidCamera} data={controlData} interactionRef={interactionRef} clickControlRef={clickControlRef} scrollZoomModifier={scrollZoomModifier} occlusion={occlusion} minZForHeight={minZForHeight} initialized={cameraInitialized} canPan={canPan} />
           <R3FDotsWebGPU
             data={webgpuSeedData}
             dataKey={dataKey}

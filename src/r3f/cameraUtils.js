@@ -133,14 +133,19 @@ export function capTransformScale(transform, maxK, centre) {
   };
 }
 
-export function createPanHandler({ canvas, getCameraZ, onPan, onPanStart, onPanEnd, onClick }) {
+// `canPan` is asked when a press first travels past the threshold: false keeps
+// the camera still for a consumer that owns that drag (a lasso). A press that
+// travelled is never a click either way.
+export function createPanHandler({ canvas, getCameraZ, onPan, onPanStart, onPanEnd, onClick, canPan = () => true }) {
   let isPanning = false;
   let isPointerDown = false;
+  let hasTravelled = false;
   let startX = 0, startY = 0, lastX = 0, lastY = 0;
 
   const down = (e) => {
     if (e.button !== 0) return;
     isPointerDown = true;
+    hasTravelled = false;
     startX = lastX = e.clientX;
     startY = lastY = e.clientY;
   };
@@ -150,6 +155,8 @@ export function createPanHandler({ canvas, getCameraZ, onPan, onPanStart, onPanE
     if (!isPanning) {
       const dx = e.clientX - startX, dy = e.clientY - startY;
       if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) return;
+      hasTravelled = true;
+      if (!canPan()) return;
       isPanning = true;
       canvas.style.cursor = 'grabbing';
       onPanStart?.();
@@ -177,11 +184,12 @@ export function createPanHandler({ canvas, getCameraZ, onPan, onPanStart, onPanE
       // leaving the canvas stuck showing a hand after every pan.
       canvas.style.cursor = '';
       onPanEnd?.();
-    } else if (isPointerDown && fireClick) {
+    } else if (isPointerDown && fireClick && !hasTravelled) {
       onClick?.(e);
     }
     isPanning = false;
     isPointerDown = false;
+    hasTravelled = false;
   };
   const up = (e) => finish(e, true);
   const leave = (e) => finish(e, false);
