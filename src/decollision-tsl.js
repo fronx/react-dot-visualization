@@ -6,14 +6,60 @@
  * Built incrementally and validated headless against the same naive-O(N²)
  * oracle the raw-WGSL path uses (tests/decollision-tsl.test.mjs).
  *
- * Force math mirrors decollision-webgpu.wgsl `collide` exactly:
- *   nextVel[i] = vel[i] + Σ_j overlap-push(i, j),  weight = rJ²/(rI²+rJ²)
- * and `apply`:
+ * Force math: decollision-webgpu.wgsl `collide`, with the sum capped:
+ *   push(i, j) = overlap-push(i, j) · weight,  weight = rJ²/(rI²+rJ²)
+ *   nextVel[i] = vel[i] + Σ_j push(i, j), shortened to max_j |push(i, j)|
+ * (the WGSL kernel sums without the cap), and `apply`:
  *   damped = nextVel[i] * velocityRetain;  pos += damped;  vel = damped
  */
-import { Fn, instanceIndex, Loop, If, vec2, float, int, uint, floor, clamp, max, min, select, sqrt, atomicAdd, atomicLoad, atomicMax, atomicMin, atomicStore } from 'three/tsl';
+import { Fn, instanceIndex, Loop, If, vec2, float, int, uint, floor, clamp, max, min, select, sqrt, cos, sin, atomicAdd, atomicLoad, atomicMax, atomicMin, atomicStore } from 'three/tsl';
 
 const EPS = 1e-6;
+// Two dots closer than this are treated as coincident: no direction can be read from their offset.
+export const COINCIDENT_DIST = 1e-6;
+
+/**
+ * Unit direction that separates an exactly coincident pair: an angle fixed by the
+ * pair's indices, pointing opposite ways for i and j so the two pushes part them.
+ * Without it the push divides by a zero distance and both dots become NaN.
+ */
+function coincidentDirection(i, j) {
+  const lo = min(i, j);
+  const hi = max(i, j);
+  const h = lo.mul(uint(0x9e3779b1)).bitXor(hi.mul(uint(0x85ebca77))).toVar();
+  h.assign(h.bitXor(h.shiftRight(uint(15))).mul(uint(0x2c1b3c6d)));
+  const angle = float(h.bitAnd(uint(0xffff))).mul(float((2 * Math.PI) / 65536));
+  return vec2(cos(angle), sin(angle)).mul(select(i.lessThan(j), float(1), float(-1)));
+}
+
+/**
+ * Add j's overlap push on i to `total` and track the longest single push in `deepest`.
+ * Shared by the brute-force and spatial collide so the two stay identical.
+ */
+function accumulatePairPush({ i, j, xi, xj, rI, rI2, rJ, strength, total, deepest }) {
+  const minDist = rI.add(rJ);
+  const d = xi.sub(xj).toVar();
+  If(d.dot(d).lessThan(minDist.mul(minDist)), () => {
+    If(d.dot(d).lessThan(float(COINCIDENT_DIST * COINCIDENT_DIST)), () => {
+      d.assign(coincidentDirection(i, j).mul(float(COINCIDENT_DIST)));
+    });
+    const dist = sqrt(d.dot(d));
+    const weight = rJ.mul(rJ).div(rI2.add(rJ.mul(rJ)));
+    const push = d.mul(minDist.sub(dist).div(dist).mul(strength).mul(weight)).toVar();
+    total.addAssign(push);
+    deepest.assign(max(deepest, sqrt(push.dot(push))));
+  });
+}
+
+/**
+ * A dot's step is the sum of its neighbours' pushes, no longer than the longest one.
+ * Summed alone, a stack of k near-coincident dots pushes each edge dot about k-1 times
+ * as far as one overlap needs, and momentum flings the stack far past touching.
+ */
+function capToDeepest(total, deepest) {
+  const len = sqrt(total.dot(total));
+  If(len.greaterThan(deepest), () => { total.assign(total.mul(deepest.div(len))); });
+}
 
 /**
  * `countBins`: histogram particles into grid cells. Writes counts shifted by
@@ -51,22 +97,17 @@ export function buildCollideBruteForce({ positions, velocities, radii, nextVel, 
     const rI2 = rI.mul(rI);
     const xi = posI.add(velI);
     const total = vec2(0, 0).toVar();
+    const deepest = float(0).toVar();
 
-    Loop(count, ({ i: j }) => {
+    Loop(count, ({ i: jInt }) => {
+      const j = uint(jInt);
       If(j.notEqual(i), () => {
         const xj = positions.element(j).add(velocities.element(j));
         const rJ = max(radii.element(j), float(EPS));
-        const minDist = rI.add(rJ);
-        const d = xi.sub(xj);
-        const dist2 = d.dot(d);
-        If(dist2.lessThan(minDist.mul(minDist)), () => {
-          const dist = sqrt(dist2);
-          const scale = minDist.sub(dist).div(dist).mul(float(strength));
-          const weight = rJ.mul(rJ).div(rI2.add(rJ.mul(rJ)));
-          total.addAssign(d.mul(scale.mul(weight)));
-        });
+        accumulatePairPush({ i, j, xi, xj, rI, rI2, rJ, strength: float(strength), total, deepest });
       });
     });
+    capToDeepest(total, deepest);
 
     nextVel.element(i).assign(velI.add(total));
   })().compute(count);
@@ -116,9 +157,8 @@ export function buildPlaceParticles({ positions, velocities, binCount, placeCoun
 
 /**
  * `collideSpatial`: the production collide — walks only the 3×3 neighbour cells
- * via the spatial hash (NOT O(N²)). Same force math as buildCollideBruteForce;
- * validated to produce identical nextVel. Jitter on exact overlap is omitted
- * (matches the brute-force oracle; degenerate-only).
+ * via the spatial hash (NOT O(N²)). Same force math as buildCollideBruteForce
+ * (accumulatePairPush + capToDeepest); validated to produce identical nextVel.
  */
 export function buildCollideSpatial({ positions, velocities, radii, nextVel, binCount, sortedIndices, grid, count, strength = 1, alpha = 1 }) {
   const { gridMinX, gridMinY, cellSize, gridDimX, gridDimY } = grid;
@@ -136,6 +176,7 @@ export function buildCollideSpatial({ positions, velocities, radii, nextVel, bin
     const cxLo = max(cx0.sub(1), int(0));
     const cxHi = min(cx0.add(1), int(gridDimX - 1));
     const total = vec2(0, 0).toVar();
+    const deepest = float(0).toVar();
 
     Loop({ start: cyLo, end: cyHi.add(1), type: 'int', condition: '<' }, ({ i: cy }) => {
       Loop({ start: cxLo, end: cxHi.add(1), type: 'int', condition: '<', name: 'cx' }, ({ cx }) => {
@@ -147,19 +188,12 @@ export function buildCollideSpatial({ positions, velocities, radii, nextVel, bin
           If(j.notEqual(i), () => {
             const xj = positions.element(j).add(velocities.element(j));
             const rJ = max(radii.element(j), float(EPS));
-            const minDist = rI.add(rJ);
-            const d = xi.sub(xj);
-            const dist2 = d.dot(d);
-            If(dist2.lessThan(minDist.mul(minDist)), () => {
-              const dist = sqrt(dist2);
-              const scale = minDist.sub(dist).div(dist).mul(float(strength)).mul(alpha);
-              const weight = rJ.mul(rJ).div(rI2.add(rJ.mul(rJ)));
-              total.addAssign(d.mul(scale.mul(weight)));
-            });
+            accumulatePairPush({ i, j, xi, xj, rI, rI2, rJ, strength: float(strength).mul(alpha), total, deepest });
           });
         });
       });
     });
+    capToDeepest(total, deepest);
 
     nextVel.element(i).assign(velI.add(total));
   })().compute(count);

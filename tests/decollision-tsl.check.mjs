@@ -39,7 +39,7 @@ function naiveCollide(positions, velocities, radii, strength = 1) {
     const xi = positions[i * 2] + velocities[i * 2];
     const yi = positions[i * 2 + 1] + velocities[i * 2 + 1];
     const ri = Math.max(radii[i], 1e-6), ri2 = ri * ri;
-    let tx = 0, ty = 0;
+    let tx = 0, ty = 0, deepest = 0;
     for (let j = 0; j < n; j++) {
       if (j === i) continue;
       const xj = positions[j * 2] + velocities[j * 2];
@@ -51,9 +51,12 @@ function naiveCollide(positions, velocities, radii, strength = 1) {
         const dist = Math.sqrt(dist2);
         const scale = (minDist - dist) / dist * strength;
         const weight = (rj * rj) / (ri2 + rj * rj);
-        tx += dx * scale * weight; ty += dy * scale * weight;
+        const px = dx * scale * weight, py = dy * scale * weight;
+        tx += px; ty += py; deepest = Math.max(deepest, Math.hypot(px, py));
       }
     }
+    const len = Math.hypot(tx, ty);
+    if (len > deepest) { tx *= deepest / len; ty *= deepest / len; }
     next[i * 2] = velocities[i * 2] + tx;
     next[i * 2 + 1] = velocities[i * 2 + 1] + ty;
   }
@@ -121,6 +124,55 @@ const renderer = await makeRenderer();
   } else {
     console.log('PASS: TSL max-velocity metric reduces to fixed-point atomic max');
   }
+}
+
+// Runs the production step (collide at strength 2, apply at retain 0.6) for `iters` steps; returns positions.
+async function settle(pos, rad, iters = 48) {
+  const n = rad.length;
+  const positions = instancedArray(Float32Array.from(pos), 'vec2');
+  const velocities = instancedArray(new Float32Array(n * 2), 'vec2');
+  const radii = instancedArray(Float32Array.from(rad), 'float');
+  const nextVel = instancedArray(n, 'vec2');
+  const collide = buildCollideBruteForce({ positions, velocities, radii, nextVel, count: n, strength: 2 });
+  const apply = buildApply({ positions, velocities, nextVel, count: n, velocityRetain: 0.6 });
+  for (let it = 0; it < iters; it++) { await renderer.computeAsync(collide); await renderer.computeAsync(apply); }
+  return readbackF32(renderer, positions, n * 2);
+}
+
+// Closest pair as a multiple of touching distance, and the widest pair in dot diameters.
+function stackShape(xy, r) {
+  let closest = Infinity, widest = 0;
+  for (let i = 0; i < xy.length / 2; i++) for (let j = i + 1; j < xy.length / 2; j++) {
+    const d = Math.hypot(xy[i * 2] - xy[j * 2], xy[i * 2 + 1] - xy[j * 2 + 1]);
+    closest = Math.min(closest, d / (2 * r)); widest = Math.max(widest, d / (2 * r));
+  }
+  return { closest, widest };
+}
+
+// Check 4: a stack of 8 near-coincident dots settles touching, not flung apart.
+// Summed pushes without the cap left the closest pair 4.1x touching, 17.5 widths across;
+// d3 forceCollide on the same input settles at 1.19x and 4.5 widths.
+{
+  const r = 1.388;
+  const offsets = [[0.03, -0.02], [-0.05, 0.01], [0.02, 0.06], [-0.01, -0.07], [0.07, 0.03], [-0.04, -0.04], [0.0, 0.02], [0.05, -0.06]];
+  const xy = await settle(offsets.flat(), new Array(8).fill(r));
+  const { closest, widest } = stackShape(xy, r);
+  if (!(closest > 0.97 && closest < 1.15 && widest < 6)) {
+    console.error(`  FAIL stack: closest pair ${closest.toFixed(2)}x touching, ${widest.toFixed(1)} widths across`);
+    failures++;
+  } else console.log(`PASS: an 8-dot stack settles touching (closest ${closest.toFixed(2)}x, ${widest.toFixed(1)} widths across)`);
+}
+
+// Check 5: exactly coincident dots are parted, never NaN.
+{
+  const r = 0.5;
+  const xy = await settle(new Array(20).fill(3), new Array(10).fill(r));
+  const finite = xy.every(Number.isFinite);
+  const { closest } = finite ? stackShape(xy, r) : { closest: NaN };
+  if (!finite || !(closest > 0.97)) {
+    console.error(`  FAIL coincident: finite=${finite}, closest pair ${closest}x touching`);
+    failures++;
+  } else console.log(`PASS: 10 coincident dots are parted (closest ${closest.toFixed(2)}x touching)`);
 }
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} FAILURE(S)`);

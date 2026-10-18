@@ -29,7 +29,7 @@ function naiveCollide(pos, vel, rad, strength = 1) {
   for (let i = 0; i < n; i++) {
     const xi = pos[i * 2] + vel[i * 2], yi = pos[i * 2 + 1] + vel[i * 2 + 1];
     const ri = Math.max(rad[i], 1e-6), ri2 = ri * ri;
-    let tx = 0, ty = 0;
+    let tx = 0, ty = 0, deepest = 0;
     for (let j = 0; j < n; j++) {
       if (j === i) continue;
       const xj = pos[j * 2] + vel[j * 2], yj = pos[j * 2 + 1] + vel[j * 2 + 1];
@@ -38,9 +38,12 @@ function naiveCollide(pos, vel, rad, strength = 1) {
       if (dist2 < minDist * minDist && dist2 > 0) {
         const dist = Math.sqrt(dist2), scale = (minDist - dist) / dist * strength;
         const weight = (rj * rj) / (ri2 + rj * rj);
-        tx += dx * scale * weight; ty += dy * scale * weight;
+        const px = dx * scale * weight, py = dy * scale * weight;
+        tx += px; ty += py; deepest = Math.max(deepest, Math.hypot(px, py));
       }
     }
+    const len = Math.hypot(tx, ty);
+    if (len > deepest) { tx *= deepest / len; ty *= deepest / len; }
     next[i * 2] = vel[i * 2] + tx; next[i * 2 + 1] = vel[i * 2 + 1] + ty;
   }
   return next;
